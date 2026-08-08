@@ -529,6 +529,136 @@ test('Gratulieren: erste Gratulation fügt Feld hinzu, Wiederholung wird blockie
   assert.match(replyText, /bereits/i);
 });
 
+test('Leere Formular-Felder → Lösch-Bestätigung → Geburtstag wird gelöscht', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+  const uid = '111111111111111111'; // numerische Snowflake-ID (wie in Produktion)
+
+  // 1. Erst einen Geburtstag eintragen
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)) },
+      user: { id: uid, username: 'Eintragender' },
+    })
+  );
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({ customId: 'bday_confirm_yes', user: { id: uid, username: 'Eintragender' } })
+  );
+  assert.equal(h.ctx.store.get('g1').birthdays.length, 1, 'Vorher eingetragen');
+
+  // 2. Formular leer absenden → Lösch-Bestätigung
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: () => '' },
+      user: { id: uid, username: 'Eintragender' },
+    })
+  );
+  const confText = extractAllText(h.replies[h.replies.length - 1]);
+  assert.match(confText, /Geburtstag löschen/);
+  const pending = h.ctx.pending.get(uid);
+  assert.equal(pending.delete, true, 'Pending markiert als Löschen');
+
+  // 3. Bestätigen → Geburtstag entfernt
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({ customId: 'bday_confirm_yes', user: { id: uid, username: 'Eintragender' } })
+  );
+  assert.equal(h.ctx.store.get('g1').birthdays.length, 0, 'Geburtstag gelöscht');
+  const lastFollow = extractAllText(h.follows[h.follows.length - 1]);
+  assert.match(lastFollow, /gelöscht/);
+});
+
+test('Löschen ohne bestehenden Eintrag gibt einen Hinweis (kein Fehler)', async () => {
+  const h = makeHarness();
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({ customId: 'bday_modal', fields: { getTextInputValue: () => '' } })
+  );
+  await handleInteraction(h.ctx, h.makeInteraction({ customId: 'bday_confirm_yes' }));
+  const lastFollow = extractAllText(h.follows[h.follows.length - 1]);
+  assert.match(lastFollow, /nichts zu löschen/);
+  assert.equal(h.ctx.store.get('g1').birthdays.length, 0);
+});
+
+test('Admin setzt und löscht den Geburtstag eines anderen mit leeren Feldern', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+  const targetId = '222222222222222222'; // numerische Snowflake-ID
+
+  // 1. Admin setzt Geburtstag für den Ziel-Nutzer
+  h.ctx.pendingAdmin.set('u1', { targetId, guildId: 'g1' });
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'admin_bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)) },
+    })
+  );
+  assert.equal(h.ctx.store.get('g1').birthdays.length, 1, 'Admin hat eingetragen');
+  assert.equal(h.ctx.store.get('g1').birthdays[0].userId, targetId);
+
+  // 2. Admin löscht mit leeren Feldern
+  h.ctx.pendingAdmin.set('u1', { targetId, guildId: 'g1' });
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({ customId: 'admin_bday_modal', fields: { getTextInputValue: () => '' } })
+  );
+  assert.equal(h.ctx.store.get('g1').birthdays.length, 0, 'Admin hat gelöscht');
+  const lastReply = extractAllText(h.replies[h.replies.length - 1]);
+  assert.match(lastReply, /gelöscht/);
+});
+
+test('Gratulieren ist nach 24 Stunden nicht mehr möglich', async () => {
+  const h = makeHarness();
+  const uid = 'bday1';
+  const dateKey = '2026-12-31';
+
+  const { container } = require('../bots/birthday-bot/src/embed-builder').buildCongratsEmbed({
+    member: { id: uid },
+    lang: 'de',
+    dateKey,
+    wishes: [],
+  });
+
+  // Gruß-Nachricht ist älter als 24 Stunden
+  const oldMsg = {
+    components: [container.toJSON()],
+    id: 'old_congrats',
+    delete: async () => {},
+    createdTimestamp: Date.now() - 25 * 60 * 60 * 1000,
+  };
+
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({ customId: `bday_congrats_${uid}_${dateKey}`, message: oldMsg })
+  );
+
+  const lastReply = extractAllText(h.replies[h.replies.length - 1]);
+  assert.match(lastReply, /vorbei/);
+  assert.ok(!extractAllText(oldMsg).includes('<@u1>'), 'Keine Glückwünsche hinzugefügt');
+});
+
+test('/help zeigt nur die Befehle – ohne den „klicke unten“-Tipp', async () => {
+  const h = makeHarness();
+  const helpInteraction = h.makeInteraction({
+    commandName: 'help',
+    isChatInputCommand: () => true,
+    isButton: () => false,
+  });
+  await handleInteraction(h.ctx, helpInteraction);
+  const text = extractAllText(h.replies[h.replies.length - 1]);
+  assert.match(text, /setup/);
+  assert.match(text, /admin_set_birthday/);
+  assert.match(text, /help/);
+  assert.ok(!text.includes('klicke unten auf'), 'Footer-Tipp wurde entfernt');
+  assert.ok(!text.includes('💡 Tipp'), 'Kein Tipp-Block mehr');
+});
+
 test('Admin-Panel: Owner sieht Serverliste und wählt einen Server aus', async () => {
   const h = makeHarness();
   h.ctx.ownerId = 'owner1';

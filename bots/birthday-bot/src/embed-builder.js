@@ -184,14 +184,19 @@ function parseListEmbed(msg) {
 // Eintragen-Formular & Bestätigung
 // ---------------------------------------------------------------------------
 
-/** Modal mit Tag + Monat (bei „Bearbeiten“ mit vorausgefüllten Zahlen). */
+/**
+ * Modal mit Tag + Monat (bei „Bearbeiten“ mit vorausgefüllten Zahlen).
+ *
+ * Beide Felder sind NICHT verpflichtend: Lässt man sie beide leer, will man
+ * den eigenen Geburtstag löschen (siehe entryModalSubmit). Wird nur eines
+ * befüllt, fängt das die Validierung als Fehler ab.
+ */
 function buildEntryModal(lang, prefill = {}) {
   const dayInput = new TextInputBuilder()
     .setCustomId('day')
     .setLabel(t('modalDayLabel', lang))
     .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMinLength(1)
+    .setRequired(false)
     .setMaxLength(2)
     .setPlaceholder(t('modalDayPlaceholder', lang));
   if (prefill.day) dayInput.setValue(String(prefill.day));
@@ -200,8 +205,7 @@ function buildEntryModal(lang, prefill = {}) {
     .setCustomId('month')
     .setLabel(t('modalMonthLabel', lang))
     .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMinLength(1)
+    .setRequired(false)
     .setMaxLength(24)
     .setPlaceholder(t('modalMonthPlaceholder', lang));
   if (prefill.month) monthInput.setValue(String(prefill.month));
@@ -247,6 +251,24 @@ function confirmationRow(lang) {
     new ButtonBuilder().setCustomId('bday_confirm_edit').setStyle(ButtonStyle.Secondary).setLabel(t('btnEdit', lang)),
     new ButtonBuilder().setCustomId('bday_confirm_no').setStyle(ButtonStyle.Secondary).setLabel(t('btnCancel', lang))
   );
+}
+
+/**
+ * Bestätigungs-Container fürs LÖSCHEN: Man hat die beiden Felder leer
+ * gelassen → der eigene (bzw. beim Admin der Ziel-) Geburtstag soll entfernt
+ * werden. Gleiche 3 Buttons wie beim Eintragen.
+ */
+function buildDeleteConfirmationEmbed({ lang, target }) {
+  const desc = target
+    ? t('adminDeleteConfirmBody', lang, { user: target })
+    : t('deleteConfirmBody', lang);
+
+  return new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`# ${t('deleteConfirmTitle', lang)}\\n\\n${desc}`)
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addActionRowComponents(confirmationRow(lang));
 }
 
 /** Fehler-Container für die 7-Tage-Regel. */
@@ -323,6 +345,7 @@ module.exports = {
   buildEntryModal,
   buildAdminModal,
   buildConfirmationEmbed,
+  buildDeleteConfirmationEmbed,
   confirmationRow,
   buildSevenDayErrorEmbed,
   buildCongratsEmbed,
