@@ -25,6 +25,7 @@ const {
   isValidDate,
   parseDayInput,
   isWithinSevenDays,
+  isWithinHours,
   tzParts,
   daysUntilNext,
 } = require('../bots/birthday-bot/src/logic');
@@ -126,6 +127,18 @@ test('isValidDate: unmögliche Daten werden abgelehnt', () => {
   assert.equal(isValidDate(30, 4), true);
   assert.equal(isValidDate(0, 5), false);
   assert.equal(isValidDate(15, 13), false);
+});
+
+// ---------------------------------------------------------------------------
+// 24-Stunden-Fenster (Gratulieren)
+// ---------------------------------------------------------------------------
+
+test('isWithinHours: innerhalb von 24 h offen, danach zu', () => {
+  const now = Date.now();
+  assert.equal(isWithinHours(now - 23 * 60 * 60 * 1000, 24), true, '23h → offen');
+  assert.equal(isWithinHours(now - 24 * 60 * 60 * 1000, 24), true, 'genau 24h → offen (≤)');
+  assert.equal(isWithinHours(now - 25 * 60 * 60 * 1000, 24), false, '25h → zu');
+  assert.equal(isWithinHours(undefined, 24), true, 'unbekannter Zeitstempel → offen');
 });
 
 // ---------------------------------------------------------------------------

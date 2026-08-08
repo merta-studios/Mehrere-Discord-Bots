@@ -18,7 +18,6 @@ const {
   InteractionContextType,
   ContainerBuilder,
   TextDisplayBuilder,
-  SeparatorBuilder,
   MessageFlags,
   RESTJSONErrorCodes,
 } = require('discord.js');
@@ -369,10 +368,6 @@ async function helpCmd(ctx, interaction) {
           `**</help:${interaction.commandId || 'help'}>**\n${t('helpHelp', lang)}`,
         ].join('\n')
       )
-    )
-    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(t('helpFooter', lang))
     );
 
   return interaction.reply(componentsV2Payload([container]));

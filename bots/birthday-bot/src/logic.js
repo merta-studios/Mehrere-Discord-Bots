@@ -104,6 +104,22 @@ function parseDayInput(raw) {
   return day >= 1 && day <= 31 ? day : null;
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * 24-Stunden-Fenster (z. B. für das Gratulieren): true, solange die
+ * Nachricht (erkennbar an ihrem Erstell-Zeitstempel) nicht älter als
+ * `hours` Stunden ist. Ist der Zeitstempel unbekannt (fehlt), wird das
+ * Fenster als offen gewertet, damit der Test-/Recovery-Pfad nicht unnötig
+ * blockiert.
+ */
+function isWithinHours(createdTimestamp, hours = 24) {
+  if (typeof createdTimestamp !== 'number' || !Number.isFinite(createdTimestamp)) {
+    return true;
+  }
+  return Date.now() - createdTimestamp <= hours * HOUR_MS;
+}
+
 module.exports = {
   pad,
   tzParts,
@@ -116,5 +132,6 @@ module.exports = {
   daysUntilNext,
   isWithinSevenDays,
   parseDayInput,
+  isWithinHours,
   LANGS,
 };

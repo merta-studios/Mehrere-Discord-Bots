@@ -18,6 +18,7 @@ steckt in den Komponenten selbst.
   über alle 10 Sprachen, es gewinnt immer das beste Wort).
   Danach ein **ephemerer** Bestätigungs-Container (nur für die eintragende
   Person sichtbar) mit ✅ Bestätigen / ✏️ Bearbeiten / ❌ Abbrechen.
+  **Beide Felder leer lassen + bestätigen** löscht den eigenen Geburtstag.
 - **7-Tage-Regel** als Spam-Schutz beim Eintragen.
 - **Stündliches Self-Refresh**: aktueller Monat zuerst (dann Jahresrest,
   dann Januar bis davor), Nutzer, die den Server verlassen haben, werden
@@ -28,12 +29,14 @@ steckt in den Komponenten selbst.
 - **Täglich um 0 Uhr** (Sprach-Zeitzone): Geburtstagskinder bekommen einen
   Gruß-Container mit „🎉 Gratulieren“-Button; Glückwünsche und
   Anzahl stehen direkt im Container (keine Doppel-Glückwünsche).
+  Gratulieren ist nur in den **nächsten 24 Stunden** nach dem Gruß möglich.
 - **Max. 3 Nachrichten** unter der Liste – automatisches Aufräumen.
 - **/admin_set_bot_profile** – **Nur für Admins:** serverspezifisches Bot-Profilbild
   (Standard / Server-Icon / Server-Owner-Icon) sofort per Discord-API geändert.
 - **/admin_set_birthday** – **Nur für Admins:** setzt Geburtstage für andere
-  (ohne 7-Tage-Regel).
-- **/help** – Befehlsübersicht in der Server-Sprache (ohne /adminpanel).
+  (ohne 7-Tage-Regel). Beide Felder leer lassen + bestätigen löscht den
+  Geburtstag des Ziel-Nutzers.
+- **/help** – Befehlsübersicht in der Server-Sprache (nur die Befehle, ohne /adminpanel).
 - **/adminpanel** – Owner-Panel **nur im Privatchat** mit dem Bot-Owner:
   auf Servern unsichtbar, Serverliste mit Seiten, sortiert (🔴-Server zuerst),
   Server-Detail, Einladung (1h/1×), Verlassen, Join-Benachrichtigung.

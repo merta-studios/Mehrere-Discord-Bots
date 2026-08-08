@@ -9,11 +9,12 @@
 const { MessageFlags } = require('discord.js');
 
 const { t, formatBirthday, matchMonth, langFromDiscord } = require('./languages');
-const { parseDayInput, isValidDate, isWithinSevenDays } = require('./logic');
+const { parseDayInput, isValidDate, isWithinSevenDays, isWithinHours } = require('./logic');
 const {
   extractAllText,
   buildEntryModal,
   buildConfirmationEmbed,
+  buildDeleteConfirmationEmbed,
   buildSevenDayErrorEmbed,
   buildCongratsEmbed,
   smallContainer,
@@ -81,13 +82,53 @@ async function handleButton(ctx, interaction) {
 
   // „Geburtstag eintragen“ unter der Liste
   if (id === 'bday_add') {
-    const entry = ctx.store.get(interaction.guildId);
+    let entry = ctx.store.get(interaction.guildId);
+
+    // Selbstheilung: Steht kein Registry-Eintrag bereit (z. B. nach langer
+    // Laufzeit / zwischenzeitlichem Registry-Verlust), wird die Liste im
+    // Kanal gesucht und der Eintrag neu aufgebaut – so bleibt der Button
+    // funktionsfähig, statt mit „Interaktion fehlgeschlagen“ abzubrechen.
+    if (!entry && interaction.guild) {
+      try {
+        const found = await ctx.store.findListMessage(interaction.guild);
+        if (found) {
+          const { parseListEmbed } = require('./embed-builder');
+          const parsed = parseListEmbed(found.message);
+          entry = {
+            guildId: interaction.guild.id,
+            channelId: found.channel.id,
+            messageId: found.message.id,
+            lang: parsed.lang,
+            birthdays: parsed.birthdays,
+            lastRenderDay: null,
+            lastBirthdayCheckDay: null,
+          };
+          ctx.store.set(entry);
+        }
+      } catch {
+        /* Recovery ist optional */
+      }
+    }
+
     if (!entry) {
       return interaction.reply(
         componentsV2Payload([smallContainer(null, t('errNoList', 'en'))], { ephemeral: true })
       );
     }
-    return interaction.showModal(buildEntryModal(entry.lang));
+
+    try {
+      return await interaction.showModal(buildEntryModal(entry.lang));
+    } catch (err) {
+      // Zeigt das Modal nicht möglich (Netzwerk/Rate-Limit) → sichtbarer
+      // Fehler statt einer stummen „interaction failed“.
+      ctx.logger.warn('[birthday-bot] Modal konnte nicht geöffnet werden:', err.message);
+      return interaction.reply(
+        componentsV2Payload(
+          [smallContainer(null, t('errGeneric', entry.lang))],
+          { ephemeral: true }
+        )
+      );
+    }
   }
 
   // Bestätigen
@@ -178,6 +219,17 @@ async function confirmYes(ctx, interaction) {
 
   const lang = entry.lang;
 
+  // Lösch-Modus: beide Felder waren leer → eigenen Geburtstag entfernen.
+  if (pending.delete) {
+    let existed = false;
+    await ctx.store.refresh(entry, (list) => {
+      existed = list.some((b) => b.userId === interaction.user.id);
+      return list.filter((b) => b.userId !== interaction.user.id);
+    });
+    const desc = existed ? t('birthdayDeleted', lang) : t('noBirthdayToDelete', lang);
+    return finish([smallContainer(null, desc)]);
+  }
+
   // 7-Tage-Regel (Spam-Schutz)
   if (isWithinSevenDays(pending.day, pending.month, lang)) {
     return finish([buildSevenDayErrorEmbed(lang, pending.day, pending.month)]);
@@ -213,6 +265,17 @@ async function congrats(ctx, interaction, id) {
   const entry = ctx.store.get(interaction.guildId);
   const lang = entry?.lang || langFromDiscord(interaction.locale);
   const clickerId = interaction.user.id;
+
+  // Gratulieren ist nur innerhalb der nächsten 24 Stunden erlaubt (nach dem
+  // Senden des Gruß-Containers). Danach nimmt der Bot keine Glückwünsche mehr an.
+  if (!isWithinHours(interaction.message?.createdTimestamp, 24)) {
+    return interaction.reply(
+      componentsV2Payload(
+        [smallContainer(null, t('congratsExpired', lang, { user: `<@${birthdayUserId}>` }))],
+        { ephemeral: true }
+      )
+    );
+  }
 
   const rawText = extractAllText(interaction.message);
 
@@ -269,6 +332,21 @@ async function entryModalSubmit(ctx, interaction) {
 
   const dayRaw = interaction.fields.getTextInputValue('day');
   const monthRaw = interaction.fields.getTextInputValue('month');
+
+  // Beide Felder leer → der eigene Geburtstag soll GELÖSCHT werden.
+  if (!dayRaw.trim() && !monthRaw.trim()) {
+    const entry = ctx.store.get(interaction.guildId);
+    const lang = entry?.lang || langFromDiscord(interaction.locale);
+
+    ctx.pending.set(interaction.user.id, { delete: true, lang });
+
+    const confirmation = buildDeleteConfirmationEmbed({ lang });
+
+    if (isEphemeralMessage(interaction.message)) {
+      return interaction.update(componentsV2Payload([confirmation]));
+    }
+    return interaction.reply(componentsV2Payload([confirmation], { ephemeral: true }));
+  }
 
   const day = parseDayInput(dayRaw);
   if (!day) {
@@ -330,6 +408,38 @@ async function adminModalSubmit(ctx, interaction) {
 
   const dayRaw = interaction.fields.getTextInputValue('day');
   const monthRaw = interaction.fields.getTextInputValue('month');
+
+  // Beide Felder leer → der Geburtstag des Ziel-Nutzers soll GELÖSCHT werden.
+  if (!dayRaw.trim() && !monthRaw.trim()) {
+    const entry = ctx.store.get(pending.guildId);
+    if (!entry) {
+      ctx.pendingAdmin.delete(interaction.user.id);
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, t('errNoList', 'en'))], { ephemeral: true })
+      );
+    }
+
+    const guild = ctx.client.guilds.cache.get(pending.guildId);
+    const member = await guild?.members.fetch(pending.targetId).catch(() => null);
+    if (!member) {
+      ctx.pendingAdmin.delete(interaction.user.id);
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, t('errUserGone', entry.lang))], { ephemeral: true })
+      );
+    }
+
+    let existed = false;
+    await ctx.store.refresh(entry, (list) => {
+      existed = list.some((b) => b.userId === pending.targetId);
+      return list.filter((b) => b.userId !== pending.targetId);
+    });
+    ctx.pendingAdmin.delete(interaction.user.id);
+
+    const desc = existed
+      ? t('adminDeletedSuccess', entry.lang, { user: `<@${pending.targetId}>` })
+      : t('noBirthdayToDelete', entry.lang);
+    return interaction.reply(componentsV2Payload([smallContainer(null, desc)], { ephemeral: true }));
+  }
 
   const day = parseDayInput(dayRaw);
   if (!day) {

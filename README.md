@@ -152,9 +152,9 @@ online sind (siehe `src/health.js`).
 | Command | Was er kann |
 |---|---|
 | `/setup [language] [channel]` | **Nur für Admins:** Richtet die Geburtstagsliste ein. Ohne Channel wird der aktuelle Kanal genommen. **10 Sprachen** zur Auswahl. Eine bereits existierende Liste wird automatisch gefunden: Einträge bleiben erhalten, nur Sprache + Kanal ändern sich. |
-| „🎂 Geburtstag eintragen“ (Button) | Öffnet ein Formular: **Tag** (nur Zahlen, `4` oder `04`) + **Monat** (Zahl, Name oder sogar Tippfehler wie „Sebtemger“ → Fuzzy-Erkennung in allen 10 Sprachen). Danach **ephemerer** Bestätigungs-Container (nur für die eintragende Person sichtbar) mit 3 Buttons: ✅ Bestätigen / ✏️ Bearbeiten (Formular vorbefüllt) / ❌ Abbrechen. |
+| „🎂 Geburtstag eintragen“ (Button) | Öffnet ein Formular: **Tag** (nur Zahlen, `4` oder `04`) + **Monat** (Zahl, Name oder sogar Tippfehler wie „Sebtemger“ → Fuzzy-Erkennung in allen 10 Sprachen). Danach **ephemerer** Bestätigungs-Container (nur für die eintragende Person sichtbar) mit 3 Buttons: ✅ Bestätigen / ✏️ Bearbeiten (Formular vorbefüllt) / ❌ Abbrechen. **Tipp:** Beide Felder einfach **leer lassen** und bestätigen → dein eigener Geburtstag wird **gelöscht**. |
 | `/admin_set_bot_profile [image]` | **Nur für Admins:** Ändert das **serverspezifische** Profilbild des Bots (Standard / Server-Icon / Server-Owner-Icon) sofort via Discord-API. |
-| `/admin_set_birthday [user]` | **Nur für Admins:** Setzt den Geburtstag eines anderen Nutzers (gleiches Formular, ohne 7-Tage-Regel). |
+| `/admin_set_birthday [user]` | **Nur für Admins:** Setzt den Geburtstag eines anderen Nutzers (gleiches Formular, ohne 7-Tage-Regel). **Beide Felder leer lassen + bestätigen** löscht den Geburtstag des Nutzers. |
 | `/help` | Übersicht aller Befehle für normale Nutzer und Admins auf dem Server. |
 | `/adminpanel` | Owner-Panel – **nur im Privatchat mit dem Bot-Owner** (Deine ID aus `BIRTHDAY_BOT_OWNER_ID`). Auf Servern unsichtbar und nicht in `/help`. Serverliste mit Seiten (◀ ▶), sortiert: erst Server, auf denen du **🔴** nicht bist, dann nach Mitgliederzahl. Server-Detail mit Owner-Mention, Bild, Mitgliederzahl, Geburtstagsliste-Status. Buttons: **Einladung** (1h gültig, 1× nutzbar) und **Verlassen** (mit Sicherheitsabfrage). Bei Server-Beitritt bekommst du automatisch eine Info-Nachricht. |
 
@@ -178,6 +178,8 @@ Die Geburtstagsliste nutzt **Discord Layout Components (Components V2)**:
 hat. Jedes Geburtstagskind bekommt einen hübschen Gruß-Container mit
 einem **🎉 Gratulieren**-Button. Glückwünsche + Anzahl werden direkt
 in den Container geschrieben (auch das ohne DB!) – doppelt gratulieren geht nicht.
+Gratulieren ist nur in den **nächsten 24 Stunden** nach dem Gruß möglich – danach
+nimmt der Bot keine Glückwünsche mehr an.
 
 **Aufräumen:** Unter der Liste sind maximal **3 Nachrichten** erlaubt (egal ob von
 Nutzern oder vom Bot). Ältere werden automatisch gelöscht, damit der Container immer
