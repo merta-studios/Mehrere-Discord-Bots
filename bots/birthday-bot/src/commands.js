@@ -19,6 +19,7 @@ const {
   ContainerBuilder,
   TextDisplayBuilder,
   SeparatorBuilder,
+  MessageFlags,
 } = require('discord.js');
 
 const { LANGS, t, langFromDiscord, DISCORD_LOCALE } = require('./languages');
@@ -30,6 +31,7 @@ const {
   smallContainer,
 } = require('./embed-builder');
 const { openPanel } = require('./admin-panel');
+const { componentsV2Payload } = require('./message-payload');
 
 /** Baut die Lokalisierungs-Map (Discord-Locale-Codes) für ein T-Key. */
 function pick(key) {
@@ -161,20 +163,18 @@ async function handleChatInput(ctx, interaction) {
     case 'adminpanel':
       return openPanel(ctx, interaction);
     default:
-      return interaction.reply({
-        components: [smallContainer(null, 'Unbekannter Befehl.')],
-        ephemeral: true,
-      });
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, 'Unbekannter Befehl.')], { ephemeral: true })
+      );
   }
 }
 
 /** /setup [language] [channel] – nur für Admins */
 async function setupCmd(ctx, interaction) {
   if (!interaction.inGuild()) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errGuildOnly', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
+    );
   }
 
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
@@ -182,37 +182,36 @@ async function setupCmd(ctx, interaction) {
   const lang = langChoice || 'en';
 
   if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errNoPermission', lang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true })
+    );
   }
 
   if (!LANGS[lang]) {
-    return interaction.reply({
-      components: [smallContainer(null, t('setupLangBad', lang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('setupLangBad', lang))], { ephemeral: true })
+    );
   }
 
   const channel = interaction.options.getChannel('channel') || interaction.channel;
   if (!channel || !channel.isTextBased() || channel.type !== ChannelType.GuildText) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errChannelBad', lang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: true })
+    );
   }
 
   const botPerms = channel.permissionsFor(ctx.client.user);
   if (!botPerms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errBotPerms', lang, { channel: `<#${channel.id}>` }))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload(
+        [smallContainer(null, t('errBotPerms', lang, { channel: `<#${channel.id}>` }))],
+        { ephemeral: true }
+      )
+    );
   }
 
   // Acknowledge before network requests so Discord never shows a failed interaction.
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   // Bestehende Liste suchen → Einträge übernehmen (Migration, Sprache neu).
   let birthdays = [];
@@ -226,9 +225,7 @@ async function setupCmd(ctx, interaction) {
   }
 
   const container = buildListEmbed({ birthdays, lang });
-  const msg = await channel.send({
-    components: [container],
-  });
+  const msg = await channel.send(componentsV2Payload([container]));
 
   const today = todayKey(lang);
   ctx.store.set({
@@ -245,26 +242,24 @@ async function setupCmd(ctx, interaction) {
   if (migrated) {
     desc += `\n\n${t('setupFoundOld', lang)}\n${t('setupMigrated', lang, { count: birthdays.length })}`;
   }
-  return interaction.editReply({ components: [smallContainer(null, desc)] });
+  return interaction.editReply(componentsV2Payload([smallContainer(null, desc)]));
 }
 
 /** /admin_set_bot_profile [image: standard | server | owner] */
 async function profileCmd(ctx, interaction) {
   if (!interaction.inGuild()) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errGuildOnly', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
+    );
   }
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
   if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errNoPermission', lang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true })
+    );
   }
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const choice = interaction.options.getString('image');
   const label = t(`profileChoice${choice[0].toUpperCase()}${choice.slice(1)}`, lang);
 
@@ -279,9 +274,9 @@ async function profileCmd(ctx, interaction) {
       if (choice === 'server') {
         url = interaction.guild.iconURL({ size: 256, extension: 'png', forceStatic: true });
         if (!url) {
-          return interaction.editReply({
-            components: [smallContainer(null, t('errServerNoIcon', lang))],
-          });
+          return interaction.editReply(
+            componentsV2Payload([smallContainer(null, t('errServerNoIcon', lang))])
+          );
         }
       } else if (choice === 'owner') {
         const owner = await interaction.guild.fetchOwner();
@@ -301,39 +296,36 @@ async function profileCmd(ctx, interaction) {
         body: { avatar: avatarDataUri },
       });
     }
-    return interaction.editReply({
-      components: [smallContainer(null, t('profileSet', lang, { choice: label }))],
-    });
+    return interaction.editReply(
+      componentsV2Payload([smallContainer(null, t('profileSet', lang, { choice: label }))])
+    );
   } catch (err) {
-    return interaction.editReply({
-      components: [smallContainer(null, t('errAvatar', lang, { error: err.message }))],
-    });
+    return interaction.editReply(
+      componentsV2Payload([smallContainer(null, t('errAvatar', lang, { error: err.message }))])
+    );
   }
 }
 
 /** /admin_set_birthday [user] – nur Admins, ohne 7-Tage-Regel. */
 async function adminSetCmd(ctx, interaction) {
   if (!interaction.inGuild()) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errGuildOnly', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
+    );
   }
   const lang = ctx.store.get(interaction.guildId)?.lang || 'en';
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errNoPermission', lang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true })
+    );
   }
 
   const entry = ctx.store.get(interaction.guildId);
   if (!entry) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errNoList', lang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errNoList', lang))], { ephemeral: true })
+    );
   }
 
   const target = interaction.options.getUser('user');
@@ -374,7 +366,7 @@ async function helpCmd(ctx, interaction) {
       new TextDisplayBuilder().setContent(t('helpFooter', lang))
     );
 
-  return interaction.reply({ components: [container] });
+  return interaction.reply(componentsV2Payload([container]));
 }
 
 module.exports = { defineCommands, registerCommands, handleChatInput, pick };

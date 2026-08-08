@@ -17,6 +17,7 @@ const {
   smallContainer,
 } = require('./embed-builder');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
+const { componentsV2Payload } = require('./message-payload');
 
 // ---------------------------------------------------------------------------
 // Dispatch
@@ -30,26 +31,28 @@ async function handleInteraction(ctx, interaction) {
     }
     if (interaction.isButton()) {
       const id = interaction.customId;
-      if (id.startsWith(PANEL_PREFIX)) return handlePanelButton(ctx, interaction);
+      if (id.startsWith(PANEL_PREFIX)) return await handlePanelButton(ctx, interaction);
       return await handleButton(ctx, interaction);
     }
     if (interaction.isModalSubmit()) {
       return await handleModal(ctx, interaction);
     }
     if (interaction.isStringSelectMenu()) {
-      if (interaction.customId.startsWith(PANEL_PREFIX)) return handlePanelSelect(ctx, interaction);
+      if (interaction.customId.startsWith(PANEL_PREFIX)) {
+        return await handlePanelSelect(ctx, interaction);
+      }
     }
     return null;
   } catch (err) {
     ctx.logger.error('[birthday-bot] Interaction-Fehler:', err);
     const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
-    const payload = {
-      components: [smallContainer(null, t('errGeneric', lang))],
-      ephemeral: true,
-    };
+    const payload = componentsV2Payload(
+      [smallContainer(null, t('errGeneric', lang))],
+      { ephemeral: true }
+    );
     try {
-      if (interaction.deferred || interaction.replied) return interaction.followUp(payload);
-      return interaction.reply(payload);
+      if (interaction.deferred || interaction.replied) return await interaction.followUp(payload);
+      return await interaction.reply(payload);
     } catch {
       return null;
     }
@@ -67,10 +70,9 @@ async function handleButton(ctx, interaction) {
   if (id === 'bday_add') {
     const entry = ctx.store.get(interaction.guildId);
     if (!entry) {
-      return interaction.reply({
-        components: [smallContainer(null, t('errNoList', 'en'))],
-        ephemeral: true,
-      });
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, t('errNoList', 'en'))], { ephemeral: true })
+      );
     }
     return interaction.showModal(buildEntryModal(entry.lang));
   }
@@ -84,10 +86,9 @@ async function handleButton(ctx, interaction) {
   if (id === 'bday_confirm_edit') {
     const pending = ctx.pending.get(interaction.user.id);
     if (!pending) {
-      return interaction.reply({
-        components: [smallContainer(null, t('errGeneric', 'en'))],
-        ephemeral: true,
-      });
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, t('errGeneric', 'en'))], { ephemeral: true })
+      );
     }
     const entry = ctx.store.get(interaction.guildId);
     const lang = entry?.lang || 'en';
@@ -102,10 +103,9 @@ async function handleButton(ctx, interaction) {
     await interaction.message.delete().catch(() => {});
     const entry = ctx.store.get(interaction.guildId);
     const lang = entry?.lang || langFromDiscord(interaction.locale);
-    return interaction.followUp({
-      components: [smallContainer(null, t('cancelNote', lang))],
-      ephemeral: true,
-    });
+    return interaction.followUp(
+      componentsV2Payload([smallContainer(null, t('cancelNote', lang))], { ephemeral: true })
+    );
   }
 
   // Gratulieren auf dem Geburtstags-Gruß
@@ -125,10 +125,9 @@ async function confirmYes(ctx, interaction) {
   if (!pending) {
     await interaction.deferUpdate().catch(() => {});
     await interaction.message.delete().catch(() => {});
-    return interaction.followUp({
-      components: [smallContainer(null, t('errGeneric', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.followUp(
+      componentsV2Payload([smallContainer(null, t('errGeneric', 'en'))], { ephemeral: true })
+    );
   }
 
   await interaction.deferUpdate();
@@ -137,20 +136,20 @@ async function confirmYes(ctx, interaction) {
 
   const entry = ctx.store.get(interaction.guildId);
   if (!entry) {
-    return interaction.followUp({
-      components: [smallContainer(null, t('errNoList', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.followUp(
+      componentsV2Payload([smallContainer(null, t('errNoList', 'en'))], { ephemeral: true })
+    );
   }
 
   const lang = entry.lang;
 
   // 7-Tage-Regel (Spam-Schutz)
   if (isWithinSevenDays(pending.day, pending.month, lang)) {
-    return interaction.followUp({
-      components: [buildSevenDayErrorEmbed(lang, pending.day, pending.month)],
-      ephemeral: true,
-    });
+    return interaction.followUp(
+      componentsV2Payload([buildSevenDayErrorEmbed(lang, pending.day, pending.month)], {
+        ephemeral: true,
+      })
+    );
   }
 
   // Alten Eintrag des Nutzers entfernen (keine Doppel-Einträge!) und
@@ -168,10 +167,9 @@ async function confirmYes(ctx, interaction) {
   let desc = t('birthdayAdded', lang, { date });
   if (replaced) desc += `\n\n${t('entryReplaced', lang)}`;
 
-  return interaction.followUp({
-    components: [smallContainer(null, desc)],
-    ephemeral: true,
-  });
+  return interaction.followUp(
+    componentsV2Payload([smallContainer(null, desc)], { ephemeral: true })
+  );
 }
 
 /**
@@ -194,12 +192,12 @@ async function congrats(ctx, interaction, id) {
   const wishes = [...new Set(allMentions.filter((uid) => uid !== birthdayUserId))];
 
   if (wishes.includes(clickerId)) {
-    return interaction.reply({
-      components: [
-        smallContainer(null, t('alreadyWished', lang, { user: `<@${birthdayUserId}>` })),
-      ],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload(
+        [smallContainer(null, t('alreadyWished', lang, { user: `<@${birthdayUserId}>` }))],
+        { ephemeral: true }
+      )
+    );
   }
 
   wishes.push(clickerId);
@@ -211,12 +209,14 @@ async function congrats(ctx, interaction, id) {
     wishes,
   });
 
-  await interaction.update({ components: [container] });
+  await interaction.update(componentsV2Payload([container]));
 
-  return interaction.followUp({
-    components: [smallContainer(null, t('wished', lang, { user: `<@${birthdayUserId}>` }))],
-    ephemeral: true,
-  });
+  return interaction.followUp(
+    componentsV2Payload(
+      [smallContainer(null, t('wished', lang, { user: `<@${birthdayUserId}>` }))],
+      { ephemeral: true }
+    )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -243,24 +243,21 @@ async function entryModalSubmit(ctx, interaction) {
 
   const day = parseDayInput(dayRaw);
   if (!day) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errInvalidDay', errLang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errInvalidDay', errLang))], { ephemeral: true })
+    );
   }
 
   const mm = matchMonth(monthRaw);
   if (!mm) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errInvalidMonth', errLang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errInvalidMonth', errLang))], { ephemeral: true })
+    );
   }
   if (!isValidDate(day, mm.month)) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errInvalidDate', errLang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errInvalidDate', errLang))], { ephemeral: true })
+    );
   }
 
   const entry = ctx.store.get(interaction.guildId);
@@ -275,21 +272,20 @@ async function entryModalSubmit(ctx, interaction) {
   });
 
   // Reply mit dem Bestätigungs-Container (Buttons direkt im Container)
-  return interaction.reply({
-    components: [
+  return interaction.reply(
+    componentsV2Payload([
       buildConfirmationEmbed({ day, month: mm.month, lang, input: monthRaw.trim(), fuzzy: mm.fuzzy }),
-    ],
-  });
+    ])
+  );
 }
 
 /** Admin: Geburtstag für einen anderen Nutzer setzen (ohne 7-Tage-Regel). */
 async function adminModalSubmit(ctx, interaction) {
   const pending = ctx.pendingAdmin.get(interaction.user.id);
   if (!pending) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errGeneric', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGeneric', 'en'))], { ephemeral: true })
+    );
   }
 
   const dayRaw = interaction.fields.getTextInputValue('day');
@@ -297,32 +293,28 @@ async function adminModalSubmit(ctx, interaction) {
 
   const day = parseDayInput(dayRaw);
   if (!day) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errInvalidDay', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errInvalidDay', 'en'))], { ephemeral: true })
+    );
   }
   const mm = matchMonth(monthRaw);
   if (!mm) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errInvalidMonth', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errInvalidMonth', 'en'))], { ephemeral: true })
+    );
   }
   if (!isValidDate(day, mm.month)) {
-    return interaction.reply({
-      components: [smallContainer(null, t('errInvalidDate', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errInvalidDate', 'en'))], { ephemeral: true })
+    );
   }
 
   const entry = ctx.store.get(pending.guildId);
   if (!entry) {
     ctx.pendingAdmin.delete(interaction.user.id);
-    return interaction.reply({
-      components: [smallContainer(null, t('errNoList', 'en'))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errNoList', 'en'))], { ephemeral: true })
+    );
   }
 
   // Ziel-Nutzer muss noch auf dem Server sein
@@ -330,10 +322,9 @@ async function adminModalSubmit(ctx, interaction) {
   const member = await guild?.members.fetch(pending.targetId).catch(() => null);
   if (!member) {
     ctx.pendingAdmin.delete(interaction.user.id);
-    return interaction.reply({
-      components: [smallContainer(null, t('errUserGone', entry.lang))],
-      ephemeral: true,
-    });
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errUserGone', entry.lang))], { ephemeral: true })
+    );
   }
 
   // Alten Eintrag des Ziel-Nutzers ersetzen (auf dem frisch
@@ -345,15 +336,17 @@ async function adminModalSubmit(ctx, interaction) {
   ctx.pendingAdmin.delete(interaction.user.id);
 
   const date = formatBirthday(day, mm.month, entry.lang);
-  return interaction.reply({
-    components: [
-      smallContainer(
-        null,
-        t('adminSetSuccess', entry.lang, { user: `<@${pending.targetId}>`, date })
-      ),
-    ],
-    ephemeral: true,
-  });
+  return interaction.reply(
+    componentsV2Payload(
+      [
+        smallContainer(
+          null,
+          t('adminSetSuccess', entry.lang, { user: `<@${pending.targetId}>`, date })
+        ),
+      ],
+      { ephemeral: true }
+    )
+  );
 }
 
 module.exports = { handleInteraction };

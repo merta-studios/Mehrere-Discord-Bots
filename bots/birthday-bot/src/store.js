@@ -23,6 +23,7 @@ const {
 } = require('./embed-builder');
 const { tzParts, todayKey, pad } = require('./logic');
 const { tzOf } = require('./languages');
+const { componentsV2Payload } = require('./message-payload');
 
 function createStore({ client, logger }) {
   const registry = new Map(); // guildId -> entry
@@ -130,9 +131,9 @@ function createStore({ client, logger }) {
     const container = buildListEmbed({ birthdays, lang });
 
     if (msg) {
-      await msg.edit({ components: [container], embeds: [] }).catch(() => {});
+      await msg.edit(componentsV2Payload([container], { embeds: [] })).catch(() => {});
     } else {
-      msg = await channel.send({ components: [container] }).catch(() => null);
+      msg = await channel.send(componentsV2Payload([container])).catch(() => null);
       if (!msg) return null;
       entry.messageId = msg.id;
     }
@@ -199,7 +200,7 @@ function createStore({ client, logger }) {
       if (!member) continue;
 
       const { container } = buildCongratsEmbed({ member, lang: entry.lang, dateKey });
-      await channel.send({ components: [container] }).catch((err) => {
+      await channel.send(componentsV2Payload([container])).catch((err) => {
         logger.warn(`[birthday-bot] Gruß für ${b.userId} konnte nicht gesendet werden:`, err.message);
       });
     }

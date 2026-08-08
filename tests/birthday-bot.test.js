@@ -11,8 +11,10 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { MessageFlags } = require('discord.js');
 
 const { matchMonth } = require('../bots/birthday-bot/src/languages');
+const { componentsV2Payload } = require('../bots/birthday-bot/src/message-payload');
 const {
   monthOrder,
   isValidDate,
@@ -157,6 +159,19 @@ test('7-Tage-Regel (relativ zu heute, Zeitzone Europe/Berlin)', () => {
 // ---------------------------------------------------------------------------
 // Container-Roundtrip (das „DB-lose“ Prinzip mit Components V2)
 // ---------------------------------------------------------------------------
+
+test('Components-V2-Payload setzt die von Discord benötigten Message-Flags', () => {
+  const component = buildListEmbed({ birthdays: [], lang: 'de' });
+  const publicPayload = componentsV2Payload([component]);
+  const ephemeralPayload = componentsV2Payload([component], { ephemeral: true });
+
+  assert.equal(publicPayload.flags, MessageFlags.IsComponentsV2);
+  assert.equal(
+    ephemeralPayload.flags,
+    MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+  );
+  assert.equal('ephemeral' in ephemeralPayload, false, 'Kein veraltetes ephemeral-Feld');
+});
 
 test('Container-Roundtrip: gebaute Liste wird exakt wieder ausgelesen', () => {
   const birthdays = [
