@@ -4,16 +4,17 @@
  *
  * Getestet wird ohne echte Discord-Verbindung:
  * - „Geburtstag eintragen“-Button öffnet das Formular
- * - Formular-Absenden erzeugt die Bestätigungsnachricht unter dem Button
+ * - Formular-Absenden erzeugt die Bestätigungsnachricht als Container
  * - Bestätigen mit gültigem Datum (≥ 7 Tage) trägt ein + aktualisiert die Liste
  * - Bestätigen mit zu nahem Datum wird durch die 7-Tage-Regel blockiert
+ * - /setup ist nur für Admins erlaubt
  */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createStore } = require('../bots/birthday-bot/src/store');
 const { handleInteraction } = require('../bots/birthday-bot/src/interactions');
-const { buildListEmbed } = require('../bots/birthday-bot/src/embed-builder');
+const { buildListEmbed, extractAllText } = require('../bots/birthday-bot/src/embed-builder');
 const { todayKey, tzParts } = require('../bots/birthday-bot/src/logic');
 
 // ---------------------------------------------------------------------------
@@ -27,9 +28,15 @@ function makeHarness({ lang = 'de' } = {}) {
     return {
       id: entry.messageId,
       author: { id: 'bot1' },
-      embeds: [buildListEmbed({ birthdays: entry.birthdays, lang: entry.lang }).toJSON()],
+      components: [buildListEmbed({ birthdays: entry.birthdays, lang: entry.lang }).toJSON()],
+      embeds: [],
       edit: async (payload) => {
-        msg.embeds = payload.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
+        if (payload.components) {
+          msg.components = payload.components.map((c) => (c.toJSON ? c.toJSON() : c));
+        }
+        if (payload.embeds) {
+          msg.embeds = payload.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
+        }
         return msg;
       },
       delete: async () => {},
@@ -39,7 +46,9 @@ function makeHarness({ lang = 'de' } = {}) {
 
   const channel = {
     id: 'ch1',
+    type: 0,
     isTextBased: () => true,
+    permissionsFor: () => ({ has: () => true }),
     messages: {
       fetch: async (arg) => {
         if (typeof arg === 'object') {
@@ -51,13 +60,12 @@ function makeHarness({ lang = 'de' } = {}) {
         if (arg === 'm1') return msg;
         return sent.find((m) => m.id === arg) || null;
       },
-      // nicht benötigt
     },
     send: async (payload) => {
       const m = {
         id: `sent${sent.length + 1}`,
-        embeds: payload.embeds.map((e) => (e.toJSON ? e.toJSON() : e)),
-        components: payload.components,
+        components: payload.components?.map((c) => (c.toJSON ? c.toJSON() : c)) || [],
+        embeds: payload.embeds?.map((e) => (e.toJSON ? e.toJSON() : e)) || [],
         delete: async () => {},
       };
       sent.push(m);
@@ -71,6 +79,10 @@ function makeHarness({ lang = 'de' } = {}) {
     members: {
       cache: new Map(),
       fetch: async () => ({ id: 'u1', displayAvatarURL: () => 'https://example.com/a.png' }),
+    },
+    channels: {
+      fetch: async () => [channel],
+      cache: [channel],
     },
   };
 
@@ -86,7 +98,7 @@ function makeHarness({ lang = 'de' } = {}) {
     ownerId: 'owner1',
     logger: { info() {}, warn() {}, error() {} },
     env: () => '',
-    rest: {},
+    rest: { patch: async () => {} },
     store: createStore({ client, logger: { warn() {} } }),
     pending: new Map(),
     pendingAdmin: new Map(),
@@ -120,6 +132,7 @@ function makeHarness({ lang = 'de' } = {}) {
       customId,
       deferred: false,
       replied: false,
+      memberPermissions: { has: () => true },
       inGuild: () => true,
       isChatInputCommand: () => false,
       isButton: () => customId !== 'bday_modal' && customId !== 'admin_bday_modal',
@@ -132,14 +145,18 @@ function makeHarness({ lang = 'de' } = {}) {
         follows.push(p);
       },
       deferUpdate: async () => {},
+      deferReply: async () => {},
       showModal: async (m) => {
         modals.push(m);
       },
       update: async () => {},
       editReply: async () => {},
-      message: { embeds: [], delete: async () => {} },
+      message: { embeds: [], components: [], delete: async () => {} },
       fields: { getTextInputValue: () => '' },
-      options: {},
+      options: {
+        getString: (name) => (name === 'language' ? 'de' : null),
+        getChannel: () => channel,
+      },
       ...overrides,
     };
   }
@@ -162,7 +179,7 @@ test('„Geburtstag eintragen“-Button öffnet das Formular', async () => {
   assert.equal(h.modals[0].data.custom_id, 'bday_modal');
 });
 
-test('Formular-Absenden erzeugt genau eine Bestätigungsnachricht', async () => {
+test('Formular-Absenden erzeugt genau eine Bestätigungsnachricht (Container)', async () => {
   const h = makeHarness();
   const good = dateIn(20); // weit genug weg
   const interaction = h.makeInteraction({
@@ -193,7 +210,8 @@ test('Formular mit Tippfehler im Monat erkennt September trotzdem', async () => 
 
   assert.equal(h.sent.length, 0);
   assert.equal(h.replies.length, 1);
-  assert.match(h.replies[0].embeds[0].data.description, /September/);
+  const text = extractAllText(h.replies[0]);
+  assert.match(text, /September/);
   const pending = h.ctx.pending.get('u1');
   assert.equal(pending.month, 9);
   assert.equal(pending.fuzzy, true);
@@ -262,7 +280,8 @@ test('7-Tage-Regel blockiert Geburtstage in weniger als 7 Tagen', async () => {
   const entry = h.ctx.store.get('g1');
   assert.equal(entry.birthdays.length, 0, 'Nichts eingetragen');
   assert.equal(h.follows.length, 1);
-  assert.equal(h.follows[0].embeds[0].data.title, '⛔ Zu früh zum Eintragen!');
+  const text = extractAllText(h.follows[0]);
+  assert.match(text, /Zu früh zum Eintragen!/);
 });
 
 test('Abbrechen löscht die Bestätigung ohne Eintrag', async () => {
@@ -286,30 +305,33 @@ test('Gratulieren: erste Gratulation fügt Feld hinzu, Wiederholung wird blockie
   const h = makeHarness();
   const uid = 'bday1';
   const dateKey = '2026-12-31';
-  const oldEmbed = {
-    color: 0x9b59b6,
-    title: '🎂 Happy birthday!',
-    description: 'Today is <@bday1>’s birthday! 🥳',
-    thumbnail: { url: 'https://example.com/a.png' },
-    footer: { text: `bday-congrats:${dateKey}:${uid}` },
-    timestamp: '2026-12-31T00:00:00.000Z',
-    fields: [],
+
+  const { container } = require('../bots/birthday-bot/src/embed-builder').buildCongratsEmbed({
+    member: { id: uid },
+    lang: 'de',
+    dateKey,
+    wishes: [],
+  });
+
+  const msg = {
+    components: [container.toJSON()],
+    id: 'congrats1',
+    delete: async () => {},
   };
-  const msg = { embeds: [oldEmbed], id: 'congrats1', delete: async () => {} };
 
   // 1. Gratulation durch u1
   const first = h.makeInteraction({
     customId: `bday_congrats_${uid}_${dateKey}`,
     message: msg,
     update: async (p) => {
-      msg.embeds = p.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
+      msg.components = p.components.map((c) => (c.toJSON ? c.toJSON() : c));
     },
   });
   await handleInteraction(h.ctx, first);
   assert.equal(h.follows.length, 1, 'u1 bekam Bestätigung');
-  assert.equal(msg.embeds[0].fields.length, 1, 'Glückwunsch-Feld wurde hinzugefügt');
-  assert.match(msg.embeds[0].fields[0].name, /\(1\)/, 'Anzahl = 1');
-  assert.ok(msg.embeds[0].fields[0].value.includes('<@u1>'), 'u1 wird erwähnt');
+  let msgText = extractAllText(msg);
+  assert.match(msgText, /Glückwünsche \(1\)/, 'Anzahl = 1');
+  assert.ok(msgText.includes('<@u1>'), 'u1 wird erwähnt');
 
   // 2. Gratulation durch u2 → Anzahl 2
   const second = h.makeInteraction({
@@ -317,26 +339,28 @@ test('Gratulieren: erste Gratulation fügt Feld hinzu, Wiederholung wird blockie
     user: { id: 'u2', username: 'Zweiter' },
     message: msg,
     update: async (p) => {
-      msg.embeds = p.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
+      msg.components = p.components.map((c) => (c.toJSON ? c.toJSON() : c));
     },
   });
   await handleInteraction(h.ctx, second);
-  assert.match(msg.embeds[0].fields[0].name, /\(2\)/, 'Anzahl = 2');
-  assert.ok(msg.embeds[0].fields[0].value.includes('<@u2>'), 'u2 wird erwähnt');
+  msgText = extractAllText(msg);
+  assert.match(msgText, /Glückwünsche \(2\)/, 'Anzahl = 2');
+  assert.ok(msgText.includes('<@u2>'), 'u2 wird erwähnt');
 
   // 3. u1 will nochmal → blockiert (kein Doppel-Glückwunsch)
   const third = h.makeInteraction({
     customId: `bday_congrats_${uid}_${dateKey}`,
     message: msg,
     update: async (p) => {
-      msg.embeds = p.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
+      msg.components = p.components.map((c) => (c.toJSON ? c.toJSON() : c));
     },
   });
   await handleInteraction(h.ctx, third);
-  assert.equal(msg.embeds[0].fields[0].name, '🎉 Glückwünsche (2)', 'Feld unverändert nach Blockade');
-  assert.equal(msg.embeds[0].fields[0].value, '<@u1>\n<@u2>', 'Werte unverändert nach Blockade');
+  msgText = extractAllText(msg);
+  assert.match(msgText, /Glückwünsche \(2\)/, 'Anzahl unverändert');
   assert.ok(h.replies.length >= 1, 'Blockade-Meldung kam');
-  assert.match(h.replies[h.replies.length - 1].embeds[0].data.description, /bereits/i);
+  const replyText = extractAllText(h.replies[h.replies.length - 1]);
+  assert.match(replyText, /bereits/i);
 });
 
 test('Admin-Panel: Owner sieht Serverliste und wählt einen Server aus', async () => {
@@ -360,11 +384,18 @@ test('Admin-Panel: Owner sieht Serverliste und wählt einen Server aus', async (
   await handleInteraction(h.ctx, listInteraction);
   assert.equal(h.replies.length, 1);
   const listPayload = h.replies[0];
-  assert.match(listPayload.embeds[0].data.description, /Testgilde/);
-  const select = listPayload.components[0].components[0];
+  const listText = extractAllText(listPayload);
+  assert.match(listText, /Testgilde/);
+
+  // Container components check
+  const containerJson = listPayload.components[0].toJSON
+    ? listPayload.components[0].toJSON()
+    : listPayload.components[0];
+  const actionRows = containerJson.components.filter((c) => c.type === 1);
+  const select = actionRows[0].components[0];
   assert.equal(select.options.length, 1);
-  assert.equal(select.options[0].data.value, 'g1');
-  assert.equal(listPayload.components[1].components.length, 3, '◀ / Aktualisieren / ▶');
+  assert.equal(select.options[0].value, 'g1');
+  assert.equal(actionRows[1].components.length, 3, '◀ / Aktualisieren / ▶');
 
   // 2. Server auswählen → Detail-Ansicht mit Zurück/Einladung/Verlassen
   const selectInteraction = h.makeInteraction({
@@ -382,9 +413,15 @@ test('Admin-Panel: Owner sieht Serverliste und wählt einen Server aus', async (
   await handleInteraction(h.ctx, selectInteraction);
   const detail = h.detailPayload;
   assert.ok(detail, 'Detail-Ansicht gerendert');
-  assert.match(detail.embeds[0].data.description, /Mitglieder/);
-  assert.match(detail.embeds[0].data.description, /Geburtstagsliste/);
-  const btnLabels = detail.components[0].components.map((b) => b.data.label);
+  const detailText = extractAllText(detail);
+  assert.match(detailText, /Mitglieder/);
+  assert.match(detailText, /Geburtstagsliste/);
+
+  const detailContainer = detail.components[0].toJSON
+    ? detail.components[0].toJSON()
+    : detail.components[0];
+  const detailActionRow = detailContainer.components.find((c) => c.type === 1);
+  const btnLabels = detailActionRow.components.map((b) => b.label);
   assert.deepEqual(btnLabels, ['◀ Zurück', '🔗 Einladung', '🚪 Verlassen']);
 });
 
@@ -408,4 +445,18 @@ test('Bearbeiten öffnet das Formular erneut mit vorbefüllten Zahlen', async ()
   const monthInput = modalJson.components[1].components[0];
   assert.equal(dayInput.value, String(good.day), 'Tag vorbefüllt');
   assert.equal(monthInput.value, String(good.month), 'Monat als Zahl vorbefüllt');
+});
+
+test('Setup Command blockiert Nicht-Admins', async () => {
+  const h = makeHarness();
+  const setupInteraction = h.makeInteraction({
+    commandName: 'setup',
+    isChatInputCommand: () => true,
+    isButton: () => false,
+    memberPermissions: { has: () => false }, // Kein Admin!
+  });
+  await handleInteraction(h.ctx, setupInteraction);
+  assert.equal(h.replies.length, 1);
+  const text = extractAllText(h.replies[0]);
+  assert.match(text, /Administrator/);
 });

@@ -2,25 +2,26 @@
  * ============================================================================
  *  🎂 Birthday Bot – Geburtstagsliste ohne Datenbank
  *
- *  Der Bot sendet eine wunderschöne Geburtstagsliste als Embed und liest
- *  sie später einfach selbst wieder aus (Marker im Footer, Einträge in
- *  den Feldern). Keine Datenbank nötig – alles steckt im Embed!
+ *  Der Bot sendet eine wunderschöne Geburtstagsliste als modernes
+ *  Container-Layout (Components V2) und liest sie später einfach selbst
+ *  wieder aus (Marker, Einträge im Text). Keine Datenbank nötig –
+ *  alles steckt in den Komponenten selbst!
  *
  *  Funktionen:
- *  - /setup [language] [channel] – Liste einrichten (10 Sprachen, TZ je Sprache)
+ *  - /setup [language] [channel] – Liste einrichten (nur für Admins, 10 Sprachen)
  *  - „Geburtstag eintragen“-Button mit Modal (Tag + Monat, Fuzzy-Erkennung
  *    für Monatsnamen in allen Sprachen, auch mit Tippfehlern)
  *  - Bestätigung mit 3 Buttons (Bestätigen / Bearbeiten / Abbrechen)
  *  - 7-Tage-Regel als Spam-Schutz
- *  - Stündliches Self-Healing-Refresh: liest das Embed neu, entfernt
+ *  - Stündliches Self-Healing-Refresh: liest den Container neu, entfernt
  *    Nutzer, die den Server verlassen haben, dreht Monate zum aktuellen
  *    Monat um – und hält die Liste so ohne DB aktuell
- *  - Täglicher Check um 0 Uhr: Geburtstagskinder bekommen ein Gruß-Embed
- *    mit Profilbild + „Gratulieren“-Button (Glückwünsche & Anzahl im Embed)
- *  - /admin_set_bot_profile – serverspezifisches Bot-Profilbild
- *  - /admin_set_birthday – Admins setzen Geburtstage für andere
- *  - /help – Befehlsübersicht
- *  - /adminpanel – Owner-Panel im DM (Serverliste, Einladung, Leave)
+ *  - Täglicher Check um 0 Uhr: Geburtstagskinder bekommen einen Gruß-Container
+ *    mit „Gratulieren“-Button (Glückwünsche & Anzahl im Container)
+ *  - /admin_set_bot_profile – serverspezifisches Bot-Profilbild (nur Admins)
+ *  - /admin_set_birthday – Admins setzen Geburtstage für andere (nur Admins)
+ *  - /help – Befehlsübersicht (ohne /adminpanel)
+ *  - /adminpanel – Owner-Panel im Privatchat (Serverliste, Einladung, Leave)
  *  - Max. 3 Nachrichten unter der Liste (wird automatisch aufgeräumt)
  *
  *  Owner-ID: kommt aus der Umgebungsvariable BIRTHDAY_BOT_OWNER_ID
@@ -90,9 +91,9 @@ module.exports = {
     });
 
     // ---------------- Aufräum-Logik: max. 3 Nachrichten unter der Liste ----------------
-    // Neue Nachrichten unter dem Listen-Embed (egal ob vom Bot oder von
+    // Neue Nachrichten unter dem Listen-Container (egal ob vom Bot oder von
     // Nutzern) werden begrenzt: die oberste Nachricht direkt unter dem
-    // Embed wird gelöscht, bis nur noch 3 übrig sind.
+    // Container wird gelöscht, bis nur noch 3 übrig sind.
     client.on('messageCreate', (msg) => {
       if (!msg.guild) return;
       const entry = ctx.store.get(msg.guild.id);
@@ -100,8 +101,12 @@ module.exports = {
 
       // Die Liste selbst nie löschen (auch kurz nach /setup, wenn die
       // messageId im Store noch nicht aktuell ist).
-      const isList = msg.embeds?.some((e) => (e.footer?.text || '').includes('bday::v1::'));
-      if (isList || msg.id === entry.messageId) return;
+      const isList =
+        msg.id === entry.messageId ||
+        JSON.stringify(msg.components || []).includes('bday::v1::') ||
+        JSON.stringify(msg.components || []).includes('bday_add') ||
+        msg.embeds?.some((e) => (e.footer?.text || '').includes('bday::v1::'));
+      if (isList) return;
 
       void (async () => {
         try {

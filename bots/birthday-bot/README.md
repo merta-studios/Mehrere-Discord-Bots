@@ -1,34 +1,38 @@
 # 🎂 Birthday Bot
 
-Geburtstagsliste für Discord-Server – **komplett ohne Datenbank**. Der Bot
-sendet ein schönes Listen-Embed und liest es selbst immer wieder aus
-(Self-Healing). Alles, was er „weiß“, steckt im Embed selbst.
+Geburtstagsliste für Discord-Server – **komplett ohne Datenbank** mit modernem
+**Container-Layout (Components V2)**. Der Bot sendet einen schönen Listen-Container
+und liest ihn selbst immer wieder aus (Self-Healing). Alles, was er „weiß“,
+steckt in den Komponenten selbst.
 
 ## Funktionen
 
-- **/setup [language] [channel]** – Liste in 10 Sprachen einrichten
+- **/setup [language] [channel]** – **Nur für Admins:** Liste in 10 Sprachen einrichten
   (Kanal optional, sonst aktueller Kanal). Bestehende Listen werden
   gefunden: Einträge bleiben beim Umstellen von Sprache/Kanal erhalten.
-- **„🎂 Geburtstag eintragen“-Button** unter der Liste → Formular mit
+- **Modernes Container-Layout (Components V2)** – Kein farbiger Rand an der Seite,
+  Titel `🎂 Geburtstage` direkt beim Datumstext oben, keine störenden Footer oder
+  Zeitstempel unten, Trennlinien (Dividers) und Buttons direkt im Container.
+- **„🎂 Geburtstag eintragen“-Button** im Container → Formular mit
   Tag (nur Zahlen) und Monat (Zahl, Name oder Tippfehler – Fuzzy-Erkennung
   über alle 10 Sprachen, es gewinnt immer das beste Wort).
-  Danach Bestätigungs-Embed mit ✅ Bestätigen / ✏️ Bearbeiten / ❌ Abbrechen.
+  Danach Bestätigungs-Container mit ✅ Bestätigen / ✏️ Bearbeiten / ❌ Abbrechen.
 - **7-Tage-Regel** als Spam-Schutz beim Eintragen.
 - **Stündliches Self-Refresh**: aktueller Monat zuerst (dann Jahresrest,
   dann Januar bis davor), Nutzer, die den Server verlassen haben, werden
   entfernt, Datum oben in der Zeitzone der Sprache.
-- **Täglich um 0 Uhr** (Sprach-Zeitzone): Geburtstagskinder bekommen ein
-  Gruß-Embed mit Profilbild + „🎉 Gratulieren“-Button; Glückwünsche und
-  Anzahl stehen danach im Embed (keine Doppel-Glückwünsche).
+- **Täglich um 0 Uhr** (Sprach-Zeitzone): Geburtstagskinder bekommen einen
+  Gruß-Container mit „🎉 Gratulieren“-Button; Glückwünsche und
+  Anzahl stehen direkt im Container (keine Doppel-Glückwünsche).
 - **Max. 3 Nachrichten** unter der Liste – automatisches Aufräumen.
-- **/admin_set_bot_profile** – serverspezifisches Bot-Profilbild
-  (nur: Standard / Server / Server-Owner, kein Upload).
-- **/admin_set_birthday** – Admins setzen Geburtstage für andere
+- **/admin_set_bot_profile** – **Nur für Admins:** serverspezifisches Bot-Profilbild
+  (Standard / Server-Icon / Server-Owner-Icon) sofort per Discord-API geändert.
+- **/admin_set_birthday** – **Nur für Admins:** setzt Geburtstage für andere
   (ohne 7-Tage-Regel).
-- **/help** – Befehlsübersicht in der Server-Sprache.
-- **/adminpanel** – Owner-Panel nur im DM: Serverliste mit Seiten,
-  sortiert (🔴-Server zuerst, dann nach Mitgliedern), Server-Detail,
-  Einladung (1h/1×), Verlassen, Join-Benachrichtigung.
+- **/help** – Befehlsübersicht in der Server-Sprache (ohne /adminpanel).
+- **/adminpanel** – Owner-Panel **nur im Privatchat** mit dem Bot-Owner:
+  auf Servern unsichtbar, Serverliste mit Seiten, sortiert (🔴-Server zuerst),
+  Server-Detail, Einladung (1h/1×), Verlassen, Join-Benachrichtigung.
 
 ## Dateien
 
@@ -38,7 +42,7 @@ bots/birthday-bot/
 └── src/
     ├── languages.js      # ★ EINE Sprachdatei: alle Texte in 10 Sprachen
     ├── logic.js          # Datumslogik: Zeitzonen, 7-Tage-Regel, Monatsreihenfolge
-    ├── embed-builder.js  # baut & liest die Listen-Embeds (die „Datenbank“)
+    ├── embed-builder.js  # baut & liest die Listen-Container (die „Datenbank“)
     ├── store.js          # Registry, Channel-Scan, Refresh, Tages-Check
     ├── scheduler.js      # stündliches Refresh + 0-Uhr-Prüfung
     ├── commands.js       # Slash-Command-Definitionen & Handler

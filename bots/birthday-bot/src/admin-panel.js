@@ -2,6 +2,8 @@
  * Owner-Admin-Panel (/adminpanel) – nur im Privatchat mit dem
  * Bot-Owner, bewusst auf Deutsch.
  *
+ * Verwendet moderne Container & Layout-Komponenten (Components V2).
+ *
  * - Serverliste mit Seiten (◀ ▶), sortiert: erst Server ohne den
  *   Bot-Owner (🔴), dann nach Mitgliederzahl (absteigend).
  * - Server-Detail: Owner-Mention, Name, Bild, Mitglieder,
@@ -11,7 +13,9 @@
  */
 
 const {
-  EmbedBuilder,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -21,7 +25,7 @@ const {
 } = require('discord.js');
 
 const { t } = require('./languages');
-const { COLORS, smallEmbed } = require('./embed-builder');
+const { smallContainer } = require('./embed-builder');
 
 const PANEL_PREFIX = 'ap_';
 const PAGE_SIZE = 5;
@@ -38,7 +42,7 @@ function canUsePanel(ctx, interaction) {
 
 function deny(ctx, interaction) {
   return interaction.reply({
-    embeds: [smallEmbed(COLORS.error, null, t('apNeedDm', 'de'))],
+    components: [smallContainer(null, t('apNeedDm', 'de'))],
     ephemeral: true,
   });
 }
@@ -81,16 +85,16 @@ async function openPanel(ctx, interaction) {
   return interaction.reply(payload);
 }
 
-async function renderListPayload(ctx, userId) {
+async function renderListPayload(ctx, userId, noticePrefix = '') {
   const session = sessionOf(ctx, userId);
   const servers = await collectServers(ctx);
 
+  const container = new ContainerBuilder();
+
   if (!servers.length) {
-    const embed = new EmbedBuilder()
-      .setTitle(t('apTitle', 'de'))
-      .setDescription(t('apNoServers', 'de'))
-      .setThumbnail(ctx.client.user.displayAvatarURL({ size: 128 }))
-      .setFooter({ text: t('apPage', 'de', { page: 1, total: 1 }) });
+    let text = `# ${t('apTitle', 'de')}\n\n${t('apNoServers', 'de')}`;
+    if (noticePrefix) text = `${noticePrefix}\n\n${text}`;
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
 
     const select = new StringSelectMenuBuilder()
       .setCustomId(`${PANEL_PREFIX}select`)
@@ -98,10 +102,10 @@ async function renderListPayload(ctx, userId) {
       .setDisabled(true)
       .addOptions({ label: '—', value: 'none' });
 
-    return {
-      embeds: [embed],
-      components: [new ActionRowBuilder().addComponents(select)],
-    };
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(select));
+
+    return { components: [container] };
   }
 
   const totalPages = Math.ceil(servers.length / PAGE_SIZE);
@@ -113,11 +117,12 @@ async function renderListPayload(ctx, userId) {
     (s) => `${s.present ? '🟢' : '🔴'} **${escapeMd(s.guild.name)}** · ${s.members.toLocaleString('de-DE')} Mitglieder`
   );
 
-  const embed = new EmbedBuilder()
-    .setTitle(t('apTitle', 'de'))
-    .setDescription(t('apServerListDesc', 'de', { count: servers.length, list: lines.join('\n') }))
-    .setThumbnail(ctx.client.user.displayAvatarURL({ size: 128 }))
-    .setFooter({ text: t('apPage', 'de', { page: page + 1, total: totalPages }) });
+  let descText = `# ${t('apTitle', 'de')}\n\n${t('apServerListDesc', 'de', { count: servers.length, list: lines.join('\n') })}`;
+  if (noticePrefix) descText = `${noticePrefix}\n\n${descText}`;
+  descText += `\n\n*${t('apPage', 'de', { page: page + 1, total: totalPages })}*`;
+
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(descText));
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
 
   const select = new StringSelectMenuBuilder()
     .setCustomId(`${PANEL_PREFIX}select`)
@@ -149,13 +154,9 @@ async function renderListPayload(ctx, userId) {
       .setDisabled(page >= totalPages - 1)
   );
 
-  return {
-    embeds: [embed],
-    components: [
-      new ActionRowBuilder().addComponents(select),
-      nav,
-    ],
-  };
+  container.addActionRowComponents(new ActionRowBuilder().addComponents(select), nav);
+
+  return { components: [container] };
 }
 
 function escapeMd(text) {
@@ -177,27 +178,33 @@ async function renderDetailPayload(ctx, userId, guildId) {
   const entry = ctx.store.get(guildId);
   const setup = !!entry;
 
-  const embed = new EmbedBuilder()
-    .setTitle(t('apDetailTitle', 'de'))
-    .setThumbnail(guild.iconURL({ size: 256 }) || ctx.client.user.displayAvatarURL({ size: 256 }))
-    .setDescription(
-      [
-        t('apDetailName', 'de', { name: guild.name }),
-        t('apDetailOwner', 'de', { mention: `<@${guild.ownerId}>` }),
-        t('apDetailMembers', 'de', { count: guild.memberCount.toLocaleString('de-DE') }),
-        '',
-        t('apDetailSetup', 'de', { status: setup ? t('apSetupYes', 'de') : t('apSetupNo', 'de') }),
-        setup ? t('apDetailBdays', 'de', { count: entry.birthdays.length }) : '',
-      ].join('\n')
-    );
+  const lines = [
+    `# ${t('apDetailTitle', 'de')}`,
+    '',
+    t('apDetailName', 'de', { name: guild.name }),
+    t('apDetailOwner', 'de', { mention: `<@${guild.ownerId}>` }),
+    t('apDetailMembers', 'de', { count: guild.memberCount.toLocaleString('de-DE') }),
+    '',
+    t('apDetailSetup', 'de', { status: setup ? t('apSetupYes', 'de') : t('apSetupNo', 'de') }),
+  ];
+  if (setup) {
+    lines.push(t('apDetailBdays', 'de', { count: entry.birthdays.length }));
+  }
 
   if (session.leaving) {
-    embed.setDescription(
-      `${embed.data.description}\n\n⚠️ ${t('apLeaveAsk', 'de', { name: guild.name })}`
-    );
+    lines.push('', `⚠️ ${t('apLeaveAsk', 'de', { name: guild.name })}`);
   } else if (session.inviteUrl) {
-    embed.addFields({ name: t('apInviteSent', 'de'), value: t('apInviteLink', 'de', { url: session.inviteUrl }) });
+    lines.push(
+      '',
+      `**${t('apInviteSent', 'de')}**`,
+      t('apInviteLink', 'de', { url: session.inviteUrl })
+    );
   }
+
+  const container = new ContainerBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(lines.join('\n'))
+  );
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
 
   const buttons = [];
   if (session.leaving) {
@@ -228,10 +235,9 @@ async function renderDetailPayload(ctx, userId, guildId) {
     );
   }
 
-  return {
-    embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(...buttons)],
-  };
+  container.addActionRowComponents(new ActionRowBuilder().addComponents(...buttons));
+
+  return { components: [container] };
 }
 
 // ---------------------------------------------------------------------------
@@ -317,11 +323,7 @@ async function handlePanelButton(ctx, interaction) {
       await guild.leave().catch(() => {});
       session.guildId = null;
       session.leaving = false;
-      const payload = await renderListPayload(ctx, userId);
-      payload.embeds[0] = EmbedBuilder.from(payload.embeds[0]).setDescription(
-        `${t('apLeft', 'de', { name })}\n\n${payload.embeds[0].data.description || ''}`
-      );
-      return interaction.editReply(payload);
+      return interaction.editReply(await renderListPayload(ctx, userId, t('apLeft', 'de', { name })));
     }
 
     default:
@@ -357,18 +359,13 @@ async function sendJoinNotice(ctx, guild) {
   try {
     const owner = await guild.fetchOwner().catch(() => null);
     const ownerUser = await ctx.client.users.fetch(ctx.ownerId);
-    const embed = new EmbedBuilder()
-      .setTitle('👋 Neuer Server!')
-      .setDescription(
-        t('apJoinNotice', 'de', {
-          name: guild.name,
-          members: guild.memberCount.toLocaleString('de-DE'),
-          owner: owner ? `<@${owner.id}>` : '?',
-        })
-      )
-      .setThumbnail(guild.iconURL({ size: 128 }))
-      .setTimestamp();
-    await ownerUser.send({ embeds: [embed] });
+    const notice = t('apJoinNotice', 'de', {
+      name: guild.name,
+      members: guild.memberCount.toLocaleString('de-DE'),
+      owner: owner ? `<@${owner.id}>` : '?',
+    });
+    const container = smallContainer('👋 Neuer Server!', notice);
+    await ownerUser.send({ components: [container] });
   } catch (err) {
     ctx.logger.warn('[birthday-bot] Join-Notice konnte nicht gesendet werden:', err.message);
   }
