@@ -746,6 +746,18 @@ const T = {
     zh: '⛔ 无法更改头像：{error}',
     it: '⛔ Impossibile cambiare l’immagine del profilo: {error}',
   },
+  errAvatarPerms: {
+    de: '⛔ Dem Bot fehlt die Berechtigung „Nickname ändern“. Gib dem Bot diese Berechtigung (oder Administrator-Rechte) und versuche es dann erneut.',
+    en: '⛔ The bot is missing the “Change Nickname” permission. Grant that permission (or Administrator) to the bot, then try again.',
+    fr: '⛔ Il manque au bot la permission « Changer le pseudo ». Accordez-lui cette permission (ou Administrateur), puis réessayez.',
+    es: '⛔ Al bot le falta el permiso «Cambiar apodo». Concédele ese permiso (o Administrador) e inténtalo de nuevo.',
+    pt: '⛔ O bot não tem a permissão «Alterar apelido». Conceda-lhe essa permissão (ou Administrador) e tente novamente.',
+    ru: '⛔ У бота нет права «Изменить никнейм». Дайте боту это право (или «Администратор») и повторите попытку.',
+    ja: '⛔ ボットに「ニックネームの変更」権限がありません。この権限（または管理者）を付与してから、もう一度お試しください。',
+    ko: '⛔ 봇에게 "닉네임 변경하기" 권한이 없어요. 해당 권한(또는 관리자)을 부여한 뒤 다시 시도해 주세요.',
+    zh: '⛔ 机器人缺少“更改昵称”权限。请为机器人授予该权限（或管理员权限）后重试。',
+    it: '⛔ Al bot manca l’autorizzazione «Cambia nickname». Concedigliela (o Amministratore) e riprova.',
+  },
   errServerNoIcon: {
     de: '⛔ Dieser Server hat kein eigenes Profilbild.',
     en: '⛔ This server has no profile picture of its own.',

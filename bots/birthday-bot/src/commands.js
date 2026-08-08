@@ -20,6 +20,7 @@ const {
   TextDisplayBuilder,
   SeparatorBuilder,
   MessageFlags,
+  RESTJSONErrorCodes,
 } = require('discord.js');
 
 const { LANGS, t, langFromDiscord, DISCORD_LOCALE } = require('./languages');
@@ -265,8 +266,11 @@ async function profileCmd(ctx, interaction) {
 
   try {
     if (choice === 'standard') {
-      // Standard = das globale Bot-Profilbild → Guild-Member-Avatar zurücksetzen
-      await ctx.rest.patch(Routes.userGuildMember(interaction.guild.id), {
+      // Standard = das globale Bot-Profilbild → Guild-Member-Avatar zurücksetzen.
+      // WICHTIG: Für Bots lautet die Route PATCH /guilds/{guild.id}/members/@me
+      // ("Modify Current Member"). PATCH /users/@me/guilds/{guild.id}/member ist
+      // nur für OAuth2-User-Tokens gedacht und liefert für Bots 405 Method Not Allowed.
+      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, '@me'), {
         body: { avatar: null },
       });
     } else {
@@ -290,9 +294,11 @@ async function profileCmd(ctx, interaction) {
       if (!res.ok) throw new Error(`Avatar konnte nicht geladen werden (${res.status})`);
       const buffer = Buffer.from(await res.arrayBuffer());
       const contentType = res.headers.get('content-type')?.split(';')[0] || 'image/png';
-      // Discord REST API verlangt Data-URI (PATCH /users/@me/guilds/{guild.id}/member)
+      // Serverseitiges Bot-Profilbild: Discord REST API verlangt einen Data-URI
+      // via PATCH /guilds/{guild.id}/members/@me (unterstützt Avatar/Banner für
+      // Bots seit dem API-Changelog vom 27.09.2022 – Guild-Member-Avatare für Bots).
       const avatarDataUri = `data:${contentType};base64,${buffer.toString('base64')}`;
-      await ctx.rest.patch(Routes.userGuildMember(interaction.guild.id), {
+      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, '@me'), {
         body: { avatar: avatarDataUri },
       });
     }
@@ -300,9 +306,12 @@ async function profileCmd(ctx, interaction) {
       componentsV2Payload([smallContainer(null, t('profileSet', lang, { choice: label }))])
     );
   } catch (err) {
-    return interaction.editReply(
-      componentsV2Payload([smallContainer(null, t('errAvatar', lang, { error: err.message }))])
-    );
+    // 50013 Missing Permissions → dem Bot fehlt z. B. „Nickname ändern“
+    const msg =
+      err?.code === RESTJSONErrorCodes.MissingPermissions || err?.status === 403
+        ? t('errAvatarPerms', lang)
+        : t('errAvatar', lang, { error: err.message });
+    return interaction.editReply(componentsV2Payload([smallContainer(null, msg)]));
   }
 }
 
