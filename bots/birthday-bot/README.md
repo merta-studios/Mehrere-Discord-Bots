@@ -6,7 +6,7 @@ sendet ein schönes Listen-Embed und liest es selbst immer wieder aus
 
 ## Funktionen
 
-- **/setup [channel] [language]** – Liste in 10 Sprachen einrichten
+- **/setup [language] [channel]** – Liste in 10 Sprachen einrichten
   (Kanal optional, sonst aktueller Kanal). Bestehende Listen werden
   gefunden: Einträge bleiben beim Umstellen von Sprache/Kanal erhalten.
 - **„🎂 Geburtstag eintragen“-Button** unter der Liste → Formular mit

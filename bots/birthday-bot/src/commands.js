@@ -58,13 +58,6 @@ function defineCommands() {
       .setName('setup')
       .setDescription('Richtet die Geburtstagsliste ein (Channel + Sprache)')
       .setDescriptionLocalizations(pick('helpSetup'))
-      .addChannelOption((o) =>
-        o
-          .setName('channel')
-          .setDescription('Kanal für die Liste (optional, Standard: aktueller Kanal)')
-          .setDescriptionLocalizations(pick('setupChannelDesc'))
-          .addChannelTypes(ChannelType.GuildText)
-      )
       .addStringOption((o) =>
         o
           .setName('language')
@@ -72,6 +65,13 @@ function defineCommands() {
           .setDescriptionLocalizations(pick('setupLangDesc'))
           .setRequired(true)
           .addChoices(...languageChoices)
+      )
+      .addChannelOption((o) =>
+        o
+          .setName('channel')
+          .setDescription('Kanal für die Liste (optional, Standard: aktueller Kanal)')
+          .setDescriptionLocalizations(pick('setupChannelDesc'))
+          .addChannelTypes(ChannelType.GuildText)
       ),
 
     new SlashCommandBuilder()
@@ -157,7 +157,7 @@ async function handleChatInput(ctx, interaction) {
   }
 }
 
-/** /setup [channel] [language] */
+/** /setup [language] [channel] */
 async function setupCmd(ctx, interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply({

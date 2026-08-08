@@ -9,7 +9,7 @@
  * ============================================================================
  */
 
-const { GatewayIntentBits, ActivityType } = require('discord.js');
+const { GatewayIntentBits, ActivityType, Events } = require('discord.js');
 
 module.exports = {
   id: 'xp-level-bot',
@@ -23,7 +23,7 @@ module.exports = {
   ],
 
   async create({ client, logger }) {
-    client.once('ready', async () => {
+    client.once(Events.ClientReady, async () => {
       logger.info('[xp-level-bot] Platzhalter ist online – XP-System wird in einem späteren Update ergänzt.');
       try {
         await client.user.setPresence({

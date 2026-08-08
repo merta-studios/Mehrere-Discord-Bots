@@ -7,7 +7,7 @@
  *  den Feldern). Keine Datenbank nötig – alles steckt im Embed!
  *
  *  Funktionen:
- *  - /setup [channel] [language] – Liste einrichten (10 Sprachen, TZ je Sprache)
+ *  - /setup [language] [channel] – Liste einrichten (10 Sprachen, TZ je Sprache)
  *  - „Geburtstag eintragen“-Button mit Modal (Tag + Monat, Fuzzy-Erkennung
  *    für Monatsnamen in allen Sprachen, auch mit Tippfehlern)
  *  - Bestätigung mit 3 Buttons (Bestätigen / Bearbeiten / Abbrechen)
@@ -28,7 +28,7 @@
  * ============================================================================
  */
 
-const { GatewayIntentBits, ActivityType } = require('discord.js');
+const { GatewayIntentBits, ActivityType, Events } = require('discord.js');
 
 const { createStore } = require('./src/store');
 const { startScheduler } = require('./src/scheduler');
@@ -66,7 +66,7 @@ module.exports = {
     };
 
     // ---------------- Ready ----------------
-    client.once('ready', async () => {
+    client.once(Events.ClientReady, async () => {
       try {
         await client.user.setPresence({
           activities: [{ name: '🎂 Geburtstage', type: ActivityType.Watching }],
