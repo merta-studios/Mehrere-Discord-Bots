@@ -152,7 +152,7 @@ online sind (siehe `src/health.js`).
 | Command | Was er kann |
 |---|---|
 | `/setup [language] [channel]` | **Nur für Admins:** Richtet die Geburtstagsliste ein. Ohne Channel wird der aktuelle Kanal genommen. **10 Sprachen** zur Auswahl. Eine bereits existierende Liste wird automatisch gefunden: Einträge bleiben erhalten, nur Sprache + Kanal ändern sich. |
-| „🎂 Geburtstag eintragen“ (Button) | Öffnet ein Formular: **Tag** (nur Zahlen, `4` oder `04`) + **Monat** (Zahl, Name oder sogar Tippfehler wie „Sebtemger“ → Fuzzy-Erkennung in allen 10 Sprachen). Danach Bestätigungs-Container mit 3 Buttons: ✅ Bestätigen / ✏️ Bearbeiten (Formular vorbefüllt) / ❌ Abbrechen. |
+| „🎂 Geburtstag eintragen“ (Button) | Öffnet ein Formular: **Tag** (nur Zahlen, `4` oder `04`) + **Monat** (Zahl, Name oder sogar Tippfehler wie „Sebtemger“ → Fuzzy-Erkennung in allen 10 Sprachen). Danach **ephemerer** Bestätigungs-Container (nur für die eintragende Person sichtbar) mit 3 Buttons: ✅ Bestätigen / ✏️ Bearbeiten (Formular vorbefüllt) / ❌ Abbrechen. |
 | `/admin_set_bot_profile [image]` | **Nur für Admins:** Ändert das **serverspezifische** Profilbild des Bots (Standard / Server-Icon / Server-Owner-Icon) sofort via Discord-API. |
 | `/admin_set_birthday [user]` | **Nur für Admins:** Setzt den Geburtstag eines anderen Nutzers (gleiches Formular, ohne 7-Tage-Regel). |
 | `/help` | Übersicht aller Befehle für normale Nutzer und Admins auf dem Server. |

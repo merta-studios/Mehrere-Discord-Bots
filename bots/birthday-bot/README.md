@@ -16,7 +16,8 @@ steckt in den Komponenten selbst.
 - **„🎂 Geburtstag eintragen“-Button** im Container → Formular mit
   Tag (nur Zahlen) und Monat (Zahl, Name oder Tippfehler – Fuzzy-Erkennung
   über alle 10 Sprachen, es gewinnt immer das beste Wort).
-  Danach Bestätigungs-Container mit ✅ Bestätigen / ✏️ Bearbeiten / ❌ Abbrechen.
+  Danach ein **ephemerer** Bestätigungs-Container (nur für die eintragende
+  Person sichtbar) mit ✅ Bestätigen / ✏️ Bearbeiten / ❌ Abbrechen.
 - **7-Tage-Regel** als Spam-Schutz beim Eintragen.
 - **Stündliches Self-Refresh**: aktueller Monat zuerst (dann Jahresrest,
   dann Januar bis davor), Nutzer, die den Server verlassen haben, werden

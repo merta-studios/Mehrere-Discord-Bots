@@ -4,7 +4,9 @@
  *
  * Getestet wird ohne echte Discord-Verbindung:
  * - „Geburtstag eintragen“-Button öffnet das Formular
- * - Formular-Absenden erzeugt die Bestätigungsnachricht als Container
+ * - Formular-Absenden erzeugt die Bestätigungsnachricht als Container –
+ *   ephemer, also nur für die eintragende Person sichtbar
+ * - Bestätigen/Abbrechen/Bearbeiten ersetzt die ephemere Bestätigung in-place
  * - Bestätigen mit gültigem Datum (≥ 7 Tage) trägt ein + aktualisiert die Liste
  * - Bestätigen mit zu nahem Datum wird durch die 7-Tage-Regel blockiert
  * - /setup ist nur für Admins erlaubt
@@ -124,6 +126,7 @@ function makeHarness({ lang = 'de' } = {}) {
   const replies = [];
   const follows = [];
   const modals = [];
+  const updates = [];
 
   function makeInteraction(overrides = {}) {
     const customId = overrides.customId || 'bday_add';
@@ -153,7 +156,9 @@ function makeHarness({ lang = 'de' } = {}) {
       showModal: async (m) => {
         modals.push(m);
       },
-      update: async () => {},
+      update: async (p) => {
+        updates.push(p);
+      },
       editReply: async () => {},
       message: { embeds: [], components: [], delete: async () => {} },
       fields: { getTextInputValue: () => '' },
@@ -165,7 +170,7 @@ function makeHarness({ lang = 'de' } = {}) {
     };
   }
 
-  return { ctx, channel, entry, msg, sent, replies, follows, modals, makeInteraction };
+  return { ctx, channel, entry, msg, sent, replies, follows, modals, updates, makeInteraction };
 }
 
 /** Datum, das in `days` Tagen liegt (nur Monat/Tag). */
@@ -183,7 +188,7 @@ test('„Geburtstag eintragen“-Button öffnet das Formular', async () => {
   assert.equal(h.modals[0].data.custom_id, 'bday_modal');
 });
 
-test('Formular-Absenden erzeugt genau eine Bestätigungsnachricht (Container)', async () => {
+test('Formular-Absenden erzeugt genau eine ephemere Bestätigungsnachricht (Container)', async () => {
   const h = makeHarness();
   const good = dateIn(20); // weit genug weg
   const interaction = h.makeInteraction({
@@ -197,7 +202,11 @@ test('Formular-Absenden erzeugt genau eine Bestätigungsnachricht (Container)', 
   assert.equal(h.sent.length, 0, 'Keine zweite Kanalnachricht wird erzeugt');
   assert.equal(h.replies.length, 1, 'Die Modal-Antwort ist die einzige Bestätigung');
   assert.equal(h.replies[0].ephemeral, undefined, 'Kein veraltetes ephemeral-Feld');
-  assert.equal(h.replies[0].flags, MessageFlags.IsComponentsV2);
+  assert.equal(
+    h.replies[0].flags,
+    MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+    'Bestätigung ist ephemer – nur für die eintragende Person sichtbar'
+  );
   assert.equal(h.replies[0].components.length, 1);
   assert.ok(h.ctx.pending.has('u1'), 'Pending-Eintrag gespeichert');
 });
@@ -310,6 +319,152 @@ test('Abbrechen löscht die Bestätigung ohne Eintrag', async () => {
 
   assert.equal(h.ctx.store.get('g1').birthdays.length, 0);
   assert.ok(!h.ctx.pending.has('u1'));
+});
+
+/** Mock einer ephemeren Bestätigungsnachricht; trackt Löschversuche. */
+function ephemeralConfirmationMessage(state) {
+  return {
+    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+    embeds: [],
+    components: [],
+    delete: async () => {
+      state.deleted = true;
+    },
+  };
+}
+
+test('Bestätigen ersetzt die ephemere Bestätigung in-place (kein Löschen, keine Folgenachricht)', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)) },
+    })
+  );
+
+  const state = { deleted: false };
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_confirm_yes',
+      message: ephemeralConfirmationMessage(state),
+    })
+  );
+
+  assert.equal(state.deleted, false, 'Ephemere Nachricht wird nicht gelöscht (wäre unmöglich)');
+  assert.equal(h.updates.length, 1, 'Erfolgsmeldung ersetzt die Bestätigung in-place');
+  assert.equal(h.follows.length, 0, 'Keine zusätzliche Folgenachricht nötig');
+  assert.equal(h.updates[0].flags, MessageFlags.IsComponentsV2);
+  assert.match(extractAllText(h.updates[0]), /wurde eingetragen/);
+
+  const entry = h.ctx.store.get('g1');
+  assert.equal(entry.birthdays.length, 1, 'Geburtstag ist eingetragen');
+  assert.ok(!h.ctx.pending.has('u1'), 'Pending aufgeräumt');
+});
+
+test('7-Tage-Regel ersetzt die ephemere Bestätigung in-place durch den Fehler', async () => {
+  const h = makeHarness();
+  const tooSoon = dateIn(2);
+
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: {
+        getTextInputValue: (id) => (id === 'day' ? String(tooSoon.day) : String(tooSoon.month)),
+      },
+    })
+  );
+
+  const state = { deleted: false };
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_confirm_yes',
+      message: ephemeralConfirmationMessage(state),
+    })
+  );
+
+  assert.equal(state.deleted, false);
+  assert.equal(h.updates.length, 1, 'Fehlermeldung ersetzt die Bestätigung in-place');
+  assert.match(extractAllText(h.updates[0]), /Zu früh zum Eintragen!/);
+  assert.equal(h.ctx.store.get('g1').birthdays.length, 0, 'Nichts eingetragen');
+});
+
+test('Abbrechen ersetzt die ephemere Bestätigung in-place durch den Abbruch-Hinweis', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)) },
+    })
+  );
+
+  const state = { deleted: false };
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_confirm_no',
+      message: ephemeralConfirmationMessage(state),
+    })
+  );
+
+  assert.equal(state.deleted, false);
+  assert.equal(h.updates.length, 1, 'Abbruch-Hinweis ersetzt die Bestätigung in-place');
+  assert.equal(h.follows.length, 0, 'Keine zusätzliche Folgenachricht nötig');
+  assert.match(extractAllText(h.updates[0]), /Abgebrochen!/);
+  assert.equal(h.ctx.store.get('g1').birthdays.length, 0);
+  assert.ok(!h.ctx.pending.has('u1'));
+});
+
+test('Erneutes Absenden nach „Bearbeiten“ ersetzt die ephemere Bestätigung (keine Zweit-Nachricht)', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+
+  // 1. Erste Bestätigung (ephemerer Reply)
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)) },
+    })
+  );
+  assert.equal(h.replies.length, 1);
+
+  // 2. „Bearbeiten“ auf der ephemeren Bestätigung → Formular erneut
+  const state = { deleted: false };
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_confirm_edit',
+      message: ephemeralConfirmationMessage(state),
+    })
+  );
+  assert.equal(h.modals.length, 1, 'Formular erneut geöffnet');
+  assert.equal(state.deleted, false, 'Ephemere Bestätigung bleibt bis zum Ersetzen bestehen');
+
+  // 3. Bearbeitetes Formular absenden (Modal stammt von der ephemeren Bestätigung)
+  const newer = dateIn(40);
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(newer.day) : String(newer.month)) },
+      message: ephemeralConfirmationMessage({ deleted: false }),
+    })
+  );
+
+  assert.equal(h.replies.length, 1, 'Keine zweite Bestätigungsnachricht');
+  assert.equal(h.updates.length, 1, 'Bestehende Bestätigung wurde in-place ersetzt');
+  const pending = h.ctx.pending.get('u1');
+  assert.equal(pending.day, newer.day, 'Neuer Tag übernommen');
+  assert.equal(pending.month, newer.month, 'Neuer Monat übernommen');
 });
 
 test('Gratulieren: erste Gratulation fügt Feld hinzu, Wiederholung wird blockiert', async () => {

@@ -6,6 +6,8 @@
  * Verwendet moderne Container & Layout-Komponenten (Components V2).
  */
 
+const { MessageFlags } = require('discord.js');
+
 const { t, formatBirthday, matchMonth, langFromDiscord } = require('./languages');
 const { parseDayInput, isValidDate, isWithinSevenDays } = require('./logic');
 const {
@@ -18,6 +20,17 @@ const {
 } = require('./embed-builder');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
 const { componentsV2Payload } = require('./message-payload');
+
+/**
+ * Trägt die Nachricht das Ephemeral-Flag? Robust gegenüber dem
+ * discord.js-Flags-Bitfield, einfachen Zahlen (Mocks) und fehlenden Flags.
+ */
+function isEphemeralMessage(message) {
+  const flags = message?.flags;
+  if (!flags) return false;
+  if (typeof flags === 'number') return (flags & MessageFlags.Ephemeral) !== 0;
+  return Boolean(flags.has?.(MessageFlags.Ephemeral));
+}
 
 // ---------------------------------------------------------------------------
 // Dispatch
@@ -93,18 +106,31 @@ async function handleButton(ctx, interaction) {
     const entry = ctx.store.get(interaction.guildId);
     const lang = entry?.lang || 'en';
     await interaction.showModal(buildEntryModal(lang, { day: pending.day, month: pending.month }));
-    return interaction.message.delete().catch(() => {});
+    // Öffentliche Alt-Bestätigungen (aus der Zeit vor der ephemeren Bestätigung)
+    // lassen sich nicht per update() ersetzen → direkt löschen. Ephemere
+    // Bestätigungen werden beim erneuten Absenden des Formulars per
+    // update() durch die neue Bestätigung ersetzt.
+    if (!isEphemeralMessage(interaction.message)) {
+      await interaction.message.delete().catch(() => {});
+    }
+    return null;
   }
 
   // Abbrechen
   if (id === 'bday_confirm_no') {
-    await interaction.deferUpdate();
     ctx.pending.delete(interaction.user.id);
-    await interaction.message.delete().catch(() => {});
     const entry = ctx.store.get(interaction.guildId);
     const lang = entry?.lang || langFromDiscord(interaction.locale);
+    const note = t('cancelNote', lang);
+    // Ephemere Bestätigung in-place ersetzen (ephemere Nachrichten kann der
+    // Bot nicht löschen) – öffentliche Alt-Bestätigung löschen + Hinweis.
+    if (isEphemeralMessage(interaction.message)) {
+      return interaction.update(componentsV2Payload([smallContainer(null, note)]));
+    }
+    await interaction.deferUpdate().catch(() => {});
+    await interaction.message.delete().catch(() => {});
     return interaction.followUp(
-      componentsV2Payload([smallContainer(null, t('cancelNote', lang))], { ephemeral: true })
+      componentsV2Payload([smallContainer(null, note)], { ephemeral: true })
     );
   }
 
@@ -117,39 +143,44 @@ async function handleButton(ctx, interaction) {
 }
 
 /**
- * Bestätigen: Bestätigungsnachricht löschen → 7-Tage-Regel prüfen →
- * ggf. alten Eintrag ersetzen → Liste sofort aktualisieren.
+ * Bestätigen: 7-Tage-Regel prüfen → ggf. alten Eintrag ersetzen → Liste
+ * sofort aktualisieren. Die Bestätigungsnachricht ist ephemer (nur für die
+ * eintragende Person sichtbar) und kann vom Bot nicht gelöscht werden –
+ * sie wird deshalb per update() in-place durch die Abschlussmeldung
+ * ersetzt. Öffentliche Alt-Bestätigungen (vor dem Ephemeral-Fix) werden
+ * wie bisher gelöscht und durch einen ephemeren Hinweis beantwortet.
  */
 async function confirmYes(ctx, interaction) {
   const pending = ctx.pending.get(interaction.user.id);
+
+  // Antwortweg je nach Ursprung der Bestätigungsnachricht wählen.
+  const finish = (containers) => {
+    if (isEphemeralMessage(interaction.message)) {
+      return interaction.update(componentsV2Payload(containers));
+    }
+    return (async () => {
+      await interaction.deferUpdate().catch(() => {});
+      await interaction.message.delete().catch(() => {});
+      return interaction.followUp(componentsV2Payload(containers, { ephemeral: true }));
+    })();
+  };
+
   if (!pending) {
-    await interaction.deferUpdate().catch(() => {});
-    await interaction.message.delete().catch(() => {});
-    return interaction.followUp(
-      componentsV2Payload([smallContainer(null, t('errGeneric', 'en'))], { ephemeral: true })
-    );
+    return finish([smallContainer(null, t('errGeneric', 'en'))]);
   }
 
-  await interaction.deferUpdate();
   ctx.pending.delete(interaction.user.id);
-  await interaction.message.delete().catch(() => {});
 
   const entry = ctx.store.get(interaction.guildId);
   if (!entry) {
-    return interaction.followUp(
-      componentsV2Payload([smallContainer(null, t('errNoList', 'en'))], { ephemeral: true })
-    );
+    return finish([smallContainer(null, t('errNoList', 'en'))]);
   }
 
   const lang = entry.lang;
 
   // 7-Tage-Regel (Spam-Schutz)
   if (isWithinSevenDays(pending.day, pending.month, lang)) {
-    return interaction.followUp(
-      componentsV2Payload([buildSevenDayErrorEmbed(lang, pending.day, pending.month)], {
-        ephemeral: true,
-      })
-    );
+    return finish([buildSevenDayErrorEmbed(lang, pending.day, pending.month)]);
   }
 
   // Alten Eintrag des Nutzers entfernen (keine Doppel-Einträge!) und
@@ -167,9 +198,7 @@ async function confirmYes(ctx, interaction) {
   let desc = t('birthdayAdded', lang, { date });
   if (replaced) desc += `\n\n${t('entryReplaced', lang)}`;
 
-  return interaction.followUp(
-    componentsV2Payload([smallContainer(null, desc)], { ephemeral: true })
-  );
+  return finish([smallContainer(null, desc)]);
 }
 
 /**
@@ -271,12 +300,23 @@ async function entryModalSubmit(ctx, interaction) {
     lang,
   });
 
-  // Reply mit dem Bestätigungs-Container (Buttons direkt im Container)
-  return interaction.reply(
-    componentsV2Payload([
-      buildConfirmationEmbed({ day, month: mm.month, lang, input: monthRaw.trim(), fuzzy: mm.fuzzy }),
-    ])
-  );
+  // Bestätigungs-Container (Buttons direkt im Container) – EPHEMER, damit
+  // nur die Person ihn sieht, die gerade ihren Geburtstag einträgt.
+  const confirmation = buildConfirmationEmbed({
+    day,
+    month: mm.month,
+    lang,
+    input: monthRaw.trim(),
+    fuzzy: mm.fuzzy,
+  });
+
+  // Wurde das Formular über „Bearbeiten“ einer ephemeren Bestätigung
+  // geöffnet, wird diese in-place ersetzt – sonst gäbe es nach jeder
+  // Bearbeitung eine weitere Bestätigung im Verlauf.
+  if (isEphemeralMessage(interaction.message)) {
+    return interaction.update(componentsV2Payload([confirmation]));
+  }
+  return interaction.reply(componentsV2Payload([confirmation], { ephemeral: true }));
 }
 
 /** Admin: Geburtstag für einen anderen Nutzer setzen (ohne 7-Tage-Regel). */
