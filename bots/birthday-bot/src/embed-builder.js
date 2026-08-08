@@ -152,9 +152,16 @@ function parseListEmbed(msg) {
   const lang = marker ? marker[1].toLowerCase() : 'en';
 
   const birthdays = [];
+  const seen = new Set();
   for (const line of text.split('\n')) {
     const m = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*<@!?(\d+)>$/);
-    if (m) birthdays.push({ day: Number(m[1]), month: Number(m[2]), userId: m[3] });
+    if (m) {
+      const key = `${m[3]}:${m[2]}:${m[1]}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        birthdays.push({ day: Number(m[1]), month: Number(m[2]), userId: m[3] });
+      }
+    }
   }
 
   return { lang, birthdays };

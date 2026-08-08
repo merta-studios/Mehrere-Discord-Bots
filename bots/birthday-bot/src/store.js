@@ -127,6 +127,14 @@ function createStore({ client, logger }) {
     if (typeof apply === 'function') birthdays = apply(birthdays);
 
     birthdays = await filterMembers(guild, birthdays);
+  // Deduplizieren nach userId + Tag + Monat
+  const seen = new Set();
+  birthdays = birthdays.filter((b) => {
+    const key = `${b.userId}:${b.month}:${b.day}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
     const container = buildListEmbed({ birthdays, lang });
 
