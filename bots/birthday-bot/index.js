@@ -57,7 +57,12 @@ module.exports = {
       token,
       logger,
       env,
-      ownerId: env('BIRTHDAY_BOT_OWNER_ID', ''),
+      // Render-Variablen werden gelegentlich mit Leerzeichen oder als Discord-
+      // Mention eingefügt. Für den Berechtigungsvergleich brauchen wir stets
+      // die reine Snowflake-ID.
+      ownerId: String(env('BIRTHDAY_BOT_OWNER_ID', ''))
+        .trim()
+        .replace(/^<@!?(\d+)>$/, '$1'),
       devGuildId: env('BIRTHDAY_BOT_GUILD_ID', ''),
       rest: new REST({ version: '10' }).setToken(token),
       store: createStore({ client, logger }),

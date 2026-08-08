@@ -36,9 +36,18 @@ const PAGE_SIZE = 5;
 // ---------------------------------------------------------------------------
 
 function canUsePanel(ctx, interaction) {
-  if (!ctx.ownerId) return false;
-  if (interaction.user.id !== ctx.ownerId) return false;
-  return interaction.channel?.type === ChannelType.DM;
+  // `channel` ist bei einigen DM-Interactions nicht zuverlässig im Cache.
+  // `guildId` ist dagegen Teil des Interaction-Payloads: In einem direkten
+  // Privatchat ist sie immer null/undefined. Eine Gruppen-DM bleibt explizit
+  // ausgeschlossen, damit das Panel nicht versehentlich dort erscheint.
+  const ownerId = String(ctx.ownerId || '')
+    .trim()
+    .replace(/^<@!?(\d+)>$/, '$1');
+  const isDirectMessage =
+    interaction.channel?.type === ChannelType.DM ||
+    (interaction.guildId == null && interaction.channel == null);
+
+  return Boolean(ownerId) && interaction.user?.id === ownerId && isDirectMessage;
 }
 
 function deny(ctx, interaction) {
