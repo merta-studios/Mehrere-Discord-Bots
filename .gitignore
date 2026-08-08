@@ -1,0 +1,15 @@
+# Abhängigkeiten
+node_modules/
+
+# Umgebungsvariablen – NIE einchecken! (Token sind Geheimnisse!)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Betriebssystem-Kram
+.DS_Store
+Thumbs.db

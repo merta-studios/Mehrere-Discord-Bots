@@ -1,0 +1,33 @@
+# ============================================================
+#  Render Blueprint – https://render.com
+#  Erstelle das Projekt einmalig über "New > Blueprint" und
+#  verlinke dieses GitHub-Repository. Render liest diese Datei
+#  automatisch und legt den Web-Service an.
+#
+#  WICHTIG: Alle Variablen mit `sync: false` musst du nach dem
+#  Deployment einmalig im Render-Dashboard ausfüllen
+#  (Service > Environment). Sie werden NIE aus GitHub gelesen!
+# ============================================================
+
+services:
+  - type: web
+    name: multi-discord-bot-hoster
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # --- Geburtstags-Bot ---
+      - key: BIRTHDAY_BOT_TOKEN
+        sync: false
+      - key: BIRTHDAY_BOT_OWNER_ID
+        sync: false
+      - key: BIRTHDAY_BOT_GUILD_ID
+        sync: false
+      # --- XP-Level-Bot (Platzhalter) ---
+      - key: XP_BOT_TOKEN
+        sync: false
