@@ -8,7 +8,7 @@ Token (als Umgebungsvariable) und läuft unabhängig – aber alle in einem einz
 Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 
 > ⏰ **UptimeRobot**: Render-Free-Server schlafen nach ~15 Minuten Inaktivität ein.
-> Deshalb pinguft UptimeRobot den Health-Endpunkt regelmäßig – so bleiben ALLE Bots wach.
+> Deshalb pingt UptimeRobot den Health-Endpunkt regelmäßig – so bleiben ALLE Bots wach.
 
 ---
 
@@ -16,7 +16,7 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 
 | Bereich | Beschreibung |
 |---|---|
-| 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – er liest seine eigene Embed-Liste selbst wieder aus. 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche, Owner-Admin-Panel. |
+| 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons im Container). 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche, Owner-Admin-Panel im DM. |
 | ⚒️ **XP Level Bot** | **Platzhalter** – Ordner + Token-Verwaltung stehen, das XP-System kommt in einem späteren Update. |
 | 🛠️ **Multi-Bot-Hoster** | Loader, der alle Bots im `bots/`-Ordner automatisch startet (nur die mit gesetztem Token), plus Health-Server für UptimeRobot. |
 
@@ -151,21 +151,23 @@ online sind (siehe `src/health.js`).
 
 | Command | Was er kann |
 |---|---|
-| `/setup [language] [channel]` | Richtet die Geburtstagsliste ein. Ohne Channel wird der aktuelle Kanal genommen. **10 Sprachen** zur Auswahl. Eine bereits existierende Liste wird automatisch gefunden: Einträge bleiben erhalten, nur Sprache + Kanal ändern sich. |
-| „🎂 Geburtstag eintragen“ (Button) | Öffnet ein Formular: **Tag** (nur Zahlen, `4` oder `04`) + **Monat** (Zahl, Name oder sogar Tippfehler wie „Sebtemger“ → Fuzzy-Erkennung in allen 10 Sprachen). Danach Bestätigungs-Embed mit 3 Buttons: ✅ Bestätigen / ✏️ Bearbeiten (Formular vorbefüllt) / ❌ Abbrechen. |
-| `/admin_set_bot_profile [image]` | Ändert das **serverspezifische** Profilbild des Bots. Nur 3 Optionen: Standard-Profilbild, Server-Profilbild, Server-Owner-Profilbild – **kein eigener Upload!** |
-| `/admin_set_birthday [user]` | Nur mit **Administrator**-Berechtigung. Setzt den Geburtstag eines anderen Nutzers (gleiches Formular, ohne 7-Tage-Regel). |
-| `/help` | Übersicht aller Befehle. |
-| `/adminpanel` | Owner-Panel – **nur im Privatchat mit dem Bot-Owner** (Deine ID aus `BIRTHDAY_BOT_OWNER_ID`). Serverliste mit Seiten (◀ ▶), sortiert: erst Server, auf denen du **🔴** nicht bist, dann nach Mitgliederzahl. Server-Detail mit Owner-Mention, Bild, Mitgliederzahl, Geburtstagsliste-Status. Buttons: **Einladung** (1h gültig, 1× nutzbar) und **Verlassen** (mit Sicherheitsabfrage). Bei Server-Beitritt bekommst du automatisch eine Info-Nachricht. |
+| `/setup [language] [channel]` | **Nur für Admins:** Richtet die Geburtstagsliste ein. Ohne Channel wird der aktuelle Kanal genommen. **10 Sprachen** zur Auswahl. Eine bereits existierende Liste wird automatisch gefunden: Einträge bleiben erhalten, nur Sprache + Kanal ändern sich. |
+| „🎂 Geburtstag eintragen“ (Button) | Öffnet ein Formular: **Tag** (nur Zahlen, `4` oder `04`) + **Monat** (Zahl, Name oder sogar Tippfehler wie „Sebtemger“ → Fuzzy-Erkennung in allen 10 Sprachen). Danach Bestätigungs-Container mit 3 Buttons: ✅ Bestätigen / ✏️ Bearbeiten (Formular vorbefüllt) / ❌ Abbrechen. |
+| `/admin_set_bot_profile [image]` | **Nur für Admins:** Ändert das **serverspezifische** Profilbild des Bots (Standard / Server-Icon / Server-Owner-Icon) sofort via Discord-API. |
+| `/admin_set_birthday [user]` | **Nur für Admins:** Setzt den Geburtstag eines anderen Nutzers (gleiches Formular, ohne 7-Tage-Regel). |
+| `/help` | Übersicht aller Befehle für normale Nutzer und Admins auf dem Server. |
+| `/adminpanel` | Owner-Panel – **nur im Privatchat mit dem Bot-Owner** (Deine ID aus `BIRTHDAY_BOT_OWNER_ID`). Auf Servern unsichtbar und nicht in `/help`. Serverliste mit Seiten (◀ ▶), sortiert: erst Server, auf denen du **🔴** nicht bist, dann nach Mitgliederzahl. Server-Detail mit Owner-Mention, Bild, Mitgliederzahl, Geburtstagsliste-Status. Buttons: **Einladung** (1h gültig, 1× nutzbar) und **Verlassen** (mit Sicherheitsabfrage). Bei Server-Beitritt bekommst du automatisch eine Info-Nachricht. |
 
-### Wie funktioniert das ohne Datenbank? 🤯
+### Layout & Components V2 (ohne Datenbank) 🤯
 
-Die Geburtstagsliste **steckt komplett im Embed**:
+Die Geburtstagsliste nutzt **Discord Layout Components (Components V2)**:
 
+- **Kein farbiger Rand:** Neutrales, aufgeräumtes Design ohne störenden Seitenstreifen.
+- **Titel oben beim Datum:** Der Titel `🎂 Geburtstage` steht direkt oben beim Tagesdatum.
+- **Keine störenden Footer:** Keine Zeitzonen-/Sprach-Fußzeilen oder Zeitstempel mehr am Ende.
+- **Trennlinien & Buttons direkt im Container:** Trennlinien (Dividers) und Buttons (`bday_add` etc.) sind direkt in den Container integriert.
 - Es werden nur Monate mit Einträgen angezeigt; jede Zeile ist `04.09 | @Nutzer`.
-- Im Footer sitzt ein unsichtbarer Marker (`bday::v1::<sprache>`).
-- Der Bot findet seine Liste selbst wieder (Channel-Scan nach dem Marker),
-  liest alle Einträge neu aus dem Embed und aktualisiert sich selbst.
+- Der Bot findet seine Liste selbst wieder, liest alle Einträge neu aus und aktualisiert sich selbst.
 
 **Stündlich** wird die Liste neu gebaut:
 - aktueller Monat zuerst, dann bis Jahresende, dann Januar bis davor (rotierend)
@@ -173,12 +175,12 @@ Die Geburtstagsliste **steckt komplett im Embed**:
 - das aktuelle Datum (in der Zeitzone der Sprache) steht oben
 
 **Jeden Tag um 0 Uhr** (in der Zeitzone der Sprache) wird geprüft, wer Geburtstag
-hat. Jedes Geburtstagskind bekommt ein kurzes, hübsches Gruß-Embed mit Profilbild
-und einem **🎉 Gratulieren**-Button. Glückwünsche + Anzahl werden ins Embed
-geschrieben (auch das ohne DB!) – doppelt gratulieren geht nicht.
+hat. Jedes Geburtstagskind bekommt einen hübschen Gruß-Container mit
+einem **🎉 Gratulieren**-Button. Glückwünsche + Anzahl werden direkt
+in den Container geschrieben (auch das ohne DB!) – doppelt gratulieren geht nicht.
 
 **Aufräumen:** Unter der Liste sind maximal **3 Nachrichten** erlaubt (egal ob von
-Nutzern oder vom Bot). Ältere werden automatisch gelöscht, damit das Embed immer
+Nutzern oder vom Bot). Ältere werden automatisch gelöscht, damit der Container immer
 sofort sichtbar ist.
 
 ### Die 10 Sprachen & Zeitzonen
@@ -191,21 +193,8 @@ Japanisch → `Asia/Tokyo`), damit „heute“ und die 0-Uhr-Prüfung stimmen. D
 sie pro Sprache überschreiben: `BIRTHDAY_BOT_TZ_EN=Europe/London` usw.
 
 **Alle Texte stehen in EINER Datei**: `bots/birthday-bot/src/languages.js`.
-Jeder Text-Key enthält direkt untereinander alle 10 Sprachen – du musst also nie
-10 Dateien durchsuchen, um einen Satz zu ändern. Die Owner-Panel-Texte (`ap…`)
+Jeder Text-Key enthält direkt untereinander alle 10 Sprachen. Die Owner-Panel-Texte (`ap…`)
 sind bewusst nur auf Deutsch.
-
-### Wichtige Hinweise zum Birthday Bot
-
-- **Löscht jemand das Listen-Embed**, erstellt der Bot es beim nächsten Refresh
-  automatisch neu (solange er läuft). Wird die Liste gelöscht, **während der Bot
-  offline ist**, bitte einmal `/setup` neu ausführen (Einträge sind dann weg –
-  ohne DB gibt es kein Backup).
-- Die **7-Tage-Regel**: Ein Geburtstag, dessen nächstes Vorkommen in weniger als
-  7 Tagen liegt, kann nicht eingetragen werden (Spam-Schutz). Nach deinem
-  Geburtstag (ab dem Folgetag) klappt es wieder.
-- `/adminpanel` ist global registriert (Discord kann Befehle nicht nur für DMs
-  registrieren), funktioniert aber **nur** im DM des Owners.
 
 ---
 
@@ -236,26 +225,12 @@ module.exports = {
 
 ## 🧪 Tests
 
-Die Kernlogik (Fuzzy-Monatserkennung, 7-Tage-Regel, Embed-Roundtrip) ist ohne
+Die Kernlogik (Fuzzy-Monatserkennung, 7-Tage-Regel, Container-Roundtrip) ist ohne
 Discord-Verbindung testbar:
 
 ```bash
 npm test
 ```
-
----
-
-## ❓ FAQ / Troubleshooting
-
-| Problem | Lösung |
-|---|---|
-| „Kein Token gefunden“ im Log | Die Env-Variable `BIRTHDAY_BOT_TOKEN` ist leer – auf Render unter **Environment** nachtragen. |
-| Bots gehen nach 15 Min offline | UptimeRobot-Monitor auf `…/healthz` anlegen (siehe oben). |
-| Commands erscheinen nicht | Globale Registration dauert bis zu 1h. Für Tests `BIRTHDAY_BOT_GUILD_ID` setzen. |
-| `/adminpanel` „funktioniert nur im Privatchat“ | Die Nachricht muss im **DM mit dem Bot** geschrieben werden und `BIRTHDAY_BOT_OWNER_ID` muss deine ID sein. |
-| `Missing Access` / Mitglieder werden nicht geladen | `SERVER MEMBERS INTENT` im Developer Portal aktivieren und auf Render neu deployen. |
-| Profilbild ändern schlägt fehl | Der Bot braucht in dem Server die Berechtigung, sein Profil zu ändern (Standardrolle reicht meist) – Fehlermeldung gibt Details. |
-| Embed-Liste ist weg | Siehe „Wichtige Hinweise“ – ggf. `/setup` neu ausführen. |
 
 ---
 

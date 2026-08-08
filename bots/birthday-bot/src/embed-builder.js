@@ -1,11 +1,22 @@
 /**
- * Baut alle Embeds & Komponenten des Geburtstags-Bots und liest
- * die Geburtstagsliste wieder aus dem Embed zurück (das ist die
- * „Datenbank“ – die Liste steckt komplett im Embed selbst!).
+ * Baut alle Container, Layout-Komponenten (Components V2) und Modals des
+ * Geburtstags-Bots und liest die Geburtstagsliste wieder aus den
+ * Komponenten zurück (das ist die „Datenbank“ – die Liste steckt
+ * komplett in den Komponenten selbst!).
+ *
+ * Alle Embeds wurden auf moderne Container / Layout Components umgestellt:
+ * - Kein farbiger Rand an der Seite
+ * - Trennlinien (Separators / Dividers) direkt im Container
+ * - Buttons und ActionRows direkt im Container integriert
+ * - Titel „🎂 Geburtstage“ oben direkt beim Datumstext
+ * - Kein störender Footer / Timestamp am Ende der Liste
  */
 
 const {
-  EmbedBuilder,
+  ContainerBuilder,
+  SectionBuilder,
+  SeparatorBuilder,
+  TextDisplayBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -18,7 +29,6 @@ const { LANGS, t, tzOf, formatBirthday, formatToday } = require('./languages');
 const { monthOrder, pad, tzParts } = require('./logic');
 
 const COLORS = {
-  // Embeds intentionally use Discord's neutral gray default (no color accent).
   list: null, confirm: null, success: null, error: null, congrats: null, help: null, panel: null,
 };
 
@@ -26,53 +36,101 @@ const COLORS = {
 const LIST_MARKER = 'bday::v1::';
 
 // ---------------------------------------------------------------------------
-// Geburtstagsliste
+// Text-Extraktion (liest Komponenten, Embeds und Strings aus)
+// ---------------------------------------------------------------------------
+
+function extractAllText(obj) {
+  let out = '';
+  if (!obj) return out;
+  if (typeof obj === 'string') return obj + '\n';
+  if (Array.isArray(obj)) {
+    for (const item of obj) out += extractAllText(item);
+    return out;
+  }
+  if (typeof obj === 'object') {
+    if (obj.content) out += obj.content + '\n';
+    if (obj.data?.content) out += obj.data.content + '\n';
+    if (obj.title) out += obj.title + '\n';
+    if (obj.description) out += obj.description + '\n';
+    if (obj.footer?.text) out += obj.footer.text + '\n';
+    if (obj.fields && Array.isArray(obj.fields)) {
+      for (const f of obj.fields) {
+        out += (f.name || '') + '\n' + (f.value || '') + '\n';
+      }
+    }
+    if (obj.components) out += extractAllText(obj.components);
+    if (obj.embeds) out += extractAllText(obj.embeds);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Geburtstagsliste (Container / Components V2)
 // ---------------------------------------------------------------------------
 
 /**
- * Baut das schöne Listen-Embed:
- * - Aktuelles Datum oben
- * - Monate als Inline-Felder (PC: 3 Spalten, Handy: untereinander)
- * - Aktueller Monat zuerst, dann Rest des Jahres, dann Januar bis davor
- * - Marker im Footer, damit der Bot die Liste später selbst wiederfindet
+ * Baut den modernen Listen-Container:
+ * - Titel „🎂 Geburtstage“ oben beim Datumstext
+ * - Trennlinie (Divider) zwischen Header und Monaten
+ * - Monate als formatierte Abschnitte
+ * - Trennlinie vor dem Button
+ * - „Geburtstag eintragen“-Button direkt im Container
+ * - Kein farbiger Rand, kein sichtbarer Footer, kein störender Timestamp
+ * - Unsichtbarer Marker für die Wiedererkennung
  */
-function buildListEmbed({ birthdays, lang }) {
+function buildListEmbed({ birthdays = [], lang = 'de' }) {
   const tz = tzOf(lang);
-  const now = new Date();
   const cur = tzParts(tz);
   const months = LANGS[lang].months;
 
-  // Only show months that actually contain birthdays; an empty list gets a
-  // concise empty state instead of twelve placeholder columns.
-  const fields = monthOrder(cur.month).flatMap((mo) => {
-    const lines = birthdays
-      .filter((b) => b.month === mo)
-      .sort((a, b) => a.day - b.day)
-      .map((b) => `${pad(b.day)}.${pad(b.month)} | <@${b.userId}>`);
-    return lines.length ? [{ name: months[mo - 1], value: lines.join('\n'), inline: true }] : [];
-  });
+  const container = new ContainerBuilder();
 
-  if (!birthdays.length) {
-    fields.push({ name: '🎈', value: t('listEmpty', lang), inline: false });
+  // Header: Titel + Datumstext zusammen oben, plus unsichtbarer Sprach-Marker
+  const headerLines = [
+    `# ${t('listTitle', lang)}`,
+    `## 📅 ${formatToday(lang)}`,
+    t('listTagline', lang),
+    `\u200B${LIST_MARKER}${lang}\u200B`,
+  ];
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(headerLines.join('\n'))
+  );
+
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+
+  // Geburtstage nach Monaten sortiert (aktueller Monat zuerst)
+  const activeMonths = monthOrder(cur.month).filter((mo) =>
+    birthdays.some((b) => b.month === mo)
+  );
+
+  if (!activeMonths.length) {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`🎈 ${t('listEmpty', lang)}`)
+    );
+  } else {
+    for (let i = 0; i < activeMonths.length; i++) {
+      const mo = activeMonths[i];
+      const lines = birthdays
+        .filter((b) => b.month === mo)
+        .sort((a, b) => a.day - b.day)
+        .map((b) => `${pad(b.day)}.${pad(b.month)} | <@${b.userId}>`);
+
+      const monthText = `### ${months[mo - 1]}\n${lines.join('\n')}`;
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(monthText));
+
+      if (i < activeMonths.length - 1) {
+        container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      }
+    }
   }
 
-  const embed = new EmbedBuilder()
-    .setTitle(t('listTitle', lang))
-    .setDescription(
-      [
-        `## 📅 ${formatToday(lang)}`,
-        t('listTagline', lang),
-        '',
-      ].join('\n')
-    )
-    .addFields(fields)
-    .setFooter({ text: `${LANGS[lang].flag} ${LANGS[lang].name} · 🕒 ${tz} · ${LIST_MARKER}${lang}` })
-    .setTimestamp(now);
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(listActionRow(lang));
 
-  return embed;
+  return container;
 }
 
-/** Der „Geburtstag eintragen“-Button unter der Liste. */
+/** Der „Geburtstag eintragen“-Button unter/in der Liste. */
 function listActionRow(lang) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -83,23 +141,20 @@ function listActionRow(lang) {
 }
 
 /**
- * Liest Sprache + Geburtstage aus einem Listen-Embed zurück.
+ * Liest Sprache + Geburtstage aus einer Listen-Nachricht (Container oder Embed) zurück.
  * Rückgabe: { lang, birthdays: [{userId, day, month}] } oder null.
  */
 function parseListEmbed(msg) {
-  const embed = msg.embeds?.[0];
-  if (!embed) return null;
+  if (!msg) return null;
+  const text = extractAllText(msg);
 
-  const footer = embed.footer?.text || '';
-  const marker = footer.match(/bday::v1::([a-z]{2,5})/i);
+  const marker = text.match(/bday::v1::([a-z]{2,5})/i);
   const lang = marker ? marker[1].toLowerCase() : 'en';
 
   const birthdays = [];
-  for (const field of embed.fields || []) {
-    for (const line of String(field.value).split('\n')) {
-      const m = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*<@!?(\d+)>$/);
-      if (m) birthdays.push({ day: Number(m[1]), month: Number(m[2]), userId: m[3] });
-    }
+  for (const line of text.split('\n')) {
+    const m = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*<@!?(\d+)>$/);
+    if (m) birthdays.push({ day: Number(m[1]), month: Number(m[2]), userId: m[3] });
   }
 
   return { lang, birthdays };
@@ -148,14 +203,22 @@ function buildAdminModal(lang, targetUser) {
   return modal;
 }
 
-/** Bestätigungs-Embed unter dem Button + die 3 Buttons darunter. */
+/** Bestätigungs-Container mit Text, Trennlinie und den 3 Buttons im Container. */
 function buildConfirmationEmbed({ day, month, lang, input, fuzzy }) {
   const date = formatBirthday(day, month, lang);
   let desc = t('confirmBody', lang, { date });
   if (fuzzy && input) {
     desc += `\n\n${t('fuzzyNote', lang, { input, month: LANGS[lang].months[month - 1] })}`;
   }
-  return new EmbedBuilder().setTitle(t('confirmTitle', lang)).setDescription(desc);
+
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`# ${t('confirmTitle', lang)}\n\n${desc}`)
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addActionRowComponents(confirmationRow(lang));
+
+  return container;
 }
 
 function confirmationRow(lang) {
@@ -166,12 +229,14 @@ function confirmationRow(lang) {
   );
 }
 
-/** Fehler-Embed für die 7-Tage-Regel. */
+/** Fehler-Container für die 7-Tage-Regel. */
 function buildSevenDayErrorEmbed(lang, day, month) {
   const date = formatBirthday(day, month, lang);
-  return new EmbedBuilder()
-    .setTitle(t('errSevenDaysTitle', lang))
-    .setDescription(t('errSevenDaysBody', lang, { date }));
+  return new ContainerBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      `# ${t('errSevenDaysTitle', lang)}\n\n${t('errSevenDaysBody', lang, { date })}`
+    )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -179,41 +244,59 @@ function buildSevenDayErrorEmbed(lang, day, month) {
 // ---------------------------------------------------------------------------
 
 /**
- * Kurzes, hübsches Geburtstags-Embed mit Profilbild, Mention und
- * „Gratulieren“-Button. Der Marker im Footer verhindert Doppel-Sendungen.
+ * Geburtstags-Container mit Titel, Erwähnung, Glückwünschen, Trennlinie
+ * und „Gratulieren“-Button direkt im Container.
  */
-function buildCongratsEmbed({ member, lang, dateKey }) {
-  const embed = new EmbedBuilder()
-    .setTitle(t('bdayCongratsTitle', lang))
-    .setDescription(t('bdayCongratsBody', lang, { user: `<@${member.id}>` }))
-    .setThumbnail(member.displayAvatarURL({ size: 256, extension: 'png' }))
-    .setFooter({ text: `bday-congrats:${dateKey}:${member.id}` })
-    .setTimestamp();
+function buildCongratsEmbed({ member, lang, dateKey, wishes = [] }) {
+  const container = new ContainerBuilder();
 
+  const header = `# ${t('bdayCongratsTitle', lang)}\n\n${t('bdayCongratsBody', lang, { user: `<@${member.id}>` })}\n\u200Bbday-congrats:${dateKey}:${member.id}\u200B`;
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(header));
+
+  if (wishes.length > 0) {
+    const maxShown = 12;
+    let wishesText = `### ${t('congratsField', lang, { count: wishes.length })}\n`;
+    wishesText += wishes.slice(0, maxShown).map((u) => `<@${u}>`).join('\n');
+    if (wishes.length > maxShown) {
+      wishesText += `\n${t('congratsMore', lang, { count: wishes.length - maxShown })}`;
+    }
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(wishesText));
+  }
+
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`bday_congrats_${member.id}_${dateKey}`)
       .setStyle(ButtonStyle.Success)
       .setLabel(t('btnCongratulate', lang))
   );
+  container.addActionRowComponents(row);
 
-  return { embed, row };
+  return { container, embed: container, row };
 }
 
 // ---------------------------------------------------------------------------
-// Kleinere Helfer
+// Kleinere Helfer (Container ohne Farbrand)
 // ---------------------------------------------------------------------------
 
-function smallEmbed(color, title, desc) {
-  const e = new EmbedBuilder();
-  if (title) e.setTitle(title);
-  if (desc) e.setDescription(desc);
-  return e;
+function smallContainer(title, desc) {
+  const container = new ContainerBuilder();
+  let text = '';
+  if (title) text += `# ${title}\n\n`;
+  if (desc) text += desc;
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text.trim() || '…'));
+  return container;
+}
+
+function smallEmbed(_color, title, desc) {
+  return smallContainer(title, desc);
 }
 
 module.exports = {
   COLORS,
   LIST_MARKER,
+  extractAllText,
   buildListEmbed,
   listActionRow,
   parseListEmbed,
@@ -223,5 +306,6 @@ module.exports = {
   confirmationRow,
   buildSevenDayErrorEmbed,
   buildCongratsEmbed,
+  smallContainer,
   smallEmbed,
 };

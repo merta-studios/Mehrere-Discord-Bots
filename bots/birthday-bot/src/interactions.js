@@ -2,19 +2,19 @@
  * Alle Interaktionen, die keine Slash-Commands sind:
  * Buttons (Eintragen, Bestätigen, Bearbeiten, Abbrechen, Gratulieren),
  * Modals (Formulare) und Select-Menüs (Admin-Panel).
+ *
+ * Verwendet moderne Container & Layout-Komponenten (Components V2).
  */
-
-const { EmbedBuilder } = require('discord.js');
 
 const { t, formatBirthday, matchMonth, langFromDiscord } = require('./languages');
 const { parseDayInput, isValidDate, isWithinSevenDays } = require('./logic');
 const {
+  extractAllText,
   buildEntryModal,
   buildConfirmationEmbed,
-  confirmationRow,
   buildSevenDayErrorEmbed,
-  smallEmbed,
-  COLORS,
+  buildCongratsEmbed,
+  smallContainer,
 } = require('./embed-builder');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
 
@@ -44,7 +44,7 @@ async function handleInteraction(ctx, interaction) {
     ctx.logger.error('[birthday-bot] Interaction-Fehler:', err);
     const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
     const payload = {
-      embeds: [smallEmbed(COLORS.error, null, t('errGeneric', lang))],
+      components: [smallContainer(null, t('errGeneric', lang))],
       ephemeral: true,
     };
     try {
@@ -68,7 +68,7 @@ async function handleButton(ctx, interaction) {
     const entry = ctx.store.get(interaction.guildId);
     if (!entry) {
       return interaction.reply({
-        embeds: [smallEmbed(COLORS.error, null, t('errNoList', 'en'))],
+        components: [smallContainer(null, t('errNoList', 'en'))],
         ephemeral: true,
       });
     }
@@ -85,7 +85,7 @@ async function handleButton(ctx, interaction) {
     const pending = ctx.pending.get(interaction.user.id);
     if (!pending) {
       return interaction.reply({
-        embeds: [smallEmbed(COLORS.error, null, t('errGeneric', 'en'))],
+        components: [smallContainer(null, t('errGeneric', 'en'))],
         ephemeral: true,
       });
     }
@@ -103,7 +103,7 @@ async function handleButton(ctx, interaction) {
     const entry = ctx.store.get(interaction.guildId);
     const lang = entry?.lang || langFromDiscord(interaction.locale);
     return interaction.followUp({
-      embeds: [smallEmbed(COLORS.confirm, null, t('cancelNote', lang))],
+      components: [smallContainer(null, t('cancelNote', lang))],
       ephemeral: true,
     });
   }
@@ -126,7 +126,7 @@ async function confirmYes(ctx, interaction) {
     await interaction.deferUpdate().catch(() => {});
     await interaction.message.delete().catch(() => {});
     return interaction.followUp({
-      embeds: [smallEmbed(COLORS.error, null, t('errGeneric', 'en'))],
+      components: [smallContainer(null, t('errGeneric', 'en'))],
       ephemeral: true,
     });
   }
@@ -138,7 +138,7 @@ async function confirmYes(ctx, interaction) {
   const entry = ctx.store.get(interaction.guildId);
   if (!entry) {
     return interaction.followUp({
-      embeds: [smallEmbed(COLORS.error, null, t('errNoList', 'en'))],
+      components: [smallContainer(null, t('errNoList', 'en'))],
       ephemeral: true,
     });
   }
@@ -148,7 +148,7 @@ async function confirmYes(ctx, interaction) {
   // 7-Tage-Regel (Spam-Schutz)
   if (isWithinSevenDays(pending.day, pending.month, lang)) {
     return interaction.followUp({
-      embeds: [buildSevenDayErrorEmbed(lang, pending.day, pending.month)],
+      components: [buildSevenDayErrorEmbed(lang, pending.day, pending.month)],
       ephemeral: true,
     });
   }
@@ -169,14 +169,14 @@ async function confirmYes(ctx, interaction) {
   if (replaced) desc += `\n\n${t('entryReplaced', lang)}`;
 
   return interaction.followUp({
-    embeds: [smallEmbed(COLORS.success, null, desc)],
+    components: [smallContainer(null, desc)],
     ephemeral: true,
   });
 }
 
 /**
  * Gratulieren: Wer schon gratuliert hat, kann nicht doppelt.
- * Die Glückwünsche + Anzahl stecken im Embed selbst (keine DB).
+ * Die Glückwünsche + Anzahl stecken im Container selbst (keine DB).
  */
 async function congrats(ctx, interaction, id) {
   const parts = id.split('_'); // bday_congrats_<userId>_<dateKey>
@@ -187,37 +187,34 @@ async function congrats(ctx, interaction, id) {
   const lang = entry?.lang || langFromDiscord(interaction.locale);
   const clickerId = interaction.user.id;
 
-  const oldEmbed = interaction.message.embeds?.[0];
-  if (!oldEmbed) return null;
+  const rawText = extractAllText(interaction.message);
 
-  // Bestehende Glückwünsche aus dem Embed lesen
-  const wishesField = oldEmbed.fields?.find((f) => f.value.includes('<@'));
-  const wishes = wishesField ? [...wishesField.value.matchAll(/<@!?([^>]+)>/g)].map((m) => m[1]) : [];
+  // Glückwünsche aus dem Text / den Feldern lesen (alle Mentions außer Geburtstagskind)
+  const allMentions = [...rawText.matchAll(/<@!?([^>]+)>/g)].map((m) => m[1]);
+  const wishes = [...new Set(allMentions.filter((uid) => uid !== birthdayUserId))];
 
   if (wishes.includes(clickerId)) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('alreadyWished', lang, { user: `<@${birthdayUserId}>` }))],
+      components: [
+        smallContainer(null, t('alreadyWished', lang, { user: `<@${birthdayUserId}>` })),
+      ],
       ephemeral: true,
     });
   }
 
   wishes.push(clickerId);
 
-  const maxShown = 12;
-  const shown = wishes.slice(0, maxShown).map((u) => `<@${u}>`).join('\n');
-  let value = shown;
-  if (wishes.length > maxShown) {
-    value += `\n${t('congratsMore', lang, { count: wishes.length - maxShown })}`;
-  }
+  const { container } = buildCongratsEmbed({
+    member: { id: birthdayUserId },
+    lang,
+    dateKey,
+    wishes,
+  });
 
-  const updatedEmbed = EmbedBuilder.from(oldEmbed).setFields([
-    { name: t('congratsField', lang, { count: wishes.length }), value, inline: false },
-  ]);
-
-  await interaction.update({ embeds: [updatedEmbed] });
+  await interaction.update({ components: [container] });
 
   return interaction.followUp({
-    embeds: [smallEmbed(COLORS.success, null, t('wished', lang, { user: `<@${birthdayUserId}>` }))],
+    components: [smallContainer(null, t('wished', lang, { user: `<@${birthdayUserId}>` }))],
     ephemeral: true,
   });
 }
@@ -236,7 +233,7 @@ async function handleModal(ctx, interaction) {
   return null;
 }
 
-/** Eigenes Eintragen: validieren → Bestätigungsnachricht unter dem Button. */
+/** Eigenes Eintragen: validieren → Bestätigungs-Container mit den 3 Buttons. */
 async function entryModalSubmit(ctx, interaction) {
   const entry0 = ctx.store.get(interaction.guildId);
   const errLang = entry0?.lang || langFromDiscord(interaction.locale);
@@ -247,7 +244,7 @@ async function entryModalSubmit(ctx, interaction) {
   const day = parseDayInput(dayRaw);
   if (!day) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errInvalidDay', errLang))],
+      components: [smallContainer(null, t('errInvalidDay', errLang))],
       ephemeral: true,
     });
   }
@@ -255,13 +252,13 @@ async function entryModalSubmit(ctx, interaction) {
   const mm = matchMonth(monthRaw);
   if (!mm) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errInvalidMonth', errLang))],
+      components: [smallContainer(null, t('errInvalidMonth', errLang))],
       ephemeral: true,
     });
   }
   if (!isValidDate(day, mm.month)) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errInvalidDate', errLang))],
+      components: [smallContainer(null, t('errInvalidDate', errLang))],
       ephemeral: true,
     });
   }
@@ -277,11 +274,11 @@ async function entryModalSubmit(ctx, interaction) {
     lang,
   });
 
-  // Reply to the modal itself: this creates exactly one clear confirmation
-  // message instead of a public prompt plus a second ephemeral instruction.
+  // Reply mit dem Bestätigungs-Container (Buttons direkt im Container)
   return interaction.reply({
-    embeds: [buildConfirmationEmbed({ day, month: mm.month, lang, input: monthRaw.trim(), fuzzy: mm.fuzzy })],
-    components: [confirmationRow(lang)],
+    components: [
+      buildConfirmationEmbed({ day, month: mm.month, lang, input: monthRaw.trim(), fuzzy: mm.fuzzy }),
+    ],
   });
 }
 
@@ -290,7 +287,7 @@ async function adminModalSubmit(ctx, interaction) {
   const pending = ctx.pendingAdmin.get(interaction.user.id);
   if (!pending) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errGeneric', 'en'))],
+      components: [smallContainer(null, t('errGeneric', 'en'))],
       ephemeral: true,
     });
   }
@@ -301,20 +298,20 @@ async function adminModalSubmit(ctx, interaction) {
   const day = parseDayInput(dayRaw);
   if (!day) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errInvalidDay', 'en'))],
+      components: [smallContainer(null, t('errInvalidDay', 'en'))],
       ephemeral: true,
     });
   }
   const mm = matchMonth(monthRaw);
   if (!mm) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errInvalidMonth', 'en'))],
+      components: [smallContainer(null, t('errInvalidMonth', 'en'))],
       ephemeral: true,
     });
   }
   if (!isValidDate(day, mm.month)) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errInvalidDate', 'en'))],
+      components: [smallContainer(null, t('errInvalidDate', 'en'))],
       ephemeral: true,
     });
   }
@@ -323,7 +320,7 @@ async function adminModalSubmit(ctx, interaction) {
   if (!entry) {
     ctx.pendingAdmin.delete(interaction.user.id);
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errNoList', 'en'))],
+      components: [smallContainer(null, t('errNoList', 'en'))],
       ephemeral: true,
     });
   }
@@ -334,7 +331,7 @@ async function adminModalSubmit(ctx, interaction) {
   if (!member) {
     ctx.pendingAdmin.delete(interaction.user.id);
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errUserGone', entry.lang))],
+      components: [smallContainer(null, t('errUserGone', entry.lang))],
       ephemeral: true,
     });
   }
@@ -349,8 +346,11 @@ async function adminModalSubmit(ctx, interaction) {
 
   const date = formatBirthday(day, mm.month, entry.lang);
   return interaction.reply({
-    embeds: [
-      smallEmbed(COLORS.success, null, t('adminSetSuccess', entry.lang, { user: `<@${pending.targetId}>`, date })),
+    components: [
+      smallContainer(
+        null,
+        t('adminSetSuccess', entry.lang, { user: `<@${pending.targetId}>`, date })
+      ),
     ],
     ephemeral: true,
   });

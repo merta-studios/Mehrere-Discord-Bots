@@ -3,7 +3,8 @@
  * - Fuzzy-Monatserkennung in allen 10 Sprachen (auch mit Tippfehlern)
  * - Tages-Parsing & Datumsvalidierung
  * - 7-Tage-Regel & Monats-Reihenfolge
- * - Embed-Roundtrip: Liste bauen → wieder auslesen (das „DB-lose“ Prinzip)
+ * - Container-Roundtrip: Liste bauen → wieder auslesen (das „DB-lose“ Prinzip)
+ * - Modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons)
  *
  * Ausführen mit: npm test
  */
@@ -20,7 +21,11 @@ const {
   tzParts,
   daysUntilNext,
 } = require('../bots/birthday-bot/src/logic');
-const { buildListEmbed, parseListEmbed } = require('../bots/birthday-bot/src/embed-builder');
+const {
+  buildListEmbed,
+  parseListEmbed,
+  extractAllText,
+} = require('../bots/birthday-bot/src/embed-builder');
 
 // ---------------------------------------------------------------------------
 // Fuzzy-Monatserkennung
@@ -150,10 +155,10 @@ test('7-Tage-Regel (relativ zu heute, Zeitzone Europe/Berlin)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Embed-Roundtrip (das „DB-lose“ Prinzip)
+// Container-Roundtrip (das „DB-lose“ Prinzip mit Components V2)
 // ---------------------------------------------------------------------------
 
-test('Embed-Roundtrip: gebaute Liste wird exakt wieder ausgelesen', () => {
+test('Container-Roundtrip: gebaute Liste wird exakt wieder ausgelesen', () => {
   const birthdays = [
     { userId: '111', day: 4, month: 9 },
     { userId: '222', day: 17, month: 9 },
@@ -162,8 +167,9 @@ test('Embed-Roundtrip: gebaute Liste wird exakt wieder ausgelesen', () => {
   ];
 
   for (const lang of ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it']) {
-    const embedJson = buildListEmbed({ birthdays, lang }).toJSON();
-    const parsed = parseListEmbed({ embeds: [embedJson] });
+    const container = buildListEmbed({ birthdays, lang });
+    const containerJson = container.toJSON();
+    const parsed = parseListEmbed({ components: [containerJson] });
 
     assert.equal(parsed.lang, lang, `Sprache ${lang} muss aus dem Marker lesbar sein`);
     assert.equal(parsed.birthdays.length, birthdays.length, `Sprache ${lang}: alle Einträge lesbar`);
@@ -176,18 +182,36 @@ test('Embed-Roundtrip: gebaute Liste wird exakt wieder ausgelesen', () => {
   }
 });
 
-test('Embed-Roundtrip: leere Liste → keine Einträge, Marker bleibt', () => {
-  const embedJson = buildListEmbed({ birthdays: [], lang: 'fr' }).toJSON();
-  const parsed = parseListEmbed({ embeds: [embedJson] });
+test('Container-Roundtrip: leere Liste → keine Einträge, Marker bleibt', () => {
+  const containerJson = buildListEmbed({ birthdays: [], lang: 'fr' }).toJSON();
+  const parsed = parseListEmbed({ components: [containerJson] });
   assert.equal(parsed.lang, 'fr');
   assert.deepEqual(parsed.birthdays, []);
 });
 
-test('Listen-Embed zeigt nur Monate mit Einträgen und verwendet den senkrechten Trenner', () => {
-  const embedJson = buildListEmbed({ birthdays: [{ userId: '111', day: 4, month: 9 }], lang: 'de' }).toJSON();
-  assert.deepEqual(embedJson.fields.map((field) => field.name), ['September']);
-  assert.match(embedJson.fields[0].value, /04\.09 \| <@111>/);
-  assert.equal(embedJson.color, undefined, 'Embeds bleiben neutral grau ohne Farbrand');
+test('Listen-Container hat keinen farbigen Rand, enthält Titel beim Datum, Trennlinien und Buttons im Container', () => {
+  const containerJson = buildListEmbed({ birthdays: [{ userId: '111', day: 4, month: 9 }], lang: 'de' }).toJSON();
+  assert.equal(containerJson.type, 17, 'Typ 17 = Container (Layout Components / Components V2)');
+  assert.equal(containerJson.accent_color, undefined, 'Kein farbiger Rand an der Seite');
+
+  // Titel ist oben beim Datumstext
+  const topText = containerJson.components[0].content;
+  assert.match(topText, /# 🎂 Geburtstage/, 'Titel steht oben beim Datumstext');
+  assert.match(topText, /## 📅 /, 'Datum steht direkt beim Titel');
+
+  // Enthält Trennlinien (type: 14 = Separator)
+  const hasSeparators = containerJson.components.some((c) => c.type === 14);
+  assert.ok(hasSeparators, 'Enthält Trennlinien (Separators/Dividers) im Container');
+
+  // Button ist direkt im Container integriert (type: 1 = ActionRow mit Button)
+  const actionRow = containerJson.components.find((c) => c.type === 1);
+  assert.ok(actionRow, 'ActionRow ist direkt im Container');
+  assert.equal(actionRow.components[0].custom_id, 'bday_add');
+
+  // Kein störender Footer (deutsch Europe Berlin bday v1 heute um 16:59 Uhr) am Ende
+  const allText = extractAllText(containerJson);
+  assert.ok(!allText.includes('Europe/Berlin'), 'Kein sichtbarer Zeitzonen-Footer mehr');
+  assert.ok(!allText.includes('heute um'), 'Kein störender Zeitstempel-Footer');
 });
 
 test('parseListEmbed: fremdes Embed ohne Marker → null-gefährdet, aber kein Crash', () => {

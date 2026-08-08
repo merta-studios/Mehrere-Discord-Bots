@@ -1,13 +1,15 @@
 /**
  * Der „Store“ des Geburtstags-Bots – OHNE Datenbank.
  *
- * Idee: Die Geburtstagsliste steckt komplett im Embed (Felder + Footer).
+ * Idee: Die Geburtstagsliste steckt komplett in den Komponenten selbst
+ * (Container mit TextDisplay, Trennlinien und Buttons).
  * Der Bot hält nur eine flüchtige In-Memory-Registry (guildId → wo ist
  * meine Liste?), findet seine Nachrichten aber jederzeit selbst, indem
- * er Channels nach dem Marker „bday::v1::…“ durchsucht.
+ * er Channels nach dem Marker „bday::v1::…“ oder dem Button „bday_add“
+ * durchsucht.
  *
- * Beim stündlichen Refresh wird das Embed NEU AUSGELESEN, Nutzer, die
- * den Server verlassen haben, werden entfernt, und das Embed wird
+ * Beim stündlichen Refresh wird die Nachricht NEU AUSGELESEN, Nutzer, die
+ * den Server verlassen haben, werden entfernt, und der Container wird
  * frisch gebaut (aktueller Monat zuerst).
  */
 
@@ -15,7 +17,6 @@ const { ChannelType } = require('discord.js');
 
 const {
   buildListEmbed,
-  listActionRow,
   parseListEmbed,
   buildCongratsEmbed,
   LIST_MARKER,
@@ -28,7 +29,7 @@ function createStore({ client, logger }) {
 
   /**
    * Durchsucht alle sichtbaren Textchannels einer Gilde nach der
-   * eigenen Geburtstagsliste (Marker im Footer).
+   * eigenen Geburtstagsliste (Marker oder Button in Komponenten/Embeds).
    * Rückgabe: { channel, message } oder null.
    */
   async function findListMessage(guild) {
@@ -47,8 +48,12 @@ function createStore({ client, logger }) {
         const found = messages.find(
           (m) =>
             m.author?.id === client.user.id &&
-            m.embeds?.[0] &&
-            (m.embeds[0].footer?.text || '').includes(LIST_MARKER)
+            (
+              JSON.stringify(m.components || []).includes('bday::v1::') ||
+              JSON.stringify(m.components || []).includes('bday_add') ||
+              (m.embeds?.[0]?.footer?.text || '').includes(LIST_MARKER) ||
+              (m.embeds?.[0]?.description || '').includes(LIST_MARKER)
+            )
         );
         if (found) return { channel, message: found };
       } catch {
@@ -88,15 +93,15 @@ function createStore({ client, logger }) {
 
   /**
    * Stündlicher/täglicher Refresh:
-   * 1. Eigenes Embed holen (oder neu senden, falls gelöscht)
+   * 1. Eigene Nachricht holen (oder neu senden, falls gelöscht)
    * 2. Einträge NEU auslesen (Self-Healing, keine Datenbank)
    * 3. Nutzer rausfiltern, die den Server verlassen haben
-   * 4. Embed frisch bauen (aktueller Monat zuerst) und editieren
+   * 4. Container frisch bauen (aktueller Monat zuerst) und editieren
    *
    * `apply(birthdays)` ist optional: Damit können Änderungen (z. B. ein
    * neuer Eintrag) direkt auf den frisch ausgelesenen Stand angewendet
    * werden, bevor neu gebaut wird – sonst würden sie vom alten
-   * Embed-Inhalt überschrieben.
+   * Stand überschrieben.
    */
   async function refresh(entry, apply) {
     const guild = client.guilds.cache.get(entry.guildId);
@@ -122,13 +127,12 @@ function createStore({ client, logger }) {
 
     birthdays = await filterMembers(guild, birthdays);
 
-    const embed = buildListEmbed({ birthdays, lang });
-    const components = [listActionRow(lang)];
+    const container = buildListEmbed({ birthdays, lang });
 
     if (msg) {
-      await msg.edit({ embeds: [embed], components }).catch(() => {});
+      await msg.edit({ components: [container], embeds: [] }).catch(() => {});
     } else {
-      msg = await channel.send({ embeds: [embed], components }).catch(() => null);
+      msg = await channel.send({ components: [container] }).catch(() => null);
       if (!msg) return null;
       entry.messageId = msg.id;
     }
@@ -160,9 +164,9 @@ function createStore({ client, logger }) {
 
   /**
    * Täglicher Check um 0 Uhr: Wer hat heute Geburtstag?
-   * Pro Geburtstagskind wird genau EIN Gruß-Embed gesendet – Doppel-
-   * sendungen werden über den Marker im Footer verhindert (der Bot
-   * schaut nach, ob der Gruß für heute schon existiert).
+   * Pro Geburtstagskind wird genau EIN Gruß-Container gesendet – Doppel-
+   * sendungen werden über den Marker verhindert (der Bot schaut nach,
+   * ob der Gruß für heute schon existiert).
    */
   async function birthdayCheck(entry) {
     const guild = client.guilds.cache.get(entry.guildId);
@@ -184,16 +188,18 @@ function createStore({ client, logger }) {
 
     for (const b of todays) {
       const marker = `bday-congrats:${dateKey}:${b.userId}`;
-      const alreadySent = recentArr.some(
-        (m) => (m.embeds?.[0]?.footer?.text || '').includes(marker)
+      const alreadySent = recentArr.some((m) =>
+        JSON.stringify(m.components || []).includes(marker) ||
+        JSON.stringify(m.embeds || []).includes(marker) ||
+        (m.content || '').includes(marker)
       );
       if (alreadySent) continue;
 
       const member = await guild.members.fetch(b.userId).catch(() => null);
       if (!member) continue;
 
-      const { embed, row } = buildCongratsEmbed({ member, lang: entry.lang, dateKey });
-      await channel.send({ embeds: [embed], components: [row] }).catch((err) => {
+      const { container } = buildCongratsEmbed({ member, lang: entry.lang, dateKey });
+      await channel.send({ components: [container] }).catch((err) => {
         logger.warn(`[birthday-bot] Gruß für ${b.userId} konnte nicht gesendet werden:`, err.message);
       });
     }

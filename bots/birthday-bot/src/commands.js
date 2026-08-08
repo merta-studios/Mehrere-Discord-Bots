@@ -15,7 +15,10 @@ const {
   Routes,
   ChannelType,
   PermissionFlagsBits,
-  EmbedBuilder,
+  InteractionContextType,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder,
 } = require('discord.js');
 
 const { LANGS, t, langFromDiscord, DISCORD_LOCALE } = require('./languages');
@@ -24,8 +27,7 @@ const {
   buildListEmbed,
   listActionRow,
   parseListEmbed,
-  smallEmbed,
-  COLORS,
+  smallContainer,
 } = require('./embed-builder');
 const { openPanel } = require('./admin-panel');
 
@@ -58,6 +60,7 @@ function defineCommands() {
       .setName('setup')
       .setDescription('Richtet die Geburtstagsliste ein (Channel + Sprache)')
       .setDescriptionLocalizations(pick('helpSetup'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addStringOption((o) =>
         o
           .setName('language')
@@ -92,6 +95,7 @@ function defineCommands() {
       .setName('admin_set_birthday')
       .setDescription('Setzt den Geburtstag eines anderen Nutzers (nur Admins)')
       .setDescriptionLocalizations(pick('helpAdminSet'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addUserOption((o) =>
         o
           .setName('user')
@@ -105,10 +109,13 @@ function defineCommands() {
       .setDescription('Zeigt alle Befehle an')
       .setDescriptionLocalizations(pick('helpHelp')),
 
+    // Adminpanel ist nur im Privatchat (BotDM) mit dem Bot-Owner verfügbar und
+    // wird in Server-Kanälen gar nicht erst zur Auswahl angeboten.
     new SlashCommandBuilder()
       .setName('adminpanel')
       .setDescription('Owner-Admin-Panel (nur im DM)')
-      .setDescriptionLocalizations(pick('helpAdminPanel')),
+      .setDescriptionLocalizations(pick('helpAdminPanel'))
+      .setContexts(InteractionContextType.BotDM),
   ];
 }
 
@@ -154,22 +161,36 @@ async function handleChatInput(ctx, interaction) {
     case 'adminpanel':
       return openPanel(ctx, interaction);
     default:
-      return interaction.reply({ content: 'Unbekannter Befehl.', ephemeral: true });
+      return interaction.reply({
+        components: [smallContainer(null, 'Unbekannter Befehl.')],
+        ephemeral: true,
+      });
   }
 }
 
-/** /setup [language] [channel] */
+/** /setup [language] [channel] – nur für Admins */
 async function setupCmd(ctx, interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errGuildOnly', 'en'))],
+      components: [smallContainer(null, t('errGuildOnly', 'en'))],
       ephemeral: true,
     });
   }
-  const lang = interaction.options.getString('language');
+
+  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
+  const langChoice = interaction.options.getString('language');
+  const lang = langChoice || 'en';
+
+  if (!perms?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({
+      components: [smallContainer(null, t('errNoPermission', lang))],
+      ephemeral: true,
+    });
+  }
+
   if (!LANGS[lang]) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('setupLangBad', lang || 'en'))],
+      components: [smallContainer(null, t('setupLangBad', lang))],
       ephemeral: true,
     });
   }
@@ -177,15 +198,15 @@ async function setupCmd(ctx, interaction) {
   const channel = interaction.options.getChannel('channel') || interaction.channel;
   if (!channel || !channel.isTextBased() || channel.type !== ChannelType.GuildText) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errChannelBad', lang))],
+      components: [smallContainer(null, t('errChannelBad', lang))],
       ephemeral: true,
     });
   }
 
-  const perms = channel.permissionsFor(ctx.client.user);
-  if (!perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
+  const botPerms = channel.permissionsFor(ctx.client.user);
+  if (!botPerms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errBotPerms', lang, { channel: `<#${channel.id}>` }))],
+      components: [smallContainer(null, t('errBotPerms', lang, { channel: `<#${channel.id}>` }))],
       ephemeral: true,
     });
   }
@@ -204,9 +225,9 @@ async function setupCmd(ctx, interaction) {
     await existing.message.delete().catch(() => {});
   }
 
+  const container = buildListEmbed({ birthdays, lang });
   const msg = await channel.send({
-    embeds: [buildListEmbed({ birthdays, lang })],
-    components: [listActionRow(lang)],
+    components: [container],
   });
 
   const today = todayKey(lang);
@@ -224,62 +245,68 @@ async function setupCmd(ctx, interaction) {
   if (migrated) {
     desc += `\n\n${t('setupFoundOld', lang)}\n${t('setupMigrated', lang, { count: birthdays.length })}`;
   }
-  return interaction.editReply({ embeds: [smallEmbed(COLORS.success, null, desc)] });
+  return interaction.editReply({ components: [smallContainer(null, desc)] });
 }
 
 /** /admin_set_bot_profile [image: standard | server | owner] */
 async function profileCmd(ctx, interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errGuildOnly', 'en'))],
+      components: [smallContainer(null, t('errGuildOnly', 'en'))],
       ephemeral: true,
     });
   }
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
   if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply({ embeds: [smallEmbed(COLORS.error, null, t('errNoPermission', lang))], ephemeral: true });
+    return interaction.reply({
+      components: [smallContainer(null, t('errNoPermission', lang))],
+      ephemeral: true,
+    });
   }
   await interaction.deferReply({ ephemeral: true });
   const choice = interaction.options.getString('image');
   const label = t(`profileChoice${choice[0].toUpperCase()}${choice.slice(1)}`, lang);
 
   try {
-    let avatarBase64 = null;
     if (choice === 'standard') {
-      // Standard = das globale Bot-Profilbild → guild-avatar zurücksetzen.
-      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, ctx.client.user.id), {
+      // Standard = das globale Bot-Profilbild → Guild-Member-Avatar zurücksetzen
+      await ctx.rest.patch(Routes.userGuildMember(interaction.guild.id), {
         body: { avatar: null },
       });
     } else {
       let url = null;
       if (choice === 'server') {
-        url = interaction.guild.iconURL({ size: 256, extension: 'png' });
+        url = interaction.guild.iconURL({ size: 256, extension: 'png', forceStatic: true });
         if (!url) {
           return interaction.editReply({
-            embeds: [smallEmbed(COLORS.error, null, t('errServerNoIcon', lang))],
+            components: [smallContainer(null, t('errServerNoIcon', lang))],
           });
         }
       } else if (choice === 'owner') {
         const owner = await interaction.guild.fetchOwner();
-        url = owner.displayAvatarURL({ size: 256, extension: 'png' });
+        url =
+          owner?.user?.displayAvatarURL({ size: 256, extension: 'png', forceStatic: true }) ||
+          owner?.displayAvatarURL({ size: 256, extension: 'png', forceStatic: true });
       }
+
+      if (!url) throw new Error('Bild-URL konnte nicht ermittelt werden.');
       const res = await fetch(url);
       if (!res.ok) throw new Error(`Avatar konnte nicht geladen werden (${res.status})`);
       const buffer = Buffer.from(await res.arrayBuffer());
       const contentType = res.headers.get('content-type')?.split(';')[0] || 'image/png';
-      // Discord's REST API requires an image data URI, not bare Base64.
-      avatarBase64 = `data:${contentType};base64,${buffer.toString('base64')}`;
-      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, ctx.client.user.id), {
-        body: { avatar: avatarBase64 },
+      // Discord REST API verlangt Data-URI (PATCH /users/@me/guilds/{guild.id}/member)
+      const avatarDataUri = `data:${contentType};base64,${buffer.toString('base64')}`;
+      await ctx.rest.patch(Routes.userGuildMember(interaction.guild.id), {
+        body: { avatar: avatarDataUri },
       });
     }
     return interaction.editReply({
-      embeds: [smallEmbed(COLORS.success, null, t('profileSet', lang, { choice: label }))],
+      components: [smallContainer(null, t('profileSet', lang, { choice: label }))],
     });
   } catch (err) {
     return interaction.editReply({
-      embeds: [smallEmbed(COLORS.error, null, t('errAvatar', lang, { error: err.message }))],
+      components: [smallContainer(null, t('errAvatar', lang, { error: err.message }))],
     });
   }
 }
@@ -288,7 +315,7 @@ async function profileCmd(ctx, interaction) {
 async function adminSetCmd(ctx, interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errGuildOnly', 'en'))],
+      components: [smallContainer(null, t('errGuildOnly', 'en'))],
       ephemeral: true,
     });
   }
@@ -296,7 +323,7 @@ async function adminSetCmd(ctx, interaction) {
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   if (!perms?.has(PermissionFlagsBits.Administrator)) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errNoPermission', lang))],
+      components: [smallContainer(null, t('errNoPermission', lang))],
       ephemeral: true,
     });
   }
@@ -304,7 +331,7 @@ async function adminSetCmd(ctx, interaction) {
   const entry = ctx.store.get(interaction.guildId);
   if (!entry) {
     return interaction.reply({
-      embeds: [smallEmbed(COLORS.error, null, t('errNoList', lang))],
+      components: [smallContainer(null, t('errNoList', lang))],
       ephemeral: true,
     });
   }
@@ -321,23 +348,33 @@ async function adminSetCmd(ctx, interaction) {
   return interaction.showModal(buildAdminModal(modalLang, target.username));
 }
 
-/** /help */
+/** /help – Befehlsübersicht (ohne /adminpanel, da dieses nur für den Owner im DM bestimmt ist) */
 async function helpCmd(ctx, interaction) {
   const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
 
-  const embed = new EmbedBuilder()
-    .setTitle(t('helpTitle', lang))
-    .setDescription(t('helpDesc', lang))
-    .addFields(
-      { name: '/setup', value: t('helpSetup', lang) },
-      { name: '/admin_set_bot_profile', value: t('helpSetProfile', lang) },
-      { name: '/admin_set_birthday', value: t('helpAdminSet', lang) },
-      { name: '/help', value: t('helpHelp', lang) },
-      { name: '/adminpanel', value: t('helpAdminPanel', lang) }
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `# ${t('helpTitle', lang)}`,
+          t('helpDesc', lang),
+          '',
+          `**</setup:${interaction.commandId || 'setup'}>**\n${t('helpSetup', lang)}`,
+          '',
+          `**</admin_set_bot_profile:${interaction.commandId || 'admin_set_bot_profile'}>**\n${t('helpSetProfile', lang)}`,
+          '',
+          `**</admin_set_birthday:${interaction.commandId || 'admin_set_birthday'}>**\n${t('helpAdminSet', lang)}`,
+          '',
+          `**</help:${interaction.commandId || 'help'}>**\n${t('helpHelp', lang)}`,
+        ].join('\n')
+      )
     )
-    .setFooter({ text: t('helpFooter', lang) });
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(t('helpFooter', lang))
+    );
 
-  return interaction.reply({ embeds: [embed] });
+  return interaction.reply({ components: [container] });
 }
 
 module.exports = { defineCommands, registerCommands, handleChatInput, pick };
