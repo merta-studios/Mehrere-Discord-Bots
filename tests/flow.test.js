@@ -437,6 +437,28 @@ test('Admin-Panel: Owner sieht Serverliste und wählt einen Server aus', async (
   assert.deepEqual(btnLabels, ['◀ Zurück', '🔗 Einladung', '🚪 Verlassen']);
 });
 
+test('Admin-Panel: DM des Owners funktioniert auch ohne gecachten Channel', async () => {
+  const h = makeHarness();
+  h.ctx.ownerId = '123456789012345678';
+  h.ctx.client.guilds.cache.get('g1').memberCount = 5;
+
+  // Discord kann bei einer Interaction den DM-Channel noch nicht im Cache
+  // haben. guildId ist bei DMs trotzdem zuverlässig nicht gesetzt.
+  const interaction = h.makeInteraction({
+    commandName: 'adminpanel',
+    user: { id: '123456789012345678', username: 'Owner' },
+    guildId: null,
+    guild: null,
+    channel: null,
+    isChatInputCommand: () => true,
+    isButton: () => false,
+  });
+
+  await handleInteraction(h.ctx, interaction);
+  assert.equal(h.replies.length, 1, 'Der Owner erhält das Panel statt einer Berechtigungsablehnung');
+  assert.match(extractAllText(h.replies[0]), /Testgilde/);
+});
+
 test('Bearbeiten öffnet das Formular erneut mit vorbefüllten Zahlen', async () => {
   const h = makeHarness();
   const good = dateIn(20);
