@@ -11,6 +11,7 @@
  */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { MessageFlags } = require('discord.js');
 
 const { createStore } = require('../bots/birthday-bot/src/store');
 const { handleInteraction } = require('../bots/birthday-bot/src/interactions');
@@ -30,6 +31,7 @@ function makeHarness({ lang = 'de' } = {}) {
       author: { id: 'bot1' },
       components: [buildListEmbed({ birthdays: entry.birthdays, lang: entry.lang }).toJSON()],
       embeds: [],
+      flags: MessageFlags.IsComponentsV2,
       edit: async (payload) => {
         if (payload.components) {
           msg.components = payload.components.map((c) => (c.toJSON ? c.toJSON() : c));
@@ -37,6 +39,7 @@ function makeHarness({ lang = 'de' } = {}) {
         if (payload.embeds) {
           msg.embeds = payload.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
         }
+        if (payload.flags !== undefined) msg.flags = payload.flags;
         return msg;
       },
       delete: async () => {},
@@ -66,6 +69,7 @@ function makeHarness({ lang = 'de' } = {}) {
         id: `sent${sent.length + 1}`,
         components: payload.components?.map((c) => (c.toJSON ? c.toJSON() : c)) || [],
         embeds: payload.embeds?.map((e) => (e.toJSON ? e.toJSON() : e)) || [],
+        flags: payload.flags,
         delete: async () => {},
       };
       sent.push(m);
@@ -192,7 +196,8 @@ test('Formular-Absenden erzeugt genau eine Bestätigungsnachricht (Container)', 
 
   assert.equal(h.sent.length, 0, 'Keine zweite Kanalnachricht wird erzeugt');
   assert.equal(h.replies.length, 1, 'Die Modal-Antwort ist die einzige Bestätigung');
-  assert.equal(h.replies[0].ephemeral, undefined, 'Bestätigung ist direkt bedienbar');
+  assert.equal(h.replies[0].ephemeral, undefined, 'Kein veraltetes ephemeral-Feld');
+  assert.equal(h.replies[0].flags, MessageFlags.IsComponentsV2);
   assert.equal(h.replies[0].components.length, 1);
   assert.ok(h.ctx.pending.has('u1'), 'Pending-Eintrag gespeichert');
 });
@@ -240,6 +245,12 @@ test('Bestätigen trägt den Geburtstag ein und aktualisiert das Listen-Embed', 
   assert.equal(entry.birthdays[0].day, good.day);
   assert.equal(entry.birthdays[0].month, good.month);
   assert.equal(h.follows.length, 1, 'Erfolgsmeldung kam');
+  assert.equal(
+    h.follows[0].flags,
+    MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+    'Ephemere V2-Antwort enthält beide benötigten Flags'
+  );
+  assert.equal(h.msg.flags, MessageFlags.IsComponentsV2, 'Listen-Edit behält Components V2 bei');
   assert.ok(!h.ctx.pending.has('u1'), 'Pending aufgeräumt');
 });
 
@@ -384,6 +395,7 @@ test('Admin-Panel: Owner sieht Serverliste und wählt einen Server aus', async (
   await handleInteraction(h.ctx, listInteraction);
   assert.equal(h.replies.length, 1);
   const listPayload = h.replies[0];
+  assert.equal(listPayload.flags, MessageFlags.IsComponentsV2);
   const listText = extractAllText(listPayload);
   assert.match(listText, /Testgilde/);
 
@@ -457,6 +469,48 @@ test('Setup Command blockiert Nicht-Admins', async () => {
   });
   await handleInteraction(h.ctx, setupInteraction);
   assert.equal(h.replies.length, 1);
+  assert.equal(
+    h.replies[0].flags,
+    MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+  );
+  assert.equal('ephemeral' in h.replies[0], false);
   const text = extractAllText(h.replies[0]);
   assert.match(text, /Administrator/);
+});
+
+test('Setup sendet und editiert Container ausschließlich mit Components-V2-Flag', async () => {
+  const h = makeHarness();
+  const deferred = [];
+  const edited = [];
+  const setupInteraction = h.makeInteraction({
+    commandName: 'setup',
+    isChatInputCommand: () => true,
+    isButton: () => false,
+    deferReply: async (payload) => deferred.push(payload),
+    editReply: async (payload) => edited.push(payload),
+  });
+
+  await handleInteraction(h.ctx, setupInteraction);
+
+  assert.equal(deferred[0].flags, MessageFlags.Ephemeral);
+  assert.equal('ephemeral' in deferred[0], false);
+  assert.equal(h.sent[0].flags, MessageFlags.IsComponentsV2);
+  assert.equal(edited[0].flags, MessageFlags.IsComponentsV2);
+});
+
+test('Auch eine fehlgeschlagene Fehlerantwort beendet den Bot-Handler nicht', async () => {
+  const h = makeHarness();
+  let attempts = 0;
+  const interaction = h.makeInteraction({
+    commandName: 'unbekannt',
+    isChatInputCommand: () => true,
+    isButton: () => false,
+    reply: async () => {
+      attempts += 1;
+      throw new Error('Discord nicht erreichbar');
+    },
+  });
+
+  await assert.doesNotReject(() => handleInteraction(h.ctx, interaction));
+  assert.equal(attempts, 2, 'Ursprüngliche Antwort und Fehlerantwort wurden versucht');
 });

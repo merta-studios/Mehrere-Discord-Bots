@@ -26,6 +26,7 @@ const {
 
 const { t } = require('./languages');
 const { smallContainer } = require('./embed-builder');
+const { componentsV2Payload } = require('./message-payload');
 
 const PANEL_PREFIX = 'ap_';
 const PAGE_SIZE = 5;
@@ -41,10 +42,9 @@ function canUsePanel(ctx, interaction) {
 }
 
 function deny(ctx, interaction) {
-  return interaction.reply({
-    components: [smallContainer(null, t('apNeedDm', 'de'))],
-    ephemeral: true,
-  });
+  return interaction.reply(
+    componentsV2Payload([smallContainer(null, t('apNeedDm', 'de'))], { ephemeral: true })
+  );
 }
 
 function sessionOf(ctx, userId) {
@@ -105,7 +105,7 @@ async function renderListPayload(ctx, userId, noticePrefix = '') {
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addActionRowComponents(new ActionRowBuilder().addComponents(select));
 
-    return { components: [container] };
+    return componentsV2Payload([container]);
   }
 
   const totalPages = Math.ceil(servers.length / PAGE_SIZE);
@@ -156,7 +156,7 @@ async function renderListPayload(ctx, userId, noticePrefix = '') {
 
   container.addActionRowComponents(new ActionRowBuilder().addComponents(select), nav);
 
-  return { components: [container] };
+  return componentsV2Payload([container]);
 }
 
 function escapeMd(text) {
@@ -237,7 +237,7 @@ async function renderDetailPayload(ctx, userId, guildId) {
 
   container.addActionRowComponents(new ActionRowBuilder().addComponents(...buttons));
 
-  return { components: [container] };
+  return componentsV2Payload([container]);
 }
 
 // ---------------------------------------------------------------------------
@@ -365,7 +365,7 @@ async function sendJoinNotice(ctx, guild) {
       owner: owner ? `<@${owner.id}>` : '?',
     });
     const container = smallContainer('👋 Neuer Server!', notice);
-    await ownerUser.send({ components: [container] });
+    await ownerUser.send(componentsV2Payload([container]));
   } catch (err) {
     ctx.logger.warn('[birthday-bot] Join-Notice konnte nicht gesendet werden:', err.message);
   }
