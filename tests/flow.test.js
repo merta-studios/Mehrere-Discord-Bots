@@ -1,0 +1,407 @@
+/**
+ * Flow-Test mit gemockten Discord-Objekten: validiert die Verdrahtung
+ * der Interaktions-Handler (Button → Modal → Bestätigung → Eintrag).
+ *
+ * Getestet wird ohne echte Discord-Verbindung:
+ * - „Geburtstag eintragen“-Button öffnet das Formular
+ * - Formular-Absenden erzeugt die Bestätigungsnachricht unter dem Button
+ * - Bestätigen mit gültigem Datum (≥ 7 Tage) trägt ein + aktualisiert die Liste
+ * - Bestätigen mit zu nahem Datum wird durch die 7-Tage-Regel blockiert
+ */
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+
+const { createStore } = require('../bots/birthday-bot/src/store');
+const { handleInteraction } = require('../bots/birthday-bot/src/interactions');
+const { buildListEmbed } = require('../bots/birthday-bot/src/embed-builder');
+const { todayKey, tzParts } = require('../bots/birthday-bot/src/logic');
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+function makeHarness({ lang = 'de' } = {}) {
+  const sent = []; // alle Nachrichten, die der „Channel“ je bekam
+
+  function makeListMessage(entry) {
+    return {
+      id: entry.messageId,
+      author: { id: 'bot1' },
+      embeds: [buildListEmbed({ birthdays: entry.birthdays, lang: entry.lang }).toJSON()],
+      edit: async (payload) => {
+        msg.embeds = payload.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
+        return msg;
+      },
+      delete: async () => {},
+    };
+  }
+  let msg = null;
+
+  const channel = {
+    id: 'ch1',
+    isTextBased: () => true,
+    messages: {
+      fetch: async (arg) => {
+        if (typeof arg === 'object') {
+          // { after, limit } → alle nach dieser ID
+          const map = new Map();
+          if (msg && msg.id > arg.after) map.set(msg.id, msg);
+          return map;
+        }
+        if (arg === 'm1') return msg;
+        return sent.find((m) => m.id === arg) || null;
+      },
+      // nicht benötigt
+    },
+    send: async (payload) => {
+      const m = {
+        id: `sent${sent.length + 1}`,
+        embeds: payload.embeds.map((e) => (e.toJSON ? e.toJSON() : e)),
+        components: payload.components,
+        delete: async () => {},
+      };
+      sent.push(m);
+      return m;
+    },
+  };
+
+  const guild = {
+    id: 'g1',
+    name: 'Testgilde',
+    members: {
+      cache: new Map(),
+      fetch: async () => ({ id: 'u1', displayAvatarURL: () => 'https://example.com/a.png' }),
+    },
+  };
+
+  const client = {
+    user: { id: 'bot1' },
+    guilds: { cache: new Map([['g1', guild]]) },
+    channels: { fetch: async () => channel },
+  };
+
+  const ctx = {
+    client,
+    token: 'test-token',
+    ownerId: 'owner1',
+    logger: { info() {}, warn() {}, error() {} },
+    env: () => '',
+    rest: {},
+    store: createStore({ client, logger: { warn() {} } }),
+    pending: new Map(),
+    pendingAdmin: new Map(),
+    panelSessions: new Map(),
+  };
+
+  const entry = {
+    guildId: 'g1',
+    channelId: 'ch1',
+    messageId: 'm1',
+    lang,
+    birthdays: [],
+    lastRenderDay: todayKey(lang),
+    lastBirthdayCheckDay: todayKey(lang),
+  };
+  msg = makeListMessage(entry);
+  ctx.store.set(entry);
+
+  const replies = [];
+  const follows = [];
+  const modals = [];
+
+  function makeInteraction(overrides = {}) {
+    const customId = overrides.customId || 'bday_add';
+    return {
+      user: { id: 'u1', username: 'Tester' },
+      guildId: 'g1',
+      guild,
+      locale: 'de',
+      channel,
+      customId,
+      deferred: false,
+      replied: false,
+      inGuild: () => true,
+      isChatInputCommand: () => false,
+      isButton: () => customId !== 'bday_modal' && customId !== 'admin_bday_modal',
+      isModalSubmit: () => customId === 'bday_modal' || customId === 'admin_bday_modal',
+      isStringSelectMenu: () => false,
+      reply: async (p) => {
+        replies.push(p);
+      },
+      followUp: async (p) => {
+        follows.push(p);
+      },
+      deferUpdate: async () => {},
+      showModal: async (m) => {
+        modals.push(m);
+      },
+      update: async () => {},
+      editReply: async () => {},
+      message: { embeds: [], delete: async () => {} },
+      fields: { getTextInputValue: () => '' },
+      options: {},
+      ...overrides,
+    };
+  }
+
+  return { ctx, channel, entry, msg, sent, replies, follows, modals, makeInteraction };
+}
+
+/** Datum, das in `days` Tagen liegt (nur Monat/Tag). */
+function dateIn(days) {
+  const t = tzParts('Europe/Berlin');
+  const d = new Date(Date.UTC(t.year, t.month - 1, t.day + days));
+  return { day: d.getUTCDate(), month: d.getUTCMonth() + 1 };
+}
+
+test('„Geburtstag eintragen“-Button öffnet das Formular', async () => {
+  const h = makeHarness();
+  const interaction = h.makeInteraction({ customId: 'bday_add' });
+  await handleInteraction(h.ctx, interaction);
+  assert.equal(h.modals.length, 1);
+  assert.equal(h.modals[0].data.custom_id, 'bday_modal');
+});
+
+test('Formular-Absenden erzeugt Bestätigungsnachricht unter dem Button', async () => {
+  const h = makeHarness();
+  const good = dateIn(20); // weit genug weg
+  const interaction = h.makeInteraction({
+    customId: 'bday_modal',
+    fields: {
+      getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)),
+    },
+  });
+  await handleInteraction(h.ctx, interaction);
+
+  assert.equal(h.sent.length, 1, 'Bestätigungsnachricht wurde gesendet');
+  assert.equal(h.replies.length, 1, 'Ephemerer Hinweis kam');
+  assert.ok(h.ctx.pending.has('u1'), 'Pending-Eintrag gespeichert');
+});
+
+test('Formular mit Tippfehler im Monat erkennt September trotzdem', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+  const interaction = h.makeInteraction({
+    customId: 'bday_modal',
+    fields: {
+      getTextInputValue: (id) => (id === 'day' ? String(good.day) : 'Sebtemger'),
+    },
+  });
+  await handleInteraction(h.ctx, interaction);
+
+  assert.equal(h.sent.length, 1);
+  const pending = h.ctx.pending.get('u1');
+  assert.equal(pending.month, 9);
+  assert.equal(pending.fuzzy, true);
+});
+
+test('Bestätigen trägt den Geburtstag ein und aktualisiert das Listen-Embed', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+
+  // 1. Modal absenden
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)) },
+    })
+  );
+
+  // 2. Bestätigen
+  const confirmInteraction = h.makeInteraction({ customId: 'bday_confirm_yes' });
+  await handleInteraction(h.ctx, confirmInteraction);
+
+  const entry = h.ctx.store.get('g1');
+  assert.equal(entry.birthdays.length, 1, 'Geburtstag ist eingetragen');
+  assert.equal(entry.birthdays[0].userId, 'u1');
+  assert.equal(entry.birthdays[0].day, good.day);
+  assert.equal(entry.birthdays[0].month, good.month);
+  assert.equal(h.follows.length, 1, 'Erfolgsmeldung kam');
+  assert.ok(!h.ctx.pending.has('u1'), 'Pending aufgeräumt');
+});
+
+test('Bestätigen mit doppeltem Eintrag ersetzt den alten', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+  const other = dateIn(60);
+  h.entry.birthdays = [{ userId: 'u1', day: other.day, month: other.month }];
+
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)) },
+    })
+  );
+  await handleInteraction(h.ctx, h.makeInteraction({ customId: 'bday_confirm_yes' }));
+
+  const entry = h.ctx.store.get('g1');
+  assert.equal(entry.birthdays.length, 1, 'Kein Doppel-Eintrag');
+  assert.equal(entry.birthdays[0].day, good.day, 'Neuer Tag');
+  assert.equal(entry.birthdays[0].month, good.month, 'Neuer Monat');
+});
+
+test('7-Tage-Regel blockiert Geburtstage in weniger als 7 Tagen', async () => {
+  const h = makeHarness();
+  const tooSoon = dateIn(2);
+
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(tooSoon.day) : String(tooSoon.month)) },
+    })
+  );
+  await handleInteraction(h.ctx, h.makeInteraction({ customId: 'bday_confirm_yes' }));
+
+  const entry = h.ctx.store.get('g1');
+  assert.equal(entry.birthdays.length, 0, 'Nichts eingetragen');
+  assert.equal(h.follows.length, 1);
+  assert.equal(h.follows[0].embeds[0].data.title, '⛔ Zu früh zum Eintragen!');
+});
+
+test('Abbrechen löscht die Bestätigung ohne Eintrag', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)) },
+    })
+  );
+  await handleInteraction(h.ctx, h.makeInteraction({ customId: 'bday_confirm_no' }));
+
+  assert.equal(h.ctx.store.get('g1').birthdays.length, 0);
+  assert.ok(!h.ctx.pending.has('u1'));
+});
+
+test('Gratulieren: erste Gratulation fügt Feld hinzu, Wiederholung wird blockiert', async () => {
+  const h = makeHarness();
+  const uid = 'bday1';
+  const dateKey = '2026-12-31';
+  const oldEmbed = {
+    color: 0x9b59b6,
+    title: '🎂 Happy birthday!',
+    description: 'Today is <@bday1>’s birthday! 🥳',
+    thumbnail: { url: 'https://example.com/a.png' },
+    footer: { text: `bday-congrats:${dateKey}:${uid}` },
+    timestamp: '2026-12-31T00:00:00.000Z',
+    fields: [],
+  };
+  const msg = { embeds: [oldEmbed], id: 'congrats1', delete: async () => {} };
+
+  // 1. Gratulation durch u1
+  const first = h.makeInteraction({
+    customId: `bday_congrats_${uid}_${dateKey}`,
+    message: msg,
+    update: async (p) => {
+      msg.embeds = p.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
+    },
+  });
+  await handleInteraction(h.ctx, first);
+  assert.equal(h.follows.length, 1, 'u1 bekam Bestätigung');
+  assert.equal(msg.embeds[0].fields.length, 1, 'Glückwunsch-Feld wurde hinzugefügt');
+  assert.match(msg.embeds[0].fields[0].name, /\(1\)/, 'Anzahl = 1');
+  assert.ok(msg.embeds[0].fields[0].value.includes('<@u1>'), 'u1 wird erwähnt');
+
+  // 2. Gratulation durch u2 → Anzahl 2
+  const second = h.makeInteraction({
+    customId: `bday_congrats_${uid}_${dateKey}`,
+    user: { id: 'u2', username: 'Zweiter' },
+    message: msg,
+    update: async (p) => {
+      msg.embeds = p.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
+    },
+  });
+  await handleInteraction(h.ctx, second);
+  assert.match(msg.embeds[0].fields[0].name, /\(2\)/, 'Anzahl = 2');
+  assert.ok(msg.embeds[0].fields[0].value.includes('<@u2>'), 'u2 wird erwähnt');
+
+  // 3. u1 will nochmal → blockiert (kein Doppel-Glückwunsch)
+  const third = h.makeInteraction({
+    customId: `bday_congrats_${uid}_${dateKey}`,
+    message: msg,
+    update: async (p) => {
+      msg.embeds = p.embeds.map((e) => (e.toJSON ? e.toJSON() : e));
+    },
+  });
+  await handleInteraction(h.ctx, third);
+  assert.equal(msg.embeds[0].fields[0].name, '🎉 Glückwünsche (2)', 'Feld unverändert nach Blockade');
+  assert.equal(msg.embeds[0].fields[0].value, '<@u1>\n<@u2>', 'Werte unverändert nach Blockade');
+  assert.ok(h.replies.length >= 1, 'Blockade-Meldung kam');
+  assert.match(h.replies[h.replies.length - 1].embeds[0].data.description, /bereits/i);
+});
+
+test('Admin-Panel: Owner sieht Serverliste und wählt einen Server aus', async () => {
+  const h = makeHarness();
+  h.ctx.ownerId = 'owner1';
+  h.ctx.client.user.displayAvatarURL = () => 'https://example.com/bot.png';
+  h.ctx.client.guilds.cache.get('g1').iconURL = () => 'https://example.com/g.png';
+  h.ctx.client.guilds.cache.get('g1').ownerId = 'owner1';
+  h.ctx.client.guilds.cache.get('g1').memberCount = 5;
+  h.ctx.client.guilds.cache.get('g1').leave = async () => {};
+
+  // 1. /adminpanel im DM → Serverliste mit Select + Nav-Buttons
+  const listInteraction = h.makeInteraction({
+    customId: 'adminpanel',
+    commandName: 'adminpanel',
+    user: { id: 'owner1', username: 'Owner' },
+    channel: { type: 1 }, // DM
+    isChatInputCommand: () => true,
+    isButton: () => false,
+  });
+  await handleInteraction(h.ctx, listInteraction);
+  assert.equal(h.replies.length, 1);
+  const listPayload = h.replies[0];
+  assert.match(listPayload.embeds[0].data.description, /Testgilde/);
+  const select = listPayload.components[0].components[0];
+  assert.equal(select.options.length, 1);
+  assert.equal(select.options[0].data.value, 'g1');
+  assert.equal(listPayload.components[1].components.length, 3, '◀ / Aktualisieren / ▶');
+
+  // 2. Server auswählen → Detail-Ansicht mit Zurück/Einladung/Verlassen
+  const selectInteraction = h.makeInteraction({
+    customId: 'ap_select',
+    user: { id: 'owner1', username: 'Owner' },
+    channel: { type: 1 },
+    isButton: () => false,
+    isStringSelectMenu: () => true,
+    values: ['g1'],
+    deferUpdate: async () => {},
+    editReply: async (p) => {
+      h.detailPayload = p;
+    },
+  });
+  await handleInteraction(h.ctx, selectInteraction);
+  const detail = h.detailPayload;
+  assert.ok(detail, 'Detail-Ansicht gerendert');
+  assert.match(detail.embeds[0].data.description, /Mitglieder/);
+  assert.match(detail.embeds[0].data.description, /Geburtstagsliste/);
+  const btnLabels = detail.components[0].components.map((b) => b.data.label);
+  assert.deepEqual(btnLabels, ['◀ Zurück', '🔗 Einladung', '🚪 Verlassen']);
+});
+
+test('Bearbeiten öffnet das Formular erneut mit vorbefüllten Zahlen', async () => {
+  const h = makeHarness();
+  const good = dateIn(20);
+
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: 'bday_modal',
+      fields: { getTextInputValue: (id) => (id === 'day' ? String(good.day) : String(good.month)) },
+    })
+  );
+
+  const before = h.modals.length;
+  await handleInteraction(h.ctx, h.makeInteraction({ customId: 'bday_confirm_edit' }));
+  assert.equal(h.modals.length, before + 1, 'Formular erneut geöffnet');
+  const modalJson = h.modals[h.modals.length - 1].toJSON();
+  const dayInput = modalJson.components[0].components[0];
+  const monthInput = modalJson.components[1].components[0];
+  assert.equal(dayInput.value, String(good.day), 'Tag vorbefüllt');
+  assert.equal(monthInput.value, String(good.month), 'Monat als Zahl vorbefüllt');
+});

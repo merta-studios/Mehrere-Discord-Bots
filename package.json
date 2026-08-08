@@ -1,0 +1,26 @@
+{
+  "name": "multi-discord-bot-hoster",
+  "version": "1.0.0",
+  "description": "Hostet mehrere Discord-Bots in einem einzigen Node.js-Prozess – perfekt für Render Free (ein Prozess, viele Bots).",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "discord.js",
+    "render",
+    "multi-bot"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}
