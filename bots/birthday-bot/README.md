@@ -21,7 +21,10 @@ steckt in den Komponenten selbst.
 - **7-Tage-Regel** als Spam-Schutz beim Eintragen.
 - **Stündliches Self-Refresh**: aktueller Monat zuerst (dann Jahresrest,
   dann Januar bis davor), Nutzer, die den Server verlassen haben, werden
-  entfernt, Datum oben in der Zeitzone der Sprache.
+  entfernt, Datum oben in der Zeitzone der Sprache. Hinter jeder Erwähnung
+  steht der lokalisierte Countdown bis zum nächsten Geburtstag (z. B.
+  `@Nutzer – in 1 Tag`, `@Nutzer – in 5 Tagen` bzw. die entsprechende Form
+  in der gewählten Sprache).
 - **Täglich um 0 Uhr** (Sprach-Zeitzone): Geburtstagskinder bekommen einen
   Gruß-Container mit „🎉 Gratulieren“-Button; Glückwünsche und
   Anzahl stehen direkt im Container (keine Doppel-Glückwünsche).

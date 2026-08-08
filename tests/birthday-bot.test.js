@@ -3,6 +3,7 @@
  * - Fuzzy-Monatserkennung in allen 10 Sprachen (auch mit Tippfehlern)
  * - Tages-Parsing & Datumsvalidierung
  * - 7-Tage-Regel & Monats-Reihenfolge
+ * - Lokalisierter Countdown mit korrekten Singular-/Pluralformen
  * - Container-Roundtrip: Liste bauen → wieder auslesen (das „DB-lose“ Prinzip)
  * - Modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons)
  *
@@ -13,7 +14,11 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { MessageFlags } = require('discord.js');
 
-const { matchMonth } = require('../bots/birthday-bot/src/languages');
+const {
+  LANGS,
+  matchMonth,
+  formatDaysUntil,
+} = require('../bots/birthday-bot/src/languages');
 const { componentsV2Payload } = require('../bots/birthday-bot/src/message-payload');
 const {
   monthOrder,
@@ -133,6 +138,35 @@ test('monthOrder: aktueller Monat zuerst, dann Jahresrest, dann Januar bis davor
   assert.deepEqual(monthOrder(12), [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 });
 
+test('Countdown-Pluralformen sind in allen 10 Sprachen lokalisiert', () => {
+  const expected = {
+    de: ['in 1 Tag', 'in 5 Tagen', 'in 360 Tagen'],
+    en: ['in 1 day', 'in 5 days', 'in 360 days'],
+    fr: ['dans 1 jour', 'dans 5 jours', 'dans 360 jours'],
+    es: ['en 1 día', 'en 5 días', 'en 360 días'],
+    pt: ['em 1 dia', 'em 5 dias', 'em 360 dias'],
+    ru: ['через 1 день', 'через 5 дней', 'через 360 дней'],
+    ja: ['あと1日', 'あと5日', 'あと360日'],
+    ko: ['1일 후', '5일 후', '360일 후'],
+    zh: ['1天后', '5天后', '360天后'],
+    it: ['tra 1 giorno', 'tra 5 giorni', 'tra 360 giorni'],
+  };
+
+  for (const lang of Object.keys(LANGS)) {
+    assert.deepEqual(
+      [1, 5, 360].map((days) => formatDaysUntil(days, lang)),
+      expected[lang],
+      `Countdown für ${lang}`
+    );
+  }
+});
+
+test('Countdown berechnet Tage bis zum nächsten Geburtstag in der Sprach-Zeitzone', () => {
+  const now = new Date('2026-01-01T12:00:00.000Z');
+  assert.equal(daysUntilNext(2, 1, 'Europe/Berlin', now), 1);
+  assert.equal(daysUntilNext(27, 12, 'Europe/Berlin', now), 360);
+});
+
 test('7-Tage-Regel (relativ zu heute, Zeitzone Europe/Berlin)', () => {
   const t = tzParts('Europe/Berlin');
   const future = (days) => {
@@ -202,6 +236,38 @@ test('Container-Roundtrip: leere Liste → keine Einträge, Marker bleibt', () =
   const parsed = parseListEmbed({ components: [containerJson] });
   assert.equal(parsed.lang, 'fr');
   assert.deepEqual(parsed.birthdays, []);
+});
+
+test('Listenzeile enthält den lokalisierten Countdown direkt hinter der Erwähnung', () => {
+  const now = new Date('2026-01-01T12:00:00.000Z');
+  const birthday = { userId: '111', day: 2, month: 1 };
+
+  for (const lang of Object.keys(LANGS)) {
+    const text = extractAllText(
+      buildListEmbed({ birthdays: [birthday], lang, now }).toJSON()
+    );
+    assert.ok(
+      text.includes(`<@111> – ${formatDaysUntil(1, lang)}`),
+      `Countdown fehlt hinter der Erwähnung für ${lang}`
+    );
+  }
+});
+
+test('Alte Listenzeilen ohne Countdown bleiben beim Einlesen kompatibel', () => {
+  const parsed = parseListEmbed({
+    components: [
+      {
+        components: [
+          {
+            content: 'bday::v1::de\n04.09 | <@!111>',
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(parsed.lang, 'de');
+  assert.deepEqual(parsed.birthdays, [{ day: 4, month: 9, userId: '111' }]);
 });
 
 test('Listen-Container hat keinen farbigen Rand, enthält Titel beim Datum, Trennlinien und Buttons im Container', () => {

@@ -25,8 +25,15 @@ const {
   TextInputStyle,
 } = require('discord.js');
 
-const { LANGS, t, tzOf, formatBirthday, formatToday } = require('./languages');
-const { monthOrder, pad, tzParts } = require('./logic');
+const {
+  LANGS,
+  t,
+  tzOf,
+  formatBirthday,
+  formatDaysUntil,
+  formatToday,
+} = require('./languages');
+const { monthOrder, pad, tzParts, daysUntilNext } = require('./logic');
 
 const COLORS = {
   list: null, confirm: null, success: null, error: null, congrats: null, help: null, panel: null,
@@ -72,15 +79,15 @@ function extractAllText(obj) {
  * Baut den modernen Listen-Container:
  * - Titel „🎂 Geburtstage“ oben beim Datumstext
  * - Trennlinie (Divider) zwischen Header und Monaten
- * - Monate als formatierte Abschnitte
+ * - Monate als formatierte Abschnitte mit lokalisiertem Countdown hinter jeder Erwähnung
  * - Trennlinie vor dem Button
  * - „Geburtstag eintragen“-Button direkt im Container
  * - Kein farbiger Rand, kein sichtbarer Footer, kein störender Timestamp
  * - Unsichtbarer Marker für die Wiedererkennung
  */
-function buildListEmbed({ birthdays = [], lang = 'de' }) {
+function buildListEmbed({ birthdays = [], lang = 'de', now = new Date() }) {
   const tz = tzOf(lang);
-  const cur = tzParts(tz);
+  const cur = tzParts(tz, now);
   const months = LANGS[lang].months;
 
   const container = new ContainerBuilder();
@@ -88,7 +95,7 @@ function buildListEmbed({ birthdays = [], lang = 'de' }) {
   // Header: Titel + Datumstext zusammen oben, plus unsichtbarer Sprach-Marker
   const headerLines = [
     `# ${t('listTitle', lang)}`,
-    `## 📅 ${formatToday(lang)}`,
+    `## 📅 ${formatToday(lang, now)}`,
     t('listTagline', lang),
     `\u200B${LIST_MARKER}${lang}\u200B`,
   ];
@@ -113,7 +120,10 @@ function buildListEmbed({ birthdays = [], lang = 'de' }) {
       const lines = birthdays
         .filter((b) => b.month === mo)
         .sort((a, b) => a.day - b.day)
-        .map((b) => `${pad(b.day)}.${pad(b.month)} | <@${b.userId}>`);
+        .map((b) => {
+          const days = daysUntilNext(b.day, b.month, tz, now);
+          return `${pad(b.day)}.${pad(b.month)} | <@${b.userId}> – ${formatDaysUntil(days, lang)}`;
+        });
 
       const monthText = `### ${months[mo - 1]}\n${lines.join('\n')}`;
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(monthText));
@@ -154,7 +164,10 @@ function parseListEmbed(msg) {
   const birthdays = [];
   const seen = new Set();
   for (const line of text.split('\n')) {
-    const m = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*<@!?(\d+)>$/);
+    // Der Countdown ist absichtlich außerhalb der gespeicherten Daten: Beim
+    // nächsten Rendern wird er anhand des aktuellen Tages neu berechnet.
+    // Alte Listen ohne Countdown bleiben ebenfalls lesbar.
+    const m = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*<@!?(\d+)>(?:\s+[-–—]\s+.*)?$/);
     if (m) {
       const key = `${m[3]}:${m[2]}:${m[1]}`;
       if (!seen.has(key)) {
