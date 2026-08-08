@@ -21,7 +21,7 @@ sendet ein schönes Listen-Embed und liest es selbst immer wieder aus
   Gruß-Embed mit Profilbild + „🎉 Gratulieren“-Button; Glückwünsche und
   Anzahl stehen danach im Embed (keine Doppel-Glückwünsche).
 - **Max. 3 Nachrichten** unter der Liste – automatisches Aufräumen.
-- **/set_bot_profile** – serverspezifisches Bot-Profilbild
+- **/admin_set_bot_profile** – serverspezifisches Bot-Profilbild
   (nur: Standard / Server / Server-Owner, kein Upload).
 - **/admin_set_birthday** – Admins setzen Geburtstage für andere
   (ohne 7-Tage-Regel).

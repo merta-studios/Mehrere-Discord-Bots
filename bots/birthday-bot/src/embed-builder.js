@@ -18,13 +18,8 @@ const { LANGS, t, tzOf, formatBirthday, formatToday } = require('./languages');
 const { monthOrder, pad, tzParts } = require('./logic');
 
 const COLORS = {
-  list: 0xe91e63,
-  confirm: 0xf1c40f,
-  success: 0x2ecc71,
-  error: 0xe74c3c,
-  congrats: 0x9b59b6,
-  help: 0x5865f2,
-  panel: 0x2c3e50,
+  // Embeds intentionally use Discord's neutral gray default (no color accent).
+  list: null, confirm: null, success: null, error: null, congrats: null, help: null, panel: null,
 };
 
 /** Marker, über den der Bot seine eigene Liste in jedem Channel wiederfindet. */
@@ -47,12 +42,14 @@ function buildListEmbed({ birthdays, lang }) {
   const cur = tzParts(tz);
   const months = LANGS[lang].months;
 
-  const fields = monthOrder(cur.month).map((mo) => {
+  // Only show months that actually contain birthdays; an empty list gets a
+  // concise empty state instead of twelve placeholder columns.
+  const fields = monthOrder(cur.month).flatMap((mo) => {
     const lines = birthdays
       .filter((b) => b.month === mo)
       .sort((a, b) => a.day - b.day)
-      .map((b) => `${pad(b.day)}.${pad(b.month)} ✦ <@${b.userId}>`);
-    return { name: months[mo - 1], value: lines.join('\n') || '—', inline: true };
+      .map((b) => `${pad(b.day)}.${pad(b.month)} | <@${b.userId}>`);
+    return lines.length ? [{ name: months[mo - 1], value: lines.join('\n'), inline: true }] : [];
   });
 
   if (!birthdays.length) {
@@ -60,14 +57,12 @@ function buildListEmbed({ birthdays, lang }) {
   }
 
   const embed = new EmbedBuilder()
-    .setColor(COLORS.list)
     .setTitle(t('listTitle', lang))
     .setDescription(
       [
         `## 📅 ${formatToday(lang)}`,
         t('listTagline', lang),
         '',
-        '━━━━━━━━━━━━━━━━━━━━',
       ].join('\n')
     )
     .addFields(fields)
@@ -102,7 +97,7 @@ function parseListEmbed(msg) {
   const birthdays = [];
   for (const field of embed.fields || []) {
     for (const line of String(field.value).split('\n')) {
-      const m = line.match(/^(\d{1,2})\.(\d{1,2})\s*✦\s*<@!?(\d+)>$/);
+      const m = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*<@!?(\d+)>$/);
       if (m) birthdays.push({ day: Number(m[1]), month: Number(m[2]), userId: m[3] });
     }
   }
@@ -156,11 +151,11 @@ function buildAdminModal(lang, targetUser) {
 /** Bestätigungs-Embed unter dem Button + die 3 Buttons darunter. */
 function buildConfirmationEmbed({ day, month, lang, input, fuzzy }) {
   const date = formatBirthday(day, month, lang);
-  let desc = t('confirmBody', { date }, lang);
+  let desc = t('confirmBody', lang, { date });
   if (fuzzy && input) {
-    desc += `\n\n${t('fuzzyNote', { input, month: LANGS[lang].months[month - 1] }, lang)}`;
+    desc += `\n\n${t('fuzzyNote', lang, { input, month: LANGS[lang].months[month - 1] })}`;
   }
-  return new EmbedBuilder().setColor(COLORS.confirm).setTitle(t('confirmTitle', lang)).setDescription(desc);
+  return new EmbedBuilder().setTitle(t('confirmTitle', lang)).setDescription(desc);
 }
 
 function confirmationRow(lang) {
@@ -175,9 +170,8 @@ function confirmationRow(lang) {
 function buildSevenDayErrorEmbed(lang, day, month) {
   const date = formatBirthday(day, month, lang);
   return new EmbedBuilder()
-    .setColor(COLORS.error)
     .setTitle(t('errSevenDaysTitle', lang))
-    .setDescription(t('errSevenDaysBody', { date }, lang));
+    .setDescription(t('errSevenDaysBody', lang, { date }));
 }
 
 // ---------------------------------------------------------------------------
@@ -190,9 +184,8 @@ function buildSevenDayErrorEmbed(lang, day, month) {
  */
 function buildCongratsEmbed({ member, lang, dateKey }) {
   const embed = new EmbedBuilder()
-    .setColor(COLORS.congrats)
     .setTitle(t('bdayCongratsTitle', lang))
-    .setDescription(t('bdayCongratsBody', { user: `<@${member.id}>` }, lang))
+    .setDescription(t('bdayCongratsBody', lang, { user: `<@${member.id}>` }))
     .setThumbnail(member.displayAvatarURL({ size: 256, extension: 'png' }))
     .setFooter({ text: `bday-congrats:${dateKey}:${member.id}` })
     .setTimestamp();
@@ -212,7 +205,7 @@ function buildCongratsEmbed({ member, lang, dateKey }) {
 // ---------------------------------------------------------------------------
 
 function smallEmbed(color, title, desc) {
-  const e = new EmbedBuilder().setColor(color);
+  const e = new EmbedBuilder();
   if (title) e.setTitle(title);
   if (desc) e.setDescription(desc);
   return e;

@@ -672,7 +672,7 @@ const T = {
   },
 
   // ----------------------------------------------------------
-  // /set_bot_profile
+  // /admin_set_bot_profile
   // ----------------------------------------------------------
   profileImageDesc: {
     de: 'Welches Bild soll verwendet werden?',

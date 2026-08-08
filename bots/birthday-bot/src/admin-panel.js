@@ -87,7 +87,6 @@ async function renderListPayload(ctx, userId) {
 
   if (!servers.length) {
     const embed = new EmbedBuilder()
-      .setColor(COLORS.panel)
       .setTitle(t('apTitle', 'de'))
       .setDescription(t('apNoServers', 'de'))
       .setThumbnail(ctx.client.user.displayAvatarURL({ size: 128 }))
@@ -115,7 +114,6 @@ async function renderListPayload(ctx, userId) {
   );
 
   const embed = new EmbedBuilder()
-    .setColor(COLORS.panel)
     .setTitle(t('apTitle', 'de'))
     .setDescription(t('apServerListDesc', 'de', { count: servers.length, list: lines.join('\n') }))
     .setThumbnail(ctx.client.user.displayAvatarURL({ size: 128 }))
@@ -180,7 +178,6 @@ async function renderDetailPayload(ctx, userId, guildId) {
   const setup = !!entry;
 
   const embed = new EmbedBuilder()
-    .setColor(COLORS.panel)
     .setTitle(t('apDetailTitle', 'de'))
     .setThumbnail(guild.iconURL({ size: 256 }) || ctx.client.user.displayAvatarURL({ size: 256 }))
     .setDescription(
@@ -361,7 +358,6 @@ async function sendJoinNotice(ctx, guild) {
     const owner = await guild.fetchOwner().catch(() => null);
     const ownerUser = await ctx.client.users.fetch(ctx.ownerId);
     const embed = new EmbedBuilder()
-      .setColor(COLORS.success)
       .setTitle('👋 Neuer Server!')
       .setDescription(
         t('apJoinNotice', 'de', {

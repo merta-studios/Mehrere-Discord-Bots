@@ -277,16 +277,11 @@ async function entryModalSubmit(ctx, interaction) {
     lang,
   });
 
-  // Bestätigungsnachricht direkt unter dem Listen-Button (öffentlich,
-  // damit sie der Bot später löschen/bearbeiten kann – ohne DB).
-  await interaction.channel.send({
+  // Reply to the modal itself: this creates exactly one clear confirmation
+  // message instead of a public prompt plus a second ephemeral instruction.
+  return interaction.reply({
     embeds: [buildConfirmationEmbed({ day, month: mm.month, lang, input: monthRaw.trim(), fuzzy: mm.fuzzy })],
     components: [confirmationRow(lang)],
-  });
-
-  return interaction.reply({
-    embeds: [smallEmbed(COLORS.confirm, null, t('confirmAck', lang))],
-    ephemeral: true,
   });
 }
 
