@@ -33,6 +33,23 @@ test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 5 Commands)', () 
   assert.equal(setup.options.find((o) => o.name === 'language').choices.length, 10); // 10 Sprachen
   const profile = cmds.find((c) => c.name === 'set_bot_profile');
   assert.deepEqual(profile.options[0].choices.map((c) => c.value), ['standard', 'server', 'owner']);
+
+  // Discord API Anforderung: erforderliche Optionen müssen vor optionalen Optionen stehen
+  for (const cmd of cmds) {
+    if (!cmd.options) continue;
+    let seenOptional = false;
+    for (const opt of cmd.options) {
+      if (opt.required) {
+        assert.equal(
+          seenOptional,
+          false,
+          `In Befehl "/${cmd.name}": erforderliche Option "${opt.name}" darf nicht nach einer optionalen Option stehen`
+        );
+      } else {
+        seenOptional = true;
+      }
+    }
+  }
 });
 
 test('Loader startet ohne Tokens sauber (0 Bots, kein Crash)', async () => {

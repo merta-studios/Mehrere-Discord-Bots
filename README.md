@@ -151,7 +151,7 @@ online sind (siehe `src/health.js`).
 
 | Command | Was er kann |
 |---|---|
-| `/setup [channel] [language]` | Richtet die Geburtstagsliste ein. Ohne Channel wird der aktuelle Kanal genommen. **10 Sprachen** zur Auswahl. Eine bereits existierende Liste wird automatisch gefunden: Einträge bleiben erhalten, nur Sprache + Kanal ändern sich. |
+| `/setup [language] [channel]` | Richtet die Geburtstagsliste ein. Ohne Channel wird der aktuelle Kanal genommen. **10 Sprachen** zur Auswahl. Eine bereits existierende Liste wird automatisch gefunden: Einträge bleiben erhalten, nur Sprache + Kanal ändern sich. |
 | „🎂 Geburtstag eintragen“ (Button) | Öffnet ein Formular: **Tag** (nur Zahlen, `4` oder `04`) + **Monat** (Zahl, Name oder sogar Tippfehler wie „Sebtemger“ → Fuzzy-Erkennung in allen 10 Sprachen). Danach Bestätigungs-Embed mit 3 Buttons: ✅ Bestätigen / ✏️ Bearbeiten (Formular vorbefüllt) / ❌ Abbrechen. |
 | `/set_bot_profile [image]` | Ändert das **serverspezifische** Profilbild des Bots. Nur 3 Optionen: Standard-Profilbild, Server-Profilbild, Server-Owner-Profilbild – **kein eigener Upload!** |
 | `/admin_set_birthday [user]` | Nur mit **Administrator**-Berechtigung. Setzt den Geburtstag eines anderen Nutzers (gleiches Formular, ohne 7-Tage-Regel). |
@@ -215,7 +215,7 @@ sind bewusst nur auf Deutsch.
 2. Dort ein Modul exportieren:
 
 ```js
-const { GatewayIntentBits } = require('discord.js');
+const { GatewayIntentBits, Events } = require('discord.js');
 
 module.exports = {
   id: 'mein-bot',
@@ -223,7 +223,7 @@ module.exports = {
   tokenEnv: 'MEIN_BOT_TOKEN',          // ← Umgebungsvariable mit dem Token
   intents: [GatewayIntentBits.Guilds],
   async create({ client, token, logger, env }) {
-    client.on('ready', () => logger.info('Mein Bot ist da!'));
+    client.on(Events.ClientReady, () => logger.info('Mein Bot ist da!'));
     // … deine Bot-Logik …
   },
 };
