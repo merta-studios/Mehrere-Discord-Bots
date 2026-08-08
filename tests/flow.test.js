@@ -162,7 +162,7 @@ test('„Geburtstag eintragen“-Button öffnet das Formular', async () => {
   assert.equal(h.modals[0].data.custom_id, 'bday_modal');
 });
 
-test('Formular-Absenden erzeugt Bestätigungsnachricht unter dem Button', async () => {
+test('Formular-Absenden erzeugt genau eine Bestätigungsnachricht', async () => {
   const h = makeHarness();
   const good = dateIn(20); // weit genug weg
   const interaction = h.makeInteraction({
@@ -173,8 +173,10 @@ test('Formular-Absenden erzeugt Bestätigungsnachricht unter dem Button', async 
   });
   await handleInteraction(h.ctx, interaction);
 
-  assert.equal(h.sent.length, 1, 'Bestätigungsnachricht wurde gesendet');
-  assert.equal(h.replies.length, 1, 'Ephemerer Hinweis kam');
+  assert.equal(h.sent.length, 0, 'Keine zweite Kanalnachricht wird erzeugt');
+  assert.equal(h.replies.length, 1, 'Die Modal-Antwort ist die einzige Bestätigung');
+  assert.equal(h.replies[0].ephemeral, undefined, 'Bestätigung ist direkt bedienbar');
+  assert.equal(h.replies[0].components.length, 1);
   assert.ok(h.ctx.pending.has('u1'), 'Pending-Eintrag gespeichert');
 });
 
@@ -189,7 +191,9 @@ test('Formular mit Tippfehler im Monat erkennt September trotzdem', async () => 
   });
   await handleInteraction(h.ctx, interaction);
 
-  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.replies.length, 1);
+  assert.match(h.replies[0].embeds[0].data.description, /September/);
   const pending = h.ctx.pending.get('u1');
   assert.equal(pending.month, 9);
   assert.equal(pending.fuzzy, true);

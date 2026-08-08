@@ -28,10 +28,10 @@ test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 5 Commands)', () 
   const cmds = defineCommands().map((c) => c.toJSON());
   assert.equal(cmds.length, 5);
   const names = cmds.map((c) => c.name).sort();
-  assert.deepEqual(names, ['admin_set_birthday', 'adminpanel', 'help', 'set_bot_profile', 'setup']);
+  assert.deepEqual(names, ['admin_set_birthday', 'admin_set_bot_profile', 'adminpanel', 'help', 'setup']);
   const setup = cmds.find((c) => c.name === 'setup');
   assert.equal(setup.options.find((o) => o.name === 'language').choices.length, 10); // 10 Sprachen
-  const profile = cmds.find((c) => c.name === 'set_bot_profile');
+  const profile = cmds.find((c) => c.name === 'admin_set_bot_profile');
   assert.deepEqual(profile.options[0].choices.map((c) => c.value), ['standard', 'server', 'owner']);
 
   // Discord API Anforderung: erforderliche Optionen müssen vor optionalen Optionen stehen

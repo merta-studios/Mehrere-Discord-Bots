@@ -183,13 +183,11 @@ test('Embed-Roundtrip: leere Liste → keine Einträge, Marker bleibt', () => {
   assert.deepEqual(parsed.birthdays, []);
 });
 
-test('Embed-Roundtrip: Feld-Reihenfolge startet mit dem aktuellen Monat', () => {
-  const t = tzParts('Europe/Berlin');
-  const embedJson = buildListEmbed({ birthdays: [], lang: 'de' }).toJSON();
-  const order = monthOrder(t.month);
-  for (let i = 0; i < 12; i++) {
-    assert.equal(embedJson.fields[i].name, ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'][order[i] - 1]);
-  }
+test('Listen-Embed zeigt nur Monate mit Einträgen und verwendet den senkrechten Trenner', () => {
+  const embedJson = buildListEmbed({ birthdays: [{ userId: '111', day: 4, month: 9 }], lang: 'de' }).toJSON();
+  assert.deepEqual(embedJson.fields.map((field) => field.name), ['September']);
+  assert.match(embedJson.fields[0].value, /04\.09 \| <@111>/);
+  assert.equal(embedJson.color, undefined, 'Embeds bleiben neutral grau ohne Farbrand');
 });
 
 test('parseListEmbed: fremdes Embed ohne Marker → null-gefährdet, aber kein Crash', () => {

@@ -153,7 +153,7 @@ online sind (siehe `src/health.js`).
 |---|---|
 | `/setup [language] [channel]` | Richtet die Geburtstagsliste ein. Ohne Channel wird der aktuelle Kanal genommen. **10 Sprachen** zur Auswahl. Eine bereits existierende Liste wird automatisch gefunden: Einträge bleiben erhalten, nur Sprache + Kanal ändern sich. |
 | „🎂 Geburtstag eintragen“ (Button) | Öffnet ein Formular: **Tag** (nur Zahlen, `4` oder `04`) + **Monat** (Zahl, Name oder sogar Tippfehler wie „Sebtemger“ → Fuzzy-Erkennung in allen 10 Sprachen). Danach Bestätigungs-Embed mit 3 Buttons: ✅ Bestätigen / ✏️ Bearbeiten (Formular vorbefüllt) / ❌ Abbrechen. |
-| `/set_bot_profile [image]` | Ändert das **serverspezifische** Profilbild des Bots. Nur 3 Optionen: Standard-Profilbild, Server-Profilbild, Server-Owner-Profilbild – **kein eigener Upload!** |
+| `/admin_set_bot_profile [image]` | Ändert das **serverspezifische** Profilbild des Bots. Nur 3 Optionen: Standard-Profilbild, Server-Profilbild, Server-Owner-Profilbild – **kein eigener Upload!** |
 | `/admin_set_birthday [user]` | Nur mit **Administrator**-Berechtigung. Setzt den Geburtstag eines anderen Nutzers (gleiches Formular, ohne 7-Tage-Regel). |
 | `/help` | Übersicht aller Befehle. |
 | `/adminpanel` | Owner-Panel – **nur im Privatchat mit dem Bot-Owner** (Deine ID aus `BIRTHDAY_BOT_OWNER_ID`). Serverliste mit Seiten (◀ ▶), sortiert: erst Server, auf denen du **🔴** nicht bist, dann nach Mitgliederzahl. Server-Detail mit Owner-Mention, Bild, Mitgliederzahl, Geburtstagsliste-Status. Buttons: **Einladung** (1h gültig, 1× nutzbar) und **Verlassen** (mit Sicherheitsabfrage). Bei Server-Beitritt bekommst du automatisch eine Info-Nachricht. |
@@ -162,7 +162,7 @@ online sind (siehe `src/health.js`).
 
 Die Geburtstagsliste **steckt komplett im Embed**:
 
-- Jeder Monat ist ein Feld; jede Zeile ist `04.09 ✦ @Nutzer`.
+- Es werden nur Monate mit Einträgen angezeigt; jede Zeile ist `04.09 | @Nutzer`.
 - Im Footer sitzt ein unsichtbarer Marker (`bday::v1::<sprache>`).
 - Der Bot findet seine Liste selbst wieder (Channel-Scan nach dem Marker),
   liest alle Einträge neu aus dem Embed und aktualisiert sich selbst.

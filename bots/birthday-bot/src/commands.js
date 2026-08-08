@@ -2,7 +2,7 @@
  * Slash-Commands des Geburtstags-Bots: Definition, Registrierung
  * und Chat-Input-Handler.
  *
- * Commands: /setup, /set_bot_profile, /admin_set_birthday,
+ * Commands: /setup, /admin_set_bot_profile, /admin_set_birthday,
  *           /help, /adminpanel
  *
  * Beschreibungen sind in allen 10 Sprachen lokalisiert – jeder Nutzer
@@ -75,9 +75,10 @@ function defineCommands() {
       ),
 
     new SlashCommandBuilder()
-      .setName('set_bot_profile')
+      .setName('admin_set_bot_profile')
       .setDescription('Ändert das Profilbild des Bots auf diesem Server')
       .setDescriptionLocalizations(pick('helpSetProfile'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addStringOption((o) =>
         o
           .setName('image')
@@ -144,7 +145,7 @@ async function handleChatInput(ctx, interaction) {
   switch (interaction.commandName) {
     case 'setup':
       return setupCmd(ctx, interaction);
-    case 'set_bot_profile':
+    case 'admin_set_bot_profile':
       return profileCmd(ctx, interaction);
     case 'admin_set_birthday':
       return adminSetCmd(ctx, interaction);
@@ -189,6 +190,9 @@ async function setupCmd(ctx, interaction) {
     });
   }
 
+  // Acknowledge before network requests so Discord never shows a failed interaction.
+  await interaction.deferReply({ ephemeral: true });
+
   // Bestehende Liste suchen → Einträge übernehmen (Migration, Sprache neu).
   let birthdays = [];
   let migrated = false;
@@ -220,13 +224,10 @@ async function setupCmd(ctx, interaction) {
   if (migrated) {
     desc += `\n\n${t('setupFoundOld', lang)}\n${t('setupMigrated', lang, { count: birthdays.length })}`;
   }
-  return interaction.reply({
-    embeds: [smallEmbed(COLORS.success, null, desc)],
-    ephemeral: true,
-  });
+  return interaction.editReply({ embeds: [smallEmbed(COLORS.success, null, desc)] });
 }
 
-/** /set_bot_profile [image: standard | server | owner] */
+/** /admin_set_bot_profile [image: standard | server | owner] */
 async function profileCmd(ctx, interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply({
@@ -234,8 +235,13 @@ async function profileCmd(ctx, interaction) {
       ephemeral: true,
     });
   }
-  const choice = interaction.options.getString('image');
+  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
+  if (!perms?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({ embeds: [smallEmbed(COLORS.error, null, t('errNoPermission', lang))], ephemeral: true });
+  }
+  await interaction.deferReply({ ephemeral: true });
+  const choice = interaction.options.getString('image');
   const label = t(`profileChoice${choice[0].toUpperCase()}${choice.slice(1)}`, lang);
 
   try {
@@ -250,9 +256,8 @@ async function profileCmd(ctx, interaction) {
       if (choice === 'server') {
         url = interaction.guild.iconURL({ size: 256, extension: 'png' });
         if (!url) {
-          return interaction.reply({
+          return interaction.editReply({
             embeds: [smallEmbed(COLORS.error, null, t('errServerNoIcon', lang))],
-            ephemeral: true,
           });
         }
       } else if (choice === 'owner') {
@@ -260,20 +265,21 @@ async function profileCmd(ctx, interaction) {
         url = owner.displayAvatarURL({ size: 256, extension: 'png' });
       }
       const res = await fetch(url);
+      if (!res.ok) throw new Error(`Avatar konnte nicht geladen werden (${res.status})`);
       const buffer = Buffer.from(await res.arrayBuffer());
-      avatarBase64 = buffer.toString('base64');
+      const contentType = res.headers.get('content-type')?.split(';')[0] || 'image/png';
+      // Discord's REST API requires an image data URI, not bare Base64.
+      avatarBase64 = `data:${contentType};base64,${buffer.toString('base64')}`;
       await ctx.rest.patch(Routes.guildMember(interaction.guild.id, ctx.client.user.id), {
         body: { avatar: avatarBase64 },
       });
     }
-    return interaction.reply({
+    return interaction.editReply({
       embeds: [smallEmbed(COLORS.success, null, t('profileSet', lang, { choice: label }))],
-      ephemeral: true,
     });
   } catch (err) {
-    return interaction.reply({
+    return interaction.editReply({
       embeds: [smallEmbed(COLORS.error, null, t('errAvatar', lang, { error: err.message }))],
-      ephemeral: true,
     });
   }
 }
@@ -320,12 +326,11 @@ async function helpCmd(ctx, interaction) {
   const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
 
   const embed = new EmbedBuilder()
-    .setColor(COLORS.help)
     .setTitle(t('helpTitle', lang))
     .setDescription(t('helpDesc', lang))
     .addFields(
       { name: '/setup', value: t('helpSetup', lang) },
-      { name: '/set_bot_profile', value: t('helpSetProfile', lang) },
+      { name: '/admin_set_bot_profile', value: t('helpSetProfile', lang) },
       { name: '/admin_set_birthday', value: t('helpAdminSet', lang) },
       { name: '/help', value: t('helpHelp', lang) },
       { name: '/adminpanel', value: t('helpAdminPanel', lang) }

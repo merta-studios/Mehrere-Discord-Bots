@@ -17,7 +17,7 @@
  *    Monat um – und hält die Liste so ohne DB aktuell
  *  - Täglicher Check um 0 Uhr: Geburtstagskinder bekommen ein Gruß-Embed
  *    mit Profilbild + „Gratulieren“-Button (Glückwünsche & Anzahl im Embed)
- *  - /set_bot_profile – serverspezifisches Bot-Profilbild
+ *  - /admin_set_bot_profile – serverspezifisches Bot-Profilbild
  *  - /admin_set_birthday – Admins setzen Geburtstage für andere
  *  - /help – Befehlsübersicht
  *  - /adminpanel – Owner-Panel im DM (Serverliste, Einladung, Leave)
