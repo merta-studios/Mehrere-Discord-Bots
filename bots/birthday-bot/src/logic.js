@@ -11,7 +11,7 @@ function pad(n) {
 }
 
 /** Aktuelle Zeit (Jahr/Monat/Tag/Stunde/Minute) in einer Zeitzone. */
-function tzParts(tz) {
+function tzParts(tz, date = new Date()) {
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
     year: 'numeric',
@@ -22,7 +22,7 @@ function tzParts(tz) {
     hourCycle: 'h23',
   });
   const parts = {};
-  for (const p of fmt.formatToParts(new Date())) {
+  for (const p of fmt.formatToParts(date)) {
     if (p.type !== 'literal') parts[p.type] = p.value;
   }
   return {
@@ -60,18 +60,28 @@ function isValidDate(day, month) {
   return day <= daysInMonth(month, 2024); // 2024 = Schaltjahr → erlaubt 29.02.
 }
 
+/** Prüft, ob ein Jahr ein Schaltjahr ist. */
+function isLeapYear(year) {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
 /** Nächstes Vorkommen des Geburtstags (dieses oder nächstes Jahr). */
-function nextOccurrence(day, month, tz) {
-  const t = tzParts(tz);
+function nextOccurrence(day, month, tz, now = new Date()) {
+  const t = tzParts(tz, now);
   let year = t.year;
   if (month < t.month || (month === t.month && day < t.day)) year += 1;
+
+  // Der 29. Februar existiert nur in Schaltjahren. Ohne diese Schleife würde
+  // Date.UTC ein ungültiges 29.02. stillschweigend auf den 01.03. verschieben.
+  while (month === 2 && day === 29 && !isLeapYear(year)) year += 1;
+
   return { year, month, day };
 }
 
 /** Tage bis zum nächsten Vorkommen (heute = 0). */
-function daysUntilNext(day, month, tz) {
-  const next = nextOccurrence(day, month, tz);
-  const t = tzParts(tz);
+function daysUntilNext(day, month, tz, now = new Date()) {
+  const next = nextOccurrence(day, month, tz, now);
+  const t = tzParts(tz, now);
   const a = Date.UTC(next.year, next.month - 1, next.day);
   const b = Date.UTC(t.year, t.month - 1, t.day);
   return Math.round((a - b) / 86400000);
@@ -101,6 +111,7 @@ module.exports = {
   monthOrder,
   daysInMonth,
   isValidDate,
+  isLeapYear,
   nextOccurrence,
   daysUntilNext,
   isWithinSevenDays,

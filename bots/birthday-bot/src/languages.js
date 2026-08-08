@@ -154,6 +154,57 @@ const T = {
     zh: '所有生日一目了然——快来添加你的生日吧！🥳',
     it: 'Tutti i compleanni a colpo d’occhio – aggiungi il tuo! 🥳',
   },
+  // Countdown hinter jeder Erwähnung in der Geburtstagsliste. Die
+  // unterschiedlichen Keys bilden die wichtigsten Pluralformen ab (z. B.
+  // Russisch: 1 день, 2 дня, 5 дней).
+  birthdayInDaysOne: {
+    de: 'in {count} Tag',
+    en: 'in {count} day',
+    fr: 'dans {count} jour',
+    es: 'en {count} día',
+    pt: 'em {count} dia',
+    ru: 'через {count} день',
+    ja: 'あと{count}日',
+    ko: '{count}일 후',
+    zh: '{count}天后',
+    it: 'tra {count} giorno',
+  },
+  birthdayInDaysFew: {
+    de: 'in {count} Tagen',
+    en: 'in {count} days',
+    fr: 'dans {count} jours',
+    es: 'en {count} días',
+    pt: 'em {count} dias',
+    ru: 'через {count} дня',
+    ja: 'あと{count}日',
+    ko: '{count}일 후',
+    zh: '{count}天后',
+    it: 'tra {count} giorni',
+  },
+  birthdayInDaysMany: {
+    de: 'in {count} Tagen',
+    en: 'in {count} days',
+    fr: 'dans {count} jours',
+    es: 'en {count} días',
+    pt: 'em {count} dias',
+    ru: 'через {count} дней',
+    ja: 'あと{count}日',
+    ko: '{count}일 후',
+    zh: '{count}天后',
+    it: 'tra {count} giorni',
+  },
+  birthdayInDaysOther: {
+    de: 'in {count} Tagen',
+    en: 'in {count} days',
+    fr: 'dans {count} jours',
+    es: 'en {count} días',
+    pt: 'em {count} dias',
+    ru: 'через {count} дня',
+    ja: 'あと{count}日',
+    ko: '{count}일 후',
+    zh: '{count}天后',
+    it: 'tra {count} giorni',
+  },
   listEmpty: {
     de: 'Noch niemand eingetragen. Klicke unten auf den Button und sei die/der Erste! 🎈',
     en: 'Nobody has entered a birthday yet. Click the button below and be the first! 🎈',
@@ -1015,10 +1066,28 @@ function formatBirthday(day, month, lang) {
   );
 }
 
+/**
+ * Formatiert den Countdown hinter einer Geburtstags-Erwähnung.
+ * Für die meisten Sprachen reicht die Unterscheidung 1/mehrere; Russisch
+ * benötigt zusätzlich die Formen für 2–4 und 5–20 (inkl. der Zehnerregeln).
+ */
+function formatDaysUntil(days, lang) {
+  const count = Math.max(0, Math.round(Number(days) || 0));
+  let category = count === 1 ? 'one' : 'other';
+
+  if (lang === 'ru') {
+    category = new Intl.PluralRules('ru').select(count);
+  }
+
+  const suffix = category[0].toUpperCase() + category.slice(1);
+  const key = `birthdayInDays${suffix}`;
+  return t(key, lang, { count });
+}
+
 /** Formatiert das aktuelle Datum (voll, inkl. Wochentag) in Sprache + Zeitzone. */
-function formatToday(lang) {
+function formatToday(lang, date = new Date()) {
   const locale = (LANGS[lang] && LANGS[lang].locale) || 'en-US';
-  return new Intl.DateTimeFormat(locale, { dateStyle: 'full', timeZone: tzOf(lang) }).format(new Date());
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'full', timeZone: tzOf(lang) }).format(date);
 }
 
 // --- Fuzzy-Monatserkennung ------------------------------------------------
@@ -1151,4 +1220,15 @@ function langFromDiscord(locale) {
   return DISCORD_LOCALE_MAP[locale] || 'en';
 }
 
-module.exports = { LANGS, T, t, tzOf, formatBirthday, formatToday, matchMonth, langFromDiscord, DISCORD_LOCALE };
+module.exports = {
+  LANGS,
+  T,
+  t,
+  tzOf,
+  formatBirthday,
+  formatDaysUntil,
+  formatToday,
+  matchMonth,
+  langFromDiscord,
+  DISCORD_LOCALE,
+};

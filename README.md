@@ -166,7 +166,7 @@ Die Geburtstagsliste nutzt **Discord Layout Components (Components V2)**:
 - **Titel oben beim Datum:** Der Titel `🎂 Geburtstage` steht direkt oben beim Tagesdatum.
 - **Keine störenden Footer:** Keine Zeitzonen-/Sprach-Fußzeilen oder Zeitstempel mehr am Ende.
 - **Trennlinien & Buttons direkt im Container:** Trennlinien (Dividers) und Buttons (`bday_add` etc.) sind direkt in den Container integriert.
-- Es werden nur Monate mit Einträgen angezeigt; jede Zeile ist `04.09 | @Nutzer`.
+- Es werden nur Monate mit Einträgen angezeigt; jede Zeile ist `04.09 | @Nutzer – in 27 Tagen` (der Countdown steht in der jeweiligen Listensprache und wird automatisch aktualisiert).
 - Der Bot findet seine Liste selbst wieder, liest alle Einträge neu aus und aktualisiert sich selbst.
 
 **Stündlich** wird die Liste neu gebaut:
