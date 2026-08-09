@@ -3,6 +3,7 @@ const { t, langFromDiscord } = require('./languages');
 const { smallContainer } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
+const { MODAL_ID, handleLevelRolesModalSubmit } = require('./level-roles');
 
 async function handleInteraction(ctx, interaction){
   try {
@@ -15,6 +16,9 @@ async function handleInteraction(ctx, interaction){
     }
     if (interaction.isStringSelectMenu()){
       if (interaction.customId.startsWith(PANEL_PREFIX)) return await handlePanelSelect(ctx, interaction);
+    }
+    if (interaction.isModalSubmit()){
+      if (interaction.customId === MODAL_ID) return await handleLevelRolesModalSubmit(ctx, interaction);
     }
     return null;
   } catch(err){

@@ -86,7 +86,7 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
       const guild = client.guilds.cache.get(sess.guildId);
       if (!guild) { sessions.delete(k); continue; }
       const cfg = getGuildConfig(sess.guildId);
-      if (!cfg) continue; // nicht eingerichtet
+      if (!cfg || !cfg.leaderboardChannelId) continue; // nicht eingerichtet
       const channel = guild.channels.cache.get(sess.channelId);
       if (!channel || !channel.isVoiceBased?.()) { sessions.delete(k); continue; }
 
@@ -146,7 +146,7 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
   async function grantVoiceXp(guildId, userId, voiceChannel){
     try {
       const cfg = getGuildConfig(guildId);
-      if (!cfg) return;
+      if (!cfg || !cfg.leaderboardChannelId) return;
       const user = store.ensureUser(guildId, userId);
       const beforeLevel = user.level;
       const { applyXpGain, xpNeeded } = require('./logic');

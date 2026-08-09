@@ -6,6 +6,10 @@
  *  - /setup [leaderboard] [mainchat] [language] – nur Admins, 10 Sprachen
  *  - XP pro Nachricht: Worte zählen (Leerzeichen+Zeilen), Spam-Erkennung krass,
  *    3XP pro Wort bis max 30XP, 30s Cooldown
+ *  - Medien-XP: Bilder, Videos, Sprachnachrichten & Sticker geben ausgeglichen 15XP
+ *  - Level-Up-Zeile als "## "-Heading (Markdown Lv2) – größerer Text
+ *  - Level-Rollen: /level_roles (Admin-Formular) erstellt/sortiert Belohnungsrollen,
+ *    Sync bei Level Up/Down (mehrere Rollen, nie entfernen)
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
  *  - Täglich 0 Uhr (TZ pro Sprache): 5,5% Decay, Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
  *  - Voice 25XP/min: nicht muted, mit mind. 1 anderer, >=5s gesprochen, Pause nötig
@@ -17,7 +21,7 @@
  * ============================================================================
  */
 
-const { GatewayIntentBits, ActivityType, Events, ChannelType, PermissionsBitField } = require('discord.js');
+const { GatewayIntentBits, ActivityType, Events, ChannelType, PermissionsBitField, MessageFlags } = require('discord.js');
 
 const { createXpStore } = require('./src/store');
 const { registerCommands } = require('./src/commands');
@@ -25,6 +29,7 @@ const { handleInteraction } = require('./src/interactions');
 const { sendJoinNotice } = require('./src/admin-panel');
 const { startScheduler } = require('./src/scheduler');
 const { createVoiceTracker } = require('./src/voice');
+const { syncLevelRolesForUser } = require('./src/level-roles');
 
 module.exports = {
   id: 'xp-level-bot',
@@ -165,19 +170,28 @@ module.exports = {
         if (msg.system) return;
 
         const cfg = store.getGuild(msg.guild.id);
-        if (!cfg) return; // nicht eingerichtet
+        // nicht eingerichtet (oder nur Level-Rollen ohne /setup): kein XP
+        if (!cfg || !cfg.leaderboardChannelId) return;
 
         // Optional: ignorieren falls Nachricht von Webhook? Lassen wir zu
         const content = msg.content || '';
-        if (!content.trim()) return;
+
+        // Medien (Bilder, Videos, Sprachnachrichten, Sticker) zählen als XP-Träger
+        const hasMedia = Boolean(
+          (msg.attachments && msg.attachments.some((a) => /^(image|video|audio)\//i.test(a.contentType || a.content_type || '')))
+          || (msg.stickers && msg.stickers.size > 0)
+          || (msg.flags && msg.flags.has(MessageFlags.IsVoiceMessage))
+        );
+        if (!content.trim() && !hasMedia) return;
 
         const { calculateXpForMessage, isSpamMessage, isOnCooldown, applyXpGain } = require('./src/logic');
 
         // Spam Gesamtnachricht? Krass Erkennung – wenn Nachricht als Spam gilt, kein XP
-        if (isSpamMessage(content)) return;
+        // (nur bei Text-Inhalt; reine Medien-Nachrichten sind von Natur aus nicht spam-bar)
+        if (content.trim() && isSpamMessage(content)) return;
 
-        const { valid, xp } = calculateXpForMessage(content);
-        if (xp <= 0 || valid === 0) return;
+        const { valid, xp } = calculateXpForMessage(content, { hasMedia });
+        if (xp <= 0) return;
 
         const user = store.ensureUser(msg.guild.id, msg.author.id);
         if (isOnCooldown(user.lastXpGain, Date.now())) return;
@@ -211,6 +225,12 @@ module.exports = {
       try {
         await ensureNickname(ctx, guild, user.userId, res.level, lang);
       } catch(e){ logger.warn('[xp-level-bot] nick update fail', e.message); }
+
+      // Level-Rollen synchronisieren: fehlende Rollen adden (mehrere möglich),
+      // vorhandene werden bei Level-Down nie entfernt
+      try {
+        await syncLevelRolesForUser({ ctx, guild, userId: user.userId, level: res.level });
+      } catch(e){ logger.warn('[xp-level-bot] level roles sync fail', e.message); }
 
       // Announcement: versuche erst bei der Nachricht zu replyen, sonst Haupt-Chat
       const container = res.leveledUp ? buildLevelUpEmbed({lang, userId:user.userId, level:res.level, xp:res.xp})
@@ -267,6 +287,9 @@ module.exports = {
         if (!cfg) return;
         const existing = store.getUser(member.guild.id, member.id);
         const level = existing ? existing.level : 1;
+        // Level-Rollen beim Beitritt direkt vergeben (unabhängig vom /setup-Status)
+        await syncLevelRolesForUser({ ctx, guild: member.guild, userId: member.id, level }).catch(()=>{});
+        if (!cfg.leaderboardChannelId) return; // kein XP-Setup -> Nickname erst nach /setup
         await ensureNickname(ctx, member.guild, member.id, level, cfg.lang);
       } catch(e){ logger.warn('[xp-level-bot] guildMemberAdd nick fail', e.message); }
     });

@@ -18,9 +18,16 @@ const {
   formatNickname,
   stripLvlTag,
   xpNeeded,
+  MEDIA_XP,
+  calculateXpForMessage,
+  parseLevelList,
+  formatRoleName,
+  roleNamePattern,
 } = require('../bots/xp-level-bot/src/logic');
-const { t } = require('../bots/xp-level-bot/src/languages');
+const { t, LANGS } = require('../bots/xp-level-bot/src/languages');
 const { sendJoinNotice } = require('../bots/xp-level-bot/src/admin-panel');
+const { buildModal, syncMemberLevelRoles } = require('../bots/xp-level-bot/src/level-roles');
+const { buildLevelUpEmbed } = require('../bots/xp-level-bot/src/embed-builder');
 
 // ---------------------------------------------------------------------------
 // Nickname-Format
@@ -159,4 +166,168 @@ test('rankBody: Fortschrittszeile passt bei ein- und zweistelligen Prozenten', (
     const maxFit = p <= 99 ? 32 : 33;
     assert.ok(len <= maxFit, `${p}% macht die Zeile zu lang (${len})`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Level-Up-Nachricht: „## “-Heading für die Level-Up-Zeile
+// ---------------------------------------------------------------------------
+
+test('buildLevelUpEmbed: Level-Up-Zeile nutzt "## "-Heading (größerer Text)', () => {
+  const container = buildLevelUpEmbed({ lang: 'de', userId: '123', level: 5, xp: 10 });
+  const json = container.toJSON();
+  const text = JSON.stringify(json);
+  assert.ok(text.includes('## 🎉 <@123> ist auf Level 5 aufgestiegen!'), `Level-Up-Text fehlt oder ohne ##: ${text}`);
+});
+
+// ---------------------------------------------------------------------------
+// Medien-XP: Bilder, Videos, Sprachnachrichten & Sticker
+// ---------------------------------------------------------------------------
+
+test('calculateXpForMessage: Nur-Medien-Nachricht gibt ausgeglichene 15 XP', () => {
+  const res = calculateXpForMessage('', { hasMedia: true });
+  assert.equal(res.valid, 0);
+  assert.equal(res.xp, MEDIA_XP);
+  assert.equal(res.xp, 15);
+  assert.equal(res.media, true);
+});
+
+test('calculateXpForMessage: ohne Medien gibt eine leere Nachricht 0 XP', () => {
+  const res = calculateXpForMessage('', { hasMedia: false });
+  assert.equal(res.xp, 0);
+});
+
+test('calculateXpForMessage: Text + Medien gibt Bonus, aber nie über 30 XP', () => {
+  const textOnly = calculateXpForMessage('Hallo du da', { hasMedia: false }).xp; // 3 Wörter = 9 XP
+  const withMedia = calculateXpForMessage('Hallo du da', { hasMedia: true });
+  assert.ok(withMedia.xp > textOnly, `mit Medien sollte mehr XP geben (${withMedia.xp} vs ${textOnly})`);
+  assert.ok(withMedia.xp <= 30, `Cap von 30 XP verletzt: ${withMedia.xp}`);
+  const maxText = calculateXpForMessage('eins zwei drei vier fünf sechs sieben acht neun zehn', { hasMedia: true });
+  assert.equal(maxText.xp, 30);
+});
+
+// ---------------------------------------------------------------------------
+// Level-Rollen: Eingabe-Parsing (Kommas, Leerzeichen, Tippfehler)
+// ---------------------------------------------------------------------------
+
+test('parseLevelList: kommagetrennte Eingaben werden sortiert & dedupliziert', () => {
+  assert.deepEqual(parseLevelList('3,6,10,20'), [3, 6, 10, 20]);
+  assert.deepEqual(parseLevelList('20,3,10,6'), [3, 6, 10, 20]); // unsortiert -> sortiert
+  assert.deepEqual(parseLevelList('3, 6, 10, 20'), [3, 6, 10, 20]);
+  assert.deepEqual(parseLevelList('3,,6,,10'), [3, 6, 10]); // doppelte Kommas
+  assert.deepEqual(parseLevelList('3,6,3,6,10'), [3, 6, 10]); // Duplikate
+});
+
+test('parseLevelList: Leerzeichen, Semikolon und Punkte als Trenner', () => {
+  assert.deepEqual(parseLevelList('3 6 10 20'), [3, 6, 10, 20]);
+  assert.deepEqual(parseLevelList('3;6;10'), [3, 6, 10]);
+  assert.deepEqual(parseLevelList('3.6.10.20'), [3, 6, 10, 20]);
+});
+
+test('parseLevelList: korrigiert Verwechslungs-Buchstaben (1O -> 10, l3 -> 13)', () => {
+  assert.deepEqual(parseLevelList('3,6,1O,2O'), [3, 6, 10, 20]);
+  assert.deepEqual(parseLevelList('l3, 6'), [6, 13]); // l -> 1, also 13
+  assert.deepEqual(parseLevelList('3b'), [38]); // b -> 8
+});
+
+test('parseLevelList: versteht "Level 6"/"lvl6"/"6lvl" und ignoriert Unverständliches', () => {
+  assert.deepEqual(parseLevelList('Level 3, lvl6, 10'), [3, 6, 10]);
+  assert.deepEqual(parseLevelList('6lvl'), [6]);
+  assert.deepEqual(parseLevelList('abc, xyz, 5'), [5]); // Müll wird ignoriert
+  assert.equal(parseLevelList('abc, xyz'), null);
+  assert.equal(parseLevelList(''), null);
+  assert.equal(parseLevelList('   , ,  '), null);
+});
+
+test('parseLevelList: begrenzt auf 1..100 (Max-Level des Bots)', () => {
+  assert.deepEqual(parseLevelList('3,150,0,-5,100'), [3, 100]);
+});
+
+// ---------------------------------------------------------------------------
+// Level-Rollen: Namens-Format & Erkennung alter Rollen
+// ---------------------------------------------------------------------------
+
+test('formatRoleName: ersetzt {LEVEL} (case-insensitiv) durch die Zahl', () => {
+  assert.equal(formatRoleName('Level {LEVEL}', 3), 'Level 3');
+  assert.equal(formatRoleName('Lvl {level}', 12), 'Lvl 12');
+  assert.equal(formatRoleName('⭐ {LEVEL} ⭐', 7), '⭐ 7 ⭐');
+});
+
+test('roleNamePattern: erkennt bestehende Level-Rollen im gespeicherten Format', () => {
+  const pattern = roleNamePattern('Level {LEVEL}');
+  assert.ok(pattern.test('Level 3'));
+  assert.ok(pattern.test('level 20'));
+  assert.ok(!pattern.test('Leveler 3'));
+  assert.ok(!pattern.test('Level X'));
+  assert.ok(roleNamePattern('Lvl {LEVEL}').test('Lvl 10'));
+});
+
+// ---------------------------------------------------------------------------
+// Level-Rollen: Formular (Modal)
+// ---------------------------------------------------------------------------
+
+test('buildModal: Standardwerte "Level {LEVEL}" und "3,6,10,20" sind vorausgefüllt', () => {
+  const modal = buildModal({ lang: 'de', cfg: null });
+  const fields = modal.toJSON().components.map((row) => row.components[0]);
+  assert.equal(fields.length, 2);
+  const formatField = fields.find((f) => f.custom_id === 'xp_lvlroles_format');
+  const levelsField = fields.find((f) => f.custom_id === 'xp_lvlroles_levels');
+  assert.equal(formatField.value, 'Level {LEVEL}');
+  assert.equal(levelsField.value, '3,6,10,20');
+  assert.equal(formatField.required, true);
+  assert.equal(levelsField.required, true);
+});
+
+test('buildModal: übernimmt bestehende Konfiguration als Vorgabe', () => {
+  const modal = buildModal({ lang: 'de', cfg: { levelRoleTemplate: 'Lvl {LEVEL}', levelRoleLevels: [5, 10, 25] } });
+  const fields = modal.toJSON().components.map((row) => row.components[0]);
+  assert.equal(fields.find((f) => f.custom_id === 'xp_lvlroles_format').value, 'Lvl {LEVEL}');
+  assert.equal(fields.find((f) => f.custom_id === 'xp_lvlroles_levels').value, '5,10,25');
+});
+
+test('buildModal: Labels bleiben in allen 10 Sprachen unter 45 Zeichen (Discord-Limit)', () => {
+  for (const code of Object.keys(LANGS)) {
+    assert.ok(t('levelRolesFormatLabel', code).length <= 45, `levelRolesFormatLabel (${code}) zu lang: ${t('levelRolesFormatLabel', code).length}`);
+    assert.ok(t('levelRolesLevelsLabel', code).length <= 45, `levelRolesLevelsLabel (${code}) zu lang: ${t('levelRolesLevelsLabel', code).length}`);
+    assert.ok(t('levelRolesModalTitle', code).length <= 45, `levelRolesModalTitle (${code}) zu lang`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Level-Rollen: Sync (mehrere Rollen adden, nie entfernen)
+// ---------------------------------------------------------------------------
+
+test('syncMemberLevelRoles: addet alle passenden Rollen (Level 6 -> Rollen 3 + 6)', async () => {
+  const added = [];
+  const member = {
+    roles: {
+      cache: new Map([['role-10', { id: 'role-10' }]]), // hat schon Level-10-Rolle
+      add: async (ids) => { added.push(...ids); },
+    },
+  };
+  const cfg = { levelRoleIds: { 3: 'role-3', 6: 'role-6', 10: 'role-10', 20: 'role-20' } };
+  const count = await syncMemberLevelRoles({ member, level: 6, cfg });
+  assert.equal(count, 2);
+  assert.deepEqual(added.sort(), ['role-3', 'role-6']);
+});
+
+test('syncMemberLevelRoles: bei Level-Down wird nichts entfernt, nur ergänzt', async () => {
+  const added = [];
+  const member = {
+    roles: {
+      cache: new Map([['role-3', { id: 'role-3' }], ['role-6', { id: 'role-6' }]]),
+      add: async (ids) => { added.push(...ids); },
+    },
+  };
+  const cfg = { levelRoleIds: { 3: 'role-3', 6: 'role-6' } };
+  const count = await syncMemberLevelRoles({ member, level: 4, cfg }); // von 6 auf 4 abgestiegen
+  assert.equal(count, 0); // Rolle 6 bleibt (wird nie entfernt), Rolle 3 ist schon da
+  assert.deepEqual(added, []);
+});
+
+test('syncMemberLevelRoles: ohne konfigurierte Rollen passiert nichts', async () => {
+  let called = false;
+  const member = { roles: { cache: new Map(), add: async () => { called = true; } } };
+  const count = await syncMemberLevelRoles({ member, level: 5, cfg: null });
+  assert.equal(count, 0);
+  assert.equal(called, false);
 });

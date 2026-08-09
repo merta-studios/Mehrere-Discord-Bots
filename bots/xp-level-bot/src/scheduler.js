@@ -9,6 +9,7 @@ const { todayKey, tzParts } = require('./logic');
 const { tzOf } = require('./languages');
 const { buildLeaderboardEmbed } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
+const { syncLevelRolesForUser } = require('./level-roles');
 
 const MINUTE_MS = 60_000;
 
@@ -85,6 +86,8 @@ async function applyDailyDecayForGuild(ctx, entry, guild){
         await ch.send(componentsV2Payload([container])).catch(()=>{});
         // Nick update
         await updateNicknameForUser(ctx, guild, ld.userId, ld.level, lang);
+        // Level-Rollen: fehlende adden, vorhandene werden nie entfernt
+        await syncLevelRolesForUser({ ctx, guild, userId: ld.userId, level: ld.level }).catch(()=>{});
       } catch{}
     }
     // Nach decay Leaderboard direkt aktualisieren

@@ -53,8 +53,15 @@ function createXpStore({ logger, env }) {
       main_channel_id TEXT NOT NULL,
       lang TEXT NOT NULL,
       leaderboard_message_id TEXT,
-      last_daily_decay TEXT
+      last_daily_decay TEXT,
+      level_role_template TEXT,
+      level_role_levels TEXT,
+      level_role_ids TEXT
     );`);
+    // Migration für Bestands-Tabellen (ältere DBs ohne die Level-Rollen-Spalten)
+    for (const col of ['level_role_template TEXT', 'level_role_levels TEXT', 'level_role_ids TEXT']) {
+      try { await db.execute(`ALTER TABLE guild_configs ADD COLUMN ${col}`); } catch {}
+    }
     await db.execute(`CREATE TABLE IF NOT EXISTS user_levels (
       guild_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
@@ -65,6 +72,11 @@ function createXpStore({ logger, env }) {
     );`);
     // Index für schnelle leaderboard queries falls direkt DB genutzt wird
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_user_levels_guild ON user_levels(guild_id);`);
+  }
+
+  function parseJsonCol(value, fallback = null) {
+    if (value == null || value === '') return fallback;
+    try { return JSON.parse(value); } catch { return fallback; }
   }
 
   async function loadFromDb() {
@@ -78,6 +90,9 @@ function createXpStore({ logger, env }) {
         lang: row.lang,
         leaderboardMessageId: row.leaderboard_message_id || null,
         lastDailyDecay: row.last_daily_decay || null,
+        levelRoleTemplate: row.level_role_template || null,
+        levelRoleLevels: parseJsonCol(row.level_role_levels, null),
+        levelRoleIds: parseJsonCol(row.level_role_ids, null),
       });
     }
     const uRes = await db.execute('SELECT * FROM user_levels');
@@ -233,15 +248,28 @@ function createXpStore({ logger, env }) {
           const g = guilds.get(gid);
           if (!g) continue;
           statements.push({
-            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay)
-                  VALUES (?, ?, ?, ?, ?, ?)
+            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id) DO UPDATE SET
                     leaderboard_channel_id=excluded.leaderboard_channel_id,
                     main_channel_id=excluded.main_channel_id,
                     lang=excluded.lang,
                     leaderboard_message_id=excluded.leaderboard_message_id,
-                    last_daily_decay=excluded.last_daily_decay`,
-            args: [g.guildId, g.leaderboardChannelId, g.mainChannelId, g.lang, g.leaderboardMessageId || null, g.lastDailyDecay || null]
+                    last_daily_decay=excluded.last_daily_decay,
+                    level_role_template=excluded.level_role_template,
+                    level_role_levels=excluded.level_role_levels,
+                    level_role_ids=excluded.level_role_ids`,
+            args: [
+              g.guildId,
+              g.leaderboardChannelId || '',
+              g.mainChannelId || '',
+              g.lang || 'de',
+              g.leaderboardMessageId || null,
+              g.lastDailyDecay || null,
+              g.levelRoleTemplate || null,
+              g.levelRoleLevels ? JSON.stringify(g.levelRoleLevels) : null,
+              g.levelRoleIds ? JSON.stringify(g.levelRoleIds) : null,
+            ]
           });
         }
         for (const key of dirtyUsers) {

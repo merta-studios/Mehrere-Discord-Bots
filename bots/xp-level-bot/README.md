@@ -1,6 +1,6 @@
 # ⭐ XP Level Bot – RAM-first, Turso-persistiert, 10 Sprachen, krasses Design
 
-> **Leveln durch Chatten!** 3 XP pro echtem Wort (max 30 XP), 30s Cooldown gegen Spam, Voice 25 XP/Minute, täglicher 5,5%-Schwund um Mitternacht, Leaderboard Top15 stündlich – alles in 10 Sprachen, modernen Components V2 & mit Turso so sparsam wie möglich!
+> **Leveln durch Chatten!** 3 XP pro echtem Wort (max 30 XP) + **15 XP für Bilder, Videos & Sprachnachrichten**, 30s Cooldown gegen Spam, Voice 25 XP/Minute, täglicher 5,5%-Schwund um Mitternacht, Leaderboard Top15 stündlich, **Level-Belohnungsrollen per Formular** – alles in 10 Sprachen, modernen Components V2 & mit Turso so sparsam wie möglich!
 
 Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche Container-Optik (kein Farbrand, Divider, Buttons im Container), gleiche `/adminpanel` Logik, gleiche 10-Sprachen-Datei, gleicher `/admin_set_bot_profile`.
 
@@ -11,7 +11,7 @@ Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche 
 | Mechanik | Details |
 |---|---|
 | **Start** | Jeder startet bei **Lvl 1, 0 XP**. |
-| **Nachrichten-XP** | Worte werden an Leerzeichen/Zeilenumbrüchen gezählt. **Krasse Spam-Erkennung**: doppelte Leerzeichen ≠ extra Wort, nur Tokens mit Buchstaben, keine URLs/Mentions/Emojis als Wort, keine `aaaaa`/`lololol`/`abcabc` Spams, Buchstaben-Anteil ≥60% etc. **1 Wort = 3 XP … 10+ Worte = 30 XP (max)**. |
+| **Nachrichten-XP** | Worte werden an Leerzeichen/Zeilenumbrüchen gezählt. **Krasse Spam-Erkennung**: doppelte Leerzeichen ≠ extra Wort, nur Tokens mit Buchstaben, keine URLs/Mentions/Emojis als Wort, keine `aaaaa`/`lololol`/`abcabc` Spams, Buchstaben-Anteil ≥60% etc. **1 Wort = 3 XP … 10+ Worte = 30 XP (max)**. **Bilder, Videos, Sprachnachrichten & Sticker** geben **15 XP** pro Nachricht (entspricht einem 5-Wörter-Text – ausgeglichen, nicht overpowered); Text + Medien zusammen sind auf 30 XP gedeckelt. Gleicher 30s-Cooldown wie bei Text. |
 | **Cooldown** | Nach XP-Gewinn **30 Sekunden** kein XP mehr. |
 | **Level-Kurve** | `XP benötigt ≈ 80 + 13.9·(lvl-1) + 0.058·(lvl-1)²` → Lvl1→2 **80 XP**, Lvl99→100 **1999 XP**. Fast linear, kaum spürbar schwerer, aber schön kurvig & konstantes Belohnungsgefühl. Bei Aufstieg wird XP auf **0 resettet** (Überschuss verfällt). Max Lvl 100. |
 | **Täglicher Schwund** | **Jeden Tag um 0 Uhr** (Zeitzone der Server-Sprache) verliert jeder **5,5%** der für sein nächstes Level nötigen XP (`ceil(needed*0.055)`). Fällt XP dabei unter 0, **verlierst du ein Level** und der fehlende Restbetrag wird korrekt vom vorherigen Level abgezogen – also kein pauschales `93%` mehr. Viel chatten verhindert Abstieg! ⚠️ Hinweis steht auch im Leaderboard. |
@@ -19,7 +19,8 @@ Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche 
 | **Verlassen** | Wer den Server verlässt, verliert alle Level/XP sofort (Daten gelöscht). |
 | **Nickname** | Sofort nach Level Up/Down: `[Lvl {LVL} 🥇] Anzeigename` – nur die **Top 3** bekommen eine Medaille (`🥇🥈🥉`) in den Nicknamen. Wird bestehender Tag überschrieben, bei >32 Zeichen wird Anzeigename rechts gekürzt. Kann Bot nicht umbenennen → Ping im Haupt-Chat: „Ich brauche Rolle über allen anderen!“ (Ausnahme: der **Server-Owner** bekommt diesen Hinweis nicht, da Discord es nie erlaubt, ihn umzubenennen). |
 | **Leaderboard** | Stündlich aktualisiert, **Top15** nach Level → XP, mit **letzter Aktualisierung + Zeitzone** & Stunden-Hinweis & Schwund-Warnung. Marker `xp_leader::v1::` für Self-Healing. |
-| **Announcements** | Bei Auf-/Abstieg **Reply auf die auslösende Nachricht** (oder Haupt-Chat als Fallback), User-Mention, neues Level + `xp/needed XP`, auf Server-Sprache. |
+| **Announcements** | Bei Auf-/Abstieg **Reply auf die auslösende Nachricht** (oder Haupt-Chat als Fallback), User-Mention, neues Level + `xp/needed XP`, auf Server-Sprache. Die **Level-Up-Zeile** wird als **`## `-Heading (Markdown Level 2)** dargestellt – der Text ist dadurch etwas größer und sticht sofort ins Auge. |
+| **Belohnungsrollen** | `/level_roles` (Admin) öffnet ein **Formular**: Feld 1 = Rollen-Format (Standard `Level {LEVEL}`, `{LEVEL}` ist der Platzhalter für die Zahl), Feld 2 = Level-Zahlen kommagetrennt (Standard `3,6,10,20`; Leerzeichen, doppelte Kommas, Punkte & Tippfehler wie `1O` werden intelligent korrigiert, Unverständliches wird ignoriert). Beim Absenden **löscht der Bot alte Level-Rollen** (per gespeicherter ID oder Namens-Muster), **erstellt neue, sortiert aufsteigend** und legt sie **ganz unten** in der Rollenliste ab – **mehr Level = weiter oben**. Antwort: „Erledigt – du kannst Farben & Namen jetzt manuell anpassen“ + Liste. Bei **Level Up UND Level Down** werden danach alle fehlenden Level-Rollen vergeben (mehrere möglich: Level 6 bekommt z.B. Rolle 3 **und** 6) – vorhandene Rollen werden **nie entfernt** (auch nicht bei Abstieg). |
 
 ---
 
@@ -29,7 +30,8 @@ Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche 
 |---|---|---|
 | `/setup <leaderboard> <mainchat> <language>` | **Admin** | Richtet System ein: Leaderboard-Kanal, Haupt-Chat (Level-Ups & Nick-Fehler) & Sprache (10 zur Wahl). Erstellt sofort das Leaderboard, löscht alte. `BIRTHDAY_BOT` Style mit Ephemeral-Bestätigung. |
 | `/rank` | **Alle** | Zeigt deinen Platz im Server (von allen), Level, `xp/needed`, Fortschritts-Balken `████░░░░`, fehlende XP & Tipp. Auf Server-Sprache, ephemeral. |
-| `/help` | **Alle** | Container-Übersicht aller Commands (Setup, Rank, Help, Profile) – wie Birthday Bot. |
+| `/level_roles` | **Admin** | Öffnet ein Formular zum Anpassen der Level-Belohnungsrollen: Rollen-Format (Standard `Level {LEVEL}`) + Level-Zahlen (Standard `3,6,10,20`). Erstellt/löscht & sortiert die Rollen automatisch (ganz unten, mehr Level = weiter oben) und antwortet mit „Erledigt…“. Alte Level-Rollen werden bei erneuter Nutzung ersetzt. |
+| `/help` | **Alle** | Container-Übersicht aller Commands (Setup, Rank, Level-Rollen, Help, Profile) – wie Birthday Bot. |
 | `/admin_set_bot_profile <image>` | **Admin** | Ändert **serverspezifisches** Bot-Avatar: `standard` (reset), `server` (Server-Icon), `owner` (Owner-Avatar) via `PATCH /guilds/{id}/members/@me` – kein 405! |
 | `/adminpanel` | **Nur Owner im DM** | Serverliste paginiert (5/Seite, 🔴 ohne Owner zuerst), Detail mit Owner, Member, XP-Status, Buttons `Einladung` (1h/1×) & `Verlassen` (Confirm). |
 
@@ -64,7 +66,7 @@ Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche 
    - ✅ `SERVER MEMBERS INTENT`
    - ✅ `MESSAGE CONTENT INTENT`
    - ✅ `GUILD VOICE STATES` (für Voice-XP, automatisch via `GuildVoiceStates` Intent)
-4. **OAuth2 → URL Generator** → Scopes `bot` + `applications.commands` → Perms: `View Channels`, `Send Messages`, `Manage Messages` (Leaderboard Edit), `Change Nickname`, `Create Instant Invite`, `Use Voice Activity` → URL öffnen & einladen.
+4. **OAuth2 → URL Generator** → Scopes `bot` + `applications.commands` → Perms: `View Channels`, `Send Messages`, `Manage Messages` (Leaderboard Edit), `Change Nickname`, `Manage Roles` (für Level-Belohnungsrollen), `Create Instant Invite`, `Use Voice Activity` → URL öffnen & einladen.
 5. Bot-Rolle **ganz nach oben ziehen** (Server-Einstellungen → Rollen) – sonst kann er keine Nicknames ändern (Owner sowieso nicht).
 
 ### 2. Turso anlegen (einmalig)
@@ -134,6 +136,8 @@ Wie Birthday Bot 100% Components V2:
 ## 🔧 Troubleshooting
 
 - **Leaderboard erscheint nicht?** Bot braucht `View Channel` + `Send Messages` in beiden Setup-Kanälen. `/setup` neu ausführen.
+- **Level-Rollen werden nicht erstellt?** Bot braucht die Berechtigung **`Manage Roles`** (Rollen verwalten). Nach dem `/level_roles`-Formular antwortet er sonst mit einem Hinweis.
+- **Rollen erscheinen nicht im Sync?** Nach dem Einrichten zieht der Bot bestehende Mitglieder automatisch nach (best effort). Spätestens beim nächsten Level-Up/Down oder Serverbeitritt werden die Rollen vergeben.
 - **Nicknames ändern nicht?** Rolle nach oben ziehen, `Change Nickname` geben. Owner kann nie umbenannt werden → er bekommt daher auch keinen Hinweis (für alle anderen pingt der Bot einmal pro Stunde im Haupt-Chat).
 - **Voice-XP kommt nicht?** Mind. 2 unmuted Personen, 5s reden, Pause. Bot muss nicht im Channel sein – Heuristik über Mute-Toggles + Präsenz.
 - **Täglicher Decay zu hart?** 5,5% ist moderat (bei Lvl50 ≈50 XP, bei Lvl1 ≈5 XP). Viel chatten = easy halten.
