@@ -467,6 +467,38 @@ test('Erneutes Absenden nach „Bearbeiten“ ersetzt die ephemere Bestätigung 
   assert.equal(pending.month, newer.month, 'Neuer Monat übernommen');
 });
 
+test('Gratulieren: Geburtstagskind kann sich nicht selbst gratulieren', async () => {
+  const h = makeHarness();
+  const uid = 'bday1';
+  const dateKey = '2026-12-31';
+  const { container } = require('../bots/birthday-bot/src/embed-builder').buildCongratsEmbed({
+    member: { id: uid },
+    lang: 'de',
+    dateKey,
+    wishes: [],
+  });
+  const msg = {
+    components: [container.toJSON()],
+    id: 'congrats1',
+    delete: async () => {},
+  };
+
+  await handleInteraction(
+    h.ctx,
+    h.makeInteraction({
+      customId: `bday_congrats_${uid}_${dateKey}`,
+      user: { id: uid, username: 'Geburtstagskind' },
+      message: msg,
+    })
+  );
+
+  assert.equal(h.updates.length, 0, 'Der Glückwunsch-Container bleibt unverändert');
+  assert.equal(h.follows.length, 0, 'Es wird keine Erfolgsbestätigung gesendet');
+  assert.equal(h.replies.length, 1, 'Das Geburtstagskind bekommt einen Hinweis');
+  assert.match(extractAllText(h.replies[0]), /nicht selbst/i);
+  assert.doesNotMatch(extractAllText(msg), /Glückwünsche \(1\)/);
+});
+
 test('Gratulieren: erste Gratulation fügt Feld hinzu, Wiederholung wird blockiert', async () => {
   const h = makeHarness();
   const uid = 'bday1';

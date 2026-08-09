@@ -266,6 +266,16 @@ async function congrats(ctx, interaction, id) {
   const lang = entry?.lang || langFromDiscord(interaction.locale);
   const clickerId = interaction.user.id;
 
+  // Das Geburtstagskind darf den eigenen Glückwunsch-Zähler nicht erhöhen.
+  if (clickerId === birthdayUserId) {
+    return interaction.reply(
+      componentsV2Payload(
+        [smallContainer(null, t('cannotWishSelf', lang))],
+        { ephemeral: true }
+      )
+    );
+  }
+
   // Gratulieren ist nur innerhalb der nächsten 24 Stunden erlaubt (nach dem
   // Senden des Gruß-Containers). Danach nimmt der Bot keine Glückwünsche mehr an.
   if (!isWithinHours(interaction.message?.createdTimestamp, 24)) {

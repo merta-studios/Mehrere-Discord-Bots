@@ -949,6 +949,18 @@ const T = {
     zh: '…还有{count}人',
     it: '… e altri {count}',
   },
+  cannotWishSelf: {
+    de: '🙈 Du kannst dir nicht selbst zum Geburtstag gratulieren!',
+    en: '🙈 You cannot wish yourself a happy birthday!',
+    fr: '🙈 Tu ne peux pas te souhaiter toi-même un joyeux anniversaire !',
+    es: '🙈 ¡No puedes felicitarte a ti mismo por tu cumpleaños!',
+    pt: '🙈 Você não pode desejar feliz aniversário a si mesmo!',
+    ru: '🙈 Нельзя поздравлять самого себя с днём рождения!',
+    ja: '🙈 自分自身の誕生日をお祝いすることはできません！',
+    ko: '🙈 자신의 생일을 직접 축하할 수는 없어요!',
+    zh: '🙈 你不能祝自己生日快乐！',
+    it: '🙈 Non puoi fare gli auguri di compleanno a te stesso!',
+  },
   alreadyWished: {
     de: '💛 Du hast {user} bereits gratuliert!',
     en: '💛 You already wished {user}!',
