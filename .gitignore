@@ -6,6 +6,13 @@ node_modules/
 .env.local
 .env.*.local
 
+# XP Bot lokale Daten (RAM-Fallback, wird bei Turso nicht gebraucht)
+bots/xp-level-bot/xp-data.json
+data/
+*.db
+*.sqlite
+*.libsql
+
 # Logs
 *.log
 logs/

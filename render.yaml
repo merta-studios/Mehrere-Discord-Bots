@@ -28,6 +28,15 @@ services:
         sync: false
       - key: BIRTHDAY_BOT_GUILD_ID
         sync: false
-      # --- XP-Level-Bot (Platzhalter) ---
+      # --- XP-Level-Bot ---
       - key: XP_BOT_TOKEN
+        sync: false
+      - key: XP_BOT_OWNER_ID
+        sync: false
+      - key: XP_BOT_GUILD_ID
+        sync: false
+      # Turso (einmal für beide Bots – XP nutzt Turso)
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
         sync: false
