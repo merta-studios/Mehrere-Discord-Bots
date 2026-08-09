@@ -189,19 +189,22 @@ async function rankCmd(ctx, interaction){
     const u = ctx.store.getUser(guildId, userId);
     if (!u) {
       // Show not found container
-      return interaction.reply(componentsV2Payload([buildRankEmbed({lang, userId, rankInfo:null})],{ephemeral:true}));
+      const r = buildRankEmbed({ lang, userId, rankInfo:null });
+      return interaction.reply(componentsV2Payload([r.container],{ephemeral:true}));
     }
     rankInfo = { rank: ctx.store.getUsersForGuild(guildId).length, total: ctx.store.getUsersForGuild(guildId).length, user: u };
     // Actually need proper rank, but user exists
     const full = ctx.store.getRank(guildId, userId);
     if (full) rankInfo = full;
   }
-  const container = buildRankEmbed({ lang, userId, rankInfo, now: new Date() });
-  return interaction.reply(componentsV2Payload([container],{ephemeral:true}));
+  const avatarUrl = interaction.user.displayAvatarURL({ size: 256 });
+  const { container, embed } = buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now: new Date() });
+  // Öffentliche Nachricht – für alle sichtbar (nicht nur für den Command-Benutzer)
+  return interaction.reply(componentsV2Payload([container], { embeds: embed ? [embed] : [] }));
 }
 
 async function helpCmd(ctx, interaction){
-  const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
+  const lang = ctx.store.getGuild(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
   const container = new ContainerBuilder().addTextDisplayComponents(
     new TextDisplayBuilder().setContent([
       `# ${t('helpTitle', lang)}`,
@@ -222,7 +225,7 @@ async function helpCmd(ctx, interaction){
 async function profileCmd(ctx, interaction){
   if (!interaction.inGuild()) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly','en'))],{ephemeral:true}));
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
-  const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
+  const lang = ctx.store.getGuild(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
   if (!perms?.has(PermissionFlagsBits.Administrator)) return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))],{ephemeral:true}));
   await interaction.deferReply({flags: MessageFlags.Ephemeral});
   const choice = interaction.options.getString('image');

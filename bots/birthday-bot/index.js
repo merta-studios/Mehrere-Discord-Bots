@@ -72,18 +72,25 @@ module.exports = {
     };
 
     // ---------------- Ready ----------------
-    client.once(Events.ClientReady, async () => {
-      try {
-        await client.user.setPresence({
-          activities: [{ name: '🎂 Geburtstage', type: ActivityType.Watching }],
-          status: 'online',
-        });
-      } catch {
-        /* Status ist optional */
+    // Status: zeigt die Gesamtzahl aller notierten Geburtstage über alle Server
+    const updatePresence = () => {
+      let total = 0;
+      for (const [, entry] of ctx.store.entries()) {
+        if (entry && Array.isArray(entry.birthdays)) total += entry.birthdays.length;
       }
+      client.user.setPresence({
+        activities: [{ name: `${total} birthdays collected 🎂 | /help`, type: ActivityType.Watching }],
+        status: 'online',
+      }).catch(() => {});
+    };
 
+    client.once(Events.ClientReady, async () => {
       await registerCommands(ctx);
       await ctx.store.scanGuilds(); // bestehende Listen selbst wiederfinden
+      updatePresence();
+      // Anzahl regelmäßig aktualisieren, damit der Status aktuell bleibt
+      const presenceTimer = setInterval(updatePresence, 10*60*1000);
+      if (presenceTimer.unref) presenceTimer.unref();
       logger.info(
         `[birthday-bot] Bereit auf ${client.guilds.cache.size} Server(n)` +
           (ctx.ownerId ? ` – Owner-ID hinterlegt.` : ' – ⚠️ BIRTHDAY_BOT_OWNER_ID fehlt!')

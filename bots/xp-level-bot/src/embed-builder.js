@@ -43,13 +43,13 @@ function extractAllText(obj) {
 function buildLeaderboardEmbed({ lang='de', entries=[], now=new Date(), guildName='' }) {
   const tz = tzOf(lang);
   const timeStr = new Intl.DateTimeFormat(LANGS[lang]?.locale || 'de-DE', {
-    timeZone: tz, dateStyle:'full', timeStyle:'medium'
+    timeZone: tz, dateStyle:'full', timeStyle:'short'
   }).format(now);
 
   const container = new ContainerBuilder();
 
   const header = [
-    `# ${t('lbTitle', lang)}${guildName ? ` – ${guildName}` : ''}`,
+    `# ${t('lbTitle', lang)}`,
     t('lbTagline', lang),
     `\u200B${LEADERBOARD_MARKER}${lang}\u200B`,
   ].join('\n');
@@ -90,22 +90,23 @@ function buildLeaderboardEmbed({ lang='de', entries=[], now=new Date(), guildNam
 }
 
 // Rank Container für /rank (ephemeral oder public)
-function buildRankEmbed({ lang, userId, rankInfo, now=new Date() }) {
+function buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now=new Date() }) {
   // rankInfo: {rank, total, user:{level,xp}} or null
   const container = new ContainerBuilder();
   if (!rankInfo) {
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
       `# ${t('rankTitle', lang)}\n\n${t('rankNotFound', lang)}`
     ));
-    return container;
+    return { container, embed: null };
   }
   const lvl = rankInfo.user.level;
   const xp = rankInfo.user.xp;
   const needed = xpNeeded(lvl);
   const nextLevel = Math.min(lvl+1, 100);
   const percent = Math.round((xp/needed)*100);
-  const filled = Math.round(percent/10);
-  const bar = '█'.repeat(filled) + '░'.repeat(10-filled);
+  const BAR_SEGMENTS = 20;
+  const filled = Math.round((percent/100)*BAR_SEGMENTS);
+  const bar = '■'.repeat(filled) + '□'.repeat(BAR_SEGMENTS-filled);
   const remaining = Math.max(0, needed - xp);
   const body = t('rankBody', lang, {
     user: `<@${userId}>`,
@@ -116,7 +117,13 @@ function buildRankEmbed({ lang, userId, rankInfo, now=new Date() }) {
     bar, percent, remaining
   });
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${t('rankTitle', lang)}\n\n${body}`));
-  return container;
+
+  let embed = null;
+  if (avatarUrl) {
+    const { EmbedBuilder } = require('discord.js');
+    embed = new EmbedBuilder().setThumbnail(avatarUrl).setColor(0x57F287);
+  }
+  return { container, embed };
 }
 
 // Level Up/Down Container (für Haupt-Chat)
