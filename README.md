@@ -17,7 +17,7 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 | Bereich | Beschreibung |
 |---|---|
 | 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons im Container). 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche, Owner-Admin-Panel im DM. |
-| ⭐ **XP Level Bot** | **RAM-first & Turso-persistiert** – XP pro Wort (Spam-Erkennung krass, 3 XP/Wort, max 30, 30s Cooldown), Level-Kurve 80→1999 XP, täglicher 7%-Schwund, Voice 25 XP/Min, stündliches Top15-Leaderboard (Components V2), Nicknames `[Lvl X | #🥇]`, /rank + /setup (2 Kanäle) + Adminpanel. |
+| ⭐ **XP Level Bot** | **RAM-first & Turso-persistiert** – XP pro Wort (Spam-Erkennung krass, 3 XP/Wort, max 30, 30s Cooldown), Level-Kurve 80→1999 XP, täglicher 7%-Schwund, Voice 25 XP/Min, stündliches Top15-Leaderboard (Components V2), Nicknames `[Lvl X 🥇]` (Top 3), /rank + /setup (2 Kanäle) + Adminpanel. |
 | 🛠️ **Multi-Bot-Hoster** | Loader, der alle Bots im `bots/`-Ordner automatisch startet (nur die mit gesetztem Token), plus Health-Server für UptimeRobot. |
 
 ## 🗂️ Projektstruktur
@@ -211,7 +211,7 @@ Kurzfassung – Details siehe [`bots/xp-level-bot/README.md`](bots/xp-level-bot/
 - **Voice**: `25 XP/min` im Voice (nicht stumm/taub, mind. 1 andere Person, ≥5s geredet + Pause).
 - **`/rank`** (alle): Platz, Level, `xp/needed`, Balken & fehlende XP.
 - **`/help` + `/admin_set_bot_profile` + `/adminpanel`** – identisch zum Birthday Bot, mit XP-Details.
-- **Nicknames**: `[Lvl X | #🥇] Name` – Top15 mit Medaillen, bei Auf-/Abstieg sofort, 32-Zeichen-Cap, Rechte-Fehler → Ping im Haupt-Chat.
+- **Nicknames**: `[Lvl X 🥇] Name` – nur Top 3 mit Medaille, bei Auf-/Abstieg sofort, 32-Zeichen-Cap, Rechte-Fehler → Ping im Haupt-Chat (außer für den Server-Owner).
 - **Turso**: **RAM-first**, ein Batch-Load beim Start, alle Ops im RAM, Flush nur bei `SIGTERM`, alle 5 Min & bei Level-Change – spart Limits extrem.
 
 ---

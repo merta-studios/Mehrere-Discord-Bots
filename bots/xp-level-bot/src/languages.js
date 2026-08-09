@@ -117,16 +117,16 @@ const T = {
   // Leaderboard
   // ------------------------------------------------------------
   lbTitle: {
-    de: '🏆 XP Leaderboard',
-    en: '🏆 XP Leaderboard',
-    fr: '🏆 Classement XP',
-    es: '🏆 Tabla de XP',
-    pt: '🏆 Ranking de XP',
-    ru: '🏆 Таблица XP',
-    ja: '🏆 XPランキング',
-    ko: '🏆 XP 리더보드',
-    zh: '🏆 XP 排行榜',
-    it: '🏆 Classifica XP',
+    de: '🏆 Level Leaderboard',
+    en: '🏆 Level Leaderboard',
+    fr: '🏆 Classement par niveau',
+    es: '🏆 Tabla de niveles',
+    pt: '🏆 Ranking de níveis',
+    ru: '🏆 Таблица уровней',
+    ja: '🏆 レベルランキング',
+    ko: '🏆 레벨 리더보드',
+    zh: '🏆 等级排行榜',
+    it: '🏆 Classifica livelli',
   },
   lbTagline: {
     de: 'Die fleißigsten Chatter – streng dich an und kletter hoch! 🚀',

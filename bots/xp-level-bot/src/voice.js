@@ -194,11 +194,13 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
       const rank = rankInfo?.rank || null;
       const { formatNickname, stripLvlTag } = require('./logic');
       const display = stripLvlTag(member.displayName || member.user.username);
-      const newNick = formatNickname(level, display, rank && rank<=15 ? rank : null);
+      const newNick = formatNickname(level, display, rank && rank<=3 ? rank : null);
       if (member.nickname === newNick) return;
       await member.setNickname(newNick).catch(async (err)=>{
         // 50013 missing permissions
         if (err?.code === 50013 || err?.status === 403) {
+          // Discord erlaubt es nie, den Server-Owner umzubenennen – kein Hinweis an den Owner
+          if (String(userId) === String(guild.ownerId)) return;
           const cfg = getGuildConfig(guild.id);
           if (!cfg) return;
           let ch = null;

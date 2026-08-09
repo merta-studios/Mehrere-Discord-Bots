@@ -135,10 +135,12 @@ async function updateNicknameForUser(ctx, guild, userId, level, lang){
     const rank = rankInfo?.rank || null;
     const { formatNickname, stripLvlTag } = require('./logic');
     const display = stripLvlTag(member.displayName || member.user.username);
-    const newNick = formatNickname(level, display, rank && rank<=15 ? rank : null);
+    const newNick = formatNickname(level, display, rank && rank<=3 ? rank : null);
     if (member.nickname === newNick) return;
     await member.setNickname(newNick).catch(async (err)=>{
       if (err?.code === 50013 || err?.status===403){
+        // Discord erlaubt es nie, den Server-Owner umzubenennen – kein Hinweis an den Owner
+        if (String(userId) === String(guild.ownerId)) return;
         let ch=null;
         try{ ch= await guild.channels.fetch(ctx.store.getGuild(guild.id)?.mainChannelId).catch(()=>null);}catch{}
         if(!ch||!ch.isTextBased()) return;
