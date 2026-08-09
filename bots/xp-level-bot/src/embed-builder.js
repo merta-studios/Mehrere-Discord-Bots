@@ -106,9 +106,9 @@ function buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now=new Date() }) {
   const needed = xpNeeded(lvl);
   const nextLevel = Math.min(lvl+1, 100);
   const percent = Math.round((xp/needed)*100);
-  const BAR_SEGMENTS = 20;
+  const BAR_SEGMENTS = 10;
   const filled = Math.round((percent/100)*BAR_SEGMENTS);
-  const bar = '■'.repeat(filled) + '□'.repeat(BAR_SEGMENTS-filled);
+  const bar = '⬛'.repeat(filled) + '⬜'.repeat(BAR_SEGMENTS-filled);
   const remaining = Math.max(0, needed - xp);
   const body = t('rankBody', lang, {
     user: `<@${userId}>`,
