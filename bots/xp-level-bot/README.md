@@ -1,6 +1,6 @@
 # ⭐ XP Level Bot – RAM-first, Turso-persistiert, 10 Sprachen, krasses Design
 
-> **Leveln durch Chatten!** 3 XP pro echtem Wort (max 30 XP), 30s Cooldown gegen Spam, Voice 25 XP/Minute, täglicher 7%-Schwund um Mitternacht, Leaderboard Top15 stündlich – alles in 10 Sprachen, modernen Components V2 & mit Turso so sparsam wie möglich!
+> **Leveln durch Chatten!** 3 XP pro echtem Wort (max 30 XP), 30s Cooldown gegen Spam, Voice 25 XP/Minute, täglicher 5,5%-Schwund um Mitternacht, Leaderboard Top15 stündlich – alles in 10 Sprachen, modernen Components V2 & mit Turso so sparsam wie möglich!
 
 Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche Container-Optik (kein Farbrand, Divider, Buttons im Container), gleiche `/adminpanel` Logik, gleiche 10-Sprachen-Datei, gleicher `/admin_set_bot_profile`.
 
@@ -14,7 +14,7 @@ Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche 
 | **Nachrichten-XP** | Worte werden an Leerzeichen/Zeilenumbrüchen gezählt. **Krasse Spam-Erkennung**: doppelte Leerzeichen ≠ extra Wort, nur Tokens mit Buchstaben, keine URLs/Mentions/Emojis als Wort, keine `aaaaa`/`lololol`/`abcabc` Spams, Buchstaben-Anteil ≥60% etc. **1 Wort = 3 XP … 10+ Worte = 30 XP (max)**. |
 | **Cooldown** | Nach XP-Gewinn **30 Sekunden** kein XP mehr. |
 | **Level-Kurve** | `XP benötigt ≈ 80 + 13.9·(lvl-1) + 0.058·(lvl-1)²` → Lvl1→2 **80 XP**, Lvl99→100 **1999 XP**. Fast linear, kaum spürbar schwerer, aber schön kurvig & konstantes Belohnungsgefühl. Bei Aufstieg wird XP auf **0 resettet** (Überschuss verfällt). Max Lvl 100. |
-| **Täglicher Schwund** | **Jeden Tag um 0 Uhr** (Zeitzone der Server-Sprache) verliert jeder **7%** der für sein nächstes Level nötigen XP (`ceil(needed*0.07)`). Fällt XP ≤0, **verlierst du ein Level** und landest bei **93%** des neuen Levels. Viel chatten verhindert Abstieg! ⚠️ Hinweis steht auch im Leaderboard. |
+| **Täglicher Schwund** | **Jeden Tag um 0 Uhr** (Zeitzone der Server-Sprache) verliert jeder **5,5%** der für sein nächstes Level nötigen XP (`ceil(needed*0.055)`). Fällt XP dabei unter 0, **verlierst du ein Level** und der fehlende Restbetrag wird korrekt vom vorherigen Level abgezogen – also kein pauschales `93%` mehr. Viel chatten verhindert Abstieg! ⚠️ Hinweis steht auch im Leaderboard. |
 | **Voice-XP** | Pro Minute im Voice (nicht stumm/taub, mind. 1 weitere nicht-stumme Person im selben Channel) **25 XP** – aber nur wenn in der Minute **≥5s aktiv gesprochen** wurde **und** mind. **eine Sprechpause** dabei war (60s Dauer-Sprechen ohne Pause zählt nicht). |
 | **Verlassen** | Wer den Server verlässt, verliert alle Level/XP sofort (Daten gelöscht). |
 | **Nickname** | Sofort nach Level Up/Down: `[Lvl {LVL} 🥇] Anzeigename` – nur die **Top 3** bekommen eine Medaille (`🥇🥈🥉`) in den Nicknamen. Wird bestehender Tag überschrieben, bei >32 Zeichen wird Anzeigename rechts gekürzt. Kann Bot nicht umbenennen → Ping im Haupt-Chat: „Ich brauche Rolle über allen anderen!“ (Ausnahme: der **Server-Owner** bekommt diesen Hinweis nicht, da Discord es nie erlaubt, ihn umzubenennen). |
@@ -136,7 +136,7 @@ Wie Birthday Bot 100% Components V2:
 - **Leaderboard erscheint nicht?** Bot braucht `View Channel` + `Send Messages` in beiden Setup-Kanälen. `/setup` neu ausführen.
 - **Nicknames ändern nicht?** Rolle nach oben ziehen, `Change Nickname` geben. Owner kann nie umbenannt werden → er bekommt daher auch keinen Hinweis (für alle anderen pingt der Bot einmal pro Stunde im Haupt-Chat).
 - **Voice-XP kommt nicht?** Mind. 2 unmuted Personen, 5s reden, Pause. Bot muss nicht im Channel sein – Heuristik über Mute-Toggles + Präsenz.
-- **Täglicher Decay zu hart?** 7% ist wenig (bei Lvl50 ≈63 XP, bei Lvl1 ≈6 XP). Viel chatten = easy halten.
+- **Täglicher Decay zu hart?** 5,5% ist moderat (bei Lvl50 ≈50 XP, bei Lvl1 ≈5 XP). Viel chatten = easy halten.
 - **Turso Limits?** Check https://app.turso.tech → Metrics. Bei RAM-first sollten <100 Writes/Tag sein.
 
 Viel Spaß beim Leveln! 🚀🔥
