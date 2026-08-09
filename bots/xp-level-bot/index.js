@@ -69,10 +69,70 @@ module.exports = {
     let schedulerStop = null;
     let voiceTracker = null;
 
-    client.once(Events.ClientReady, async () => {
+    // Status: zeigt Anzahl der verwalteten Server
+    const updatePresence = () => {
+      const count = client.guilds.cache.size;
+      client.user.setPresence({
+        activities: [{ name: `Managing ${count} servers 🏆 | /help`, type: ActivityType.Playing }],
+        status: 'online',
+      }).catch(()=>{});
+    };
+
+    // ---- Nickname-Helfer: setzt den Nick, wenn möglich, sonst Hinweis ----
+    // Cooldown gegen Hinweis-Spam pro Server+Nutzer (1h)
+    const nickFailCooldown = new Map();
+
+    function canManageNickname(guild, botMember, targetMember) {
+      if (!botMember || !targetMember) return false;
+      const perms = botMember.permissions;
+      if (!perms?.has(PermissionsBitField.Flags.ManageNicknames) && !perms?.has(PermissionsBitField.Flags.Administrator)) return false;
+      // Der Server-Owner steht immer über allen Rollen – der Bot kann ihn nicht umbenennen
+      if (targetMember.id === guild.ownerId) return false;
+      const botHigh = botMember.roles.highest.position;
+      const targetHigh = targetMember.roles.highest.position;
+      return botHigh > targetHigh;
+    }
+
+    async function sendNickFailHint(guild, userId, lang) {
+      const cfg = store.getGuild(guild.id);
+      const key = `${guild.id}:${userId}`;
+      const now = Date.now();
+      if (nickFailCooldown.has(key) && now - nickFailCooldown.get(key) < 3600000) return;
+      nickFailCooldown.set(key, now);
+      const { t } = require('./src/languages');
+      const { smallContainer } = require('./src/embed-builder');
+      const { componentsV2Payload } = require('./src/message-payload');
+      const msgText = t('nickFail', lang, { user: `<@${userId}>` });
+      const ch = await guild.channels.fetch(cfg?.mainChannelId).catch(()=>null);
+      if (ch && ch.isTextBased()) {
+        await ch.send(componentsV2Payload([smallContainer(null, msgText)])).catch(()=>{});
+      }
+    }
+
+    async function ensureNickname(ctx, guild, userId, level, lang) {
+      const member = await guild.members.fetch(userId).catch(()=>null);
+      if (!member) return false;
+      const rankInfo = store.getRank(guild.id, userId);
+      const rank = rankInfo?.rank || null;
+      const { formatNickname, stripLvlTag } = require('./src/logic');
+      const display = stripLvlTag(member.displayName || member.user.username);
+      const newNick = formatNickname(level, display, rank && rank<=15 ? rank : null);
+      if (member.nickname === newNick) return true;
+      if (!canManageNickname(guild, guild.members.me, member)) {
+        await sendNickFailHint(guild, userId, lang);
+        return false;
+      }
       try {
-        await client.user.setPresence({ activities:[{name:'⭐ XP farmen!', type: ActivityType.Playing}], status:'online' });
-      } catch{}
+        await member.setNickname(newNick);
+        return true;
+      } catch(err){
+        await sendNickFailHint(guild, userId, lang);
+        return false;
+      }
+    }
+
+    client.once(Events.ClientReady, async () => {
+      updatePresence();
       await registerCommands(ctx);
       // Scan for existing leaderboards that are not in store (self-healing find)
       for (const guild of client.guilds.cache.values()){
@@ -141,39 +201,12 @@ module.exports = {
     async function handleLevelChange(ctx, sourceMsg, user, res, cfg){
       const guild = sourceMsg.guild;
       const lang = cfg.lang || 'de';
-      const { xpNeeded, formatNickname, stripLvlTag } = require('./src/logic');
       const { buildLevelUpEmbed, buildLevelDownEmbed, smallContainer } = require('./src/embed-builder');
       const { componentsV2Payload } = require('./src/message-payload');
-      const needed = xpNeeded(res.level);
 
-      // Leaderboard relevant für Nick-Medaille: hole Rank nach Update
-      const rankInfo = store.getRank(guild.id, user.userId);
-      const rank = rankInfo?.rank || null;
-
-      // Nickname sofort updaten
+      // Nickname sofort updaten (oder Hinweis senden, falls Rechte fehlen)
       try {
-        const member = await guild.members.fetch(user.userId).catch(()=>null);
-        if (member) {
-          const display = stripLvlTag(member.displayName || member.user.username);
-          const newNick = formatNickname(res.level, display, rank && rank<=15 ? rank : null);
-          if (member.nickname !== newNick) {
-            await member.setNickname(newNick).catch(async (err)=>{
-              if (err?.code===50013 || err?.status===403){
-                // Rechte-Problem im Haupt-Chat pingen
-                let ch=null;
-                try{ ch= await guild.channels.fetch(cfg.mainChannelId).catch(()=>null);}catch{}
-                if(!ch||!ch.isTextBased()) return;
-                const { t } = require('./src/languages');
-                // spam guard per user
-                const now = Date.now();
-                if (member._nickFailAt && now - member._nickFailAt < 3600000) return;
-                member._nickFailAt = now;
-                const msg = t('nickFail', lang, {user:`<@${user.userId}>`});
-                await ch.send(componentsV2Payload([smallContainer(null,msg)])).catch(()=>{});
-              }
-            });
-          }
-        }
+        await ensureNickname(ctx, guild, user.userId, res.level, lang);
       } catch(e){ logger.warn('[xp-level-bot] nick update fail', e.message); }
 
       // Announcement: versuche erst bei der Nachricht zu replyen, sonst Haupt-Chat
@@ -216,8 +249,24 @@ module.exports = {
       store.deleteGuild(guild.id);
       void store.flush();
       logger.info(`[xp-level-bot] Server ${guild.name} verlassen – Daten bereinigt`);
+      updatePresence();
     });
-    client.on('guildCreate', (guild)=>{ void sendJoinNotice(ctx, guild); });
+    client.on('guildCreate', (guild)=>{
+      void sendJoinNotice(ctx, guild);
+      updatePresence();
+    });
+
+    // ---------------- Nickname bei Serverbeitritt (ab Level 1) ----------------
+    client.on('guildMemberAdd', async (member)=>{
+      try {
+        if (!member.guild) return;
+        const cfg = store.getGuild(member.guild.id);
+        if (!cfg) return;
+        const existing = store.getUser(member.guild.id, member.id);
+        const level = existing ? existing.level : 1;
+        await ensureNickname(ctx, member.guild, member.id, level, cfg.lang);
+      } catch(e){ logger.warn('[xp-level-bot] guildMemberAdd nick fail', e.message); }
+    });
 
     // ---------------- Graceful shutdown helpers for loader ----------------
     // Der globale loader ruft client.destroy() auf – wir hooken davor
