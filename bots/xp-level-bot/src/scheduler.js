@@ -2,16 +2,31 @@
  * Scheduler XP Bot:
  * - Minütlich: prüft ob Tag für Gilde gewechselt (0 Uhr in Guild-TZ) -> daily decay
  * - Stündlich: Leaderboard neu rendern
+ * - Zusätzlich bei Level-Up/Down: Leaderboard aktualisieren, wenn die letzte
+ *   Aktualisierung länger als 10 Minuten her ist (Throttle)
  * - 5min: Backup flush (über store interval)
  */
 
-const { todayKey, tzParts } = require('./logic');
-const { tzOf } = require('./languages');
+const { todayKey } = require('./logic');
 const { buildLeaderboardEmbed } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { syncLevelRolesForUser } = require('./level-roles');
+const { refreshRankNicknames } = require('./nicknames');
 
 const MINUTE_MS = 60_000;
+const LEADERBOARD_MIN_REFRESH_MS = 10 * 60 * 1000;
+
+// Wann wurde das Leaderboard pro Gilde zuletzt (erfolgreich) aktualisiert?
+const lastLeaderboardRefresh = new Map(); // guildId -> timestamp
+
+function isLeaderboardRefreshDue(guildId, now = Date.now()) {
+  const last = lastLeaderboardRefresh.get(guildId) || 0;
+  return (now - last) >= LEADERBOARD_MIN_REFRESH_MS;
+}
+
+function noteLeaderboardRefresh(guildId, now = Date.now()) {
+  lastLeaderboardRefresh.set(guildId, now);
+}
 
 function startScheduler({ ctx }){
   let counter = 0;
@@ -55,6 +70,16 @@ async function tick(ctx, counter){
   }
 }
 
+/**
+ * Aktualisiert das Leaderboard bei Level-Up/Down, aber maximal alle 10 Minuten.
+ * (Der stündliche Tick läuft unabhängig davon immer.)
+ */
+async function maybeRefreshLeaderboard(ctx, entry, guild) {
+  if (!isLeaderboardRefreshDue(entry.guildId)) return false;
+  await refreshLeaderboard(ctx, entry, guild, new Date());
+  return true;
+}
+
 async function applyDailyDecayForGuild(ctx, entry, guild){
   const lang = entry.lang || 'de';
   const users = ctx.store.getUsersForGuild(entry.guildId);
@@ -84,8 +109,9 @@ async function applyDailyDecayForGuild(ctx, entry, guild){
         const { buildLevelDownEmbed } = require('./embed-builder');
         const container = buildLevelDownEmbed({ lang, userId: ld.userId, level: ld.level, xp: ld.xp });
         await ch.send(componentsV2Payload([container])).catch(()=>{});
-        // Nick update
-        await updateNicknameForUser(ctx, guild, ld.userId, ld.level, lang);
+        // Nickname: Medaillen zuverlässig aktualisieren (Top 5 + betroffener Nutzer),
+        // damit verrückte Plätze auch im Anzeigenamen ankommen
+        await refreshRankNicknames(ctx, guild, ld.userId, lang).catch(()=>{});
         // Level-Rollen: fehlende adden, vorhandene werden nie entfernt
         await syncLevelRolesForUser({ ctx, guild, userId: ld.userId, level: ld.level }).catch(()=>{});
       } catch{}
@@ -98,7 +124,10 @@ async function applyDailyDecayForGuild(ctx, entry, guild){
 async function refreshLeaderboard(ctx, entry, guild, now){
   try {
     const channel = await ctx.client.channels.fetch(entry.leaderboardChannelId).catch(()=>null);
-    if (!channel || !channel.isTextBased()) return;
+    if (!channel || !channel.isTextBased()) {
+      ctx.logger.warn(`[xp-level-bot] Leaderboard-Kanal ${entry.leaderboardChannelId} nicht erreichbar (${guild.name})`);
+      return;
+    }
     const entries = ctx.store.getLeaderboard(entry.guildId, 15);
     const container = buildLeaderboardEmbed({ lang: entry.lang, entries, now, guildName: guild.name });
 
@@ -115,49 +144,42 @@ async function refreshLeaderboard(ctx, entry, guild, now){
     }
 
     if (msg) {
-      await msg.edit(componentsV2Payload([container])).catch(async ()=>{
-        // Falls edit failed (z.B. gelöscht), neu senden
-        const newMsg = await channel.send(componentsV2Payload([container])).catch(()=>null);
-        if (newMsg) entry.leaderboardMessageId = newMsg.id;
-      });
-    } else {
-      const newMsg = await channel.send(componentsV2Payload([container])).catch(()=>null);
-      if (newMsg) entry.leaderboardMessageId = newMsg.id;
+      try {
+        await msg.edit(componentsV2Payload([container]));
+        noteLeaderboardRefresh(entry.guildId);
+        ctx.store.setGuild(entry);
+        ctx.logger.info(`[xp-level-bot] Leaderboard aktualisiert (${guild.name})`);
+        return;
+      } catch (err) {
+        // Edit fehlgeschlagen (z.B. Nachricht gelöscht oder Rechte weg) ->
+        // alte Nachricht entfernen und neu senden, damit keine veraltete Zeit stehen bleibt
+        ctx.logger.warn(`[xp-level-bot] Leaderboard-Edit fehlgeschlagen (${guild.name}): ${err.message} – sende neu.`);
+        await msg.delete().catch(()=>{});
+        msg = null;
+      }
     }
-    ctx.store.setGuild(entry);
+    if (!msg) {
+      const newMsg = await channel.send(componentsV2Payload([container])).catch((e)=>{
+        ctx.logger.warn(`[xp-level-bot] Leaderboard-Send fehlgeschlagen (${guild.name}): ${e.message}`);
+        return null;
+      });
+      if (!newMsg) return;
+      entry.leaderboardMessageId = newMsg.id;
+      noteLeaderboardRefresh(entry.guildId);
+      ctx.store.setGuild(entry);
+      ctx.logger.info(`[xp-level-bot] Leaderboard neu gesendet (${guild.name})`);
+    }
   } catch(e){
     ctx.logger.warn(`[xp-level-bot] Leaderboard refresh failed ${guild.name}:`, e.message);
   }
 }
 
-async function updateNicknameForUser(ctx, guild, userId, level, lang){
-  try {
-    const member = await guild.members.fetch(userId).catch(()=>null);
-    if (!member) return;
-    const rankInfo = ctx.store.getRank(guild.id, userId);
-    const rank = rankInfo?.rank || null;
-    const { formatNickname, stripLvlTag } = require('./logic');
-    const display = stripLvlTag(member.displayName || member.user.username);
-    const newNick = formatNickname(level, display, rank && rank<=3 ? rank : null);
-    if (member.nickname === newNick) return;
-    await member.setNickname(newNick).catch(async (err)=>{
-      if (err?.code === 50013 || err?.status===403){
-        // Discord erlaubt es nie, den Server-Owner umzubenennen – kein Hinweis an den Owner
-        if (String(userId) === String(guild.ownerId)) return;
-        let ch=null;
-        try{ ch= await guild.channels.fetch(ctx.store.getGuild(guild.id)?.mainChannelId).catch(()=>null);}catch{}
-        if(!ch||!ch.isTextBased()) return;
-        const { t } = require('./languages');
-        const { smallContainer } = require('./embed-builder');
-        const { componentsV2Payload } = require('./message-payload');
-        const key = `_nickFail_${userId}`;
-        if (Date.now() - (member._nickFailAt||0) < 3600000) return;
-        member._nickFailAt = Date.now();
-        const msg = t('nickFail', lang, {user:`<@${userId}>`});
-        await ch.send(componentsV2Payload([smallContainer(null, msg)])).catch(()=>{});
-      }
-    });
-  } catch{}
-}
-
-module.exports = { startScheduler, tick };
+module.exports = {
+  startScheduler,
+  tick,
+  refreshLeaderboard,
+  maybeRefreshLeaderboard,
+  isLeaderboardRefreshDue,
+  noteLeaderboardRefresh,
+  LEADERBOARD_MIN_REFRESH_MS,
+};

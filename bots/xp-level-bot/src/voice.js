@@ -12,7 +12,9 @@
  * Für robuste Tests ist die Kern-Entscheidung in `shouldGrantVoiceXp` rein funktional.
  */
 
-const { shouldGrantVoiceXp, isVoiceEligible } = require('./logic');
+const { shouldGrantVoiceXp } = require('./logic');
+const { refreshRankNicknames, maybeRefreshRankNicknames } = require('./nicknames');
+const { maybeRefreshLeaderboard } = require('./scheduler');
 
 function createVoiceTracker({ client, store, logger, getGuildConfig }) {
   // guildId -> Map userId -> voiceSession
@@ -148,7 +150,6 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
       const cfg = getGuildConfig(guildId);
       if (!cfg || !cfg.leaderboardChannelId) return;
       const user = store.ensureUser(guildId, userId);
-      const beforeLevel = user.level;
       const { applyXpGain, xpNeeded } = require('./logic');
       const res = applyXpGain(user, 25);
       user.level = res.level;
@@ -157,11 +158,25 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
 
       const lang = cfg.lang || 'de';
       const guild = client.guilds.cache.get(guildId);
+      if (!guild) return;
+      // Mini-ctx für die gemeinsamen Helfer
+      const miniCtx = { client, store, logger };
       // Nick update + Level announcement if any
       if (res.leveled) {
         // announcement in main chat
         await announceLevelChange(guild, cfg, userId, res, lang, voiceChannel);
-        await updateNickname(guild, userId, res.level, lang);
+        // Nickname + Medaillen zuverlässig aktualisieren (Ränge können verrücken)
+        await refreshRankNicknames(miniCtx, guild, userId, lang).catch(()=>{});
+        // Leaderboard bei Level-Up aktualisieren (max. alle 10 Minuten)
+        await maybeRefreshLeaderboard(miniCtx, cfg, guild).catch(()=>{});
+      } else {
+        // XP-only-Gewinn: Top-3-Ränge können sich verschieben -> Medaillen prüfen
+        try {
+          const rankInfo = store.getRank(guildId, userId);
+          if (rankInfo && rankInfo.rank <= 3) {
+            await maybeRefreshRankNicknames(miniCtx, guild, userId, lang).catch(()=>{});
+          }
+        } catch {}
       }
     } catch(e){
       logger.warn('[xp-voice] grant failed:', e.message);
@@ -171,7 +186,6 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
   async function announceLevelChange(guild, cfg, userId, res, lang, sourceChannel){
     const { buildLevelUpEmbed } = require('./embed-builder');
     const { componentsV2Payload } = require('./message-payload');
-    const { t } = require('./languages');
     // Prefer mainChannel
     let target = null;
     try { target = await guild.channels.fetch(cfg.mainChannelId).catch(()=>null); } catch {}
@@ -184,42 +198,6 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
     const container = buildLevelUpEmbed({ lang, userId, level: res.level, xp: res.xp });
     // add voice hint? Keep consistent
     await target.send(componentsV2Payload([container])).catch(()=>{});
-  }
-
-  async function updateNickname(guild, userId, level, lang){
-    try {
-      const member = await guild.members.fetch(userId).catch(()=>null);
-      if (!member) return;
-      const rankInfo = store.getRank(guild.id, userId);
-      const rank = rankInfo?.rank || null;
-      const { formatNickname, stripLvlTag } = require('./logic');
-      const display = stripLvlTag(member.displayName || member.user.username);
-      const newNick = formatNickname(level, display, rank && rank<=3 ? rank : null);
-      if (member.nickname === newNick) return;
-      await member.setNickname(newNick).catch(async (err)=>{
-        // 50013 missing permissions
-        if (err?.code === 50013 || err?.status === 403) {
-          // Discord erlaubt es nie, den Server-Owner umzubenennen – kein Hinweis an den Owner
-          if (String(userId) === String(guild.ownerId)) return;
-          const cfg = getGuildConfig(guild.id);
-          if (!cfg) return;
-          let ch = null;
-          try { ch = await guild.channels.fetch(cfg.mainChannelId).catch(()=>null); } catch {}
-          if (!ch || !ch.isTextBased()) return;
-          const { t } = require('./languages');
-          const { smallContainer } = require('./embed-builder');
-          const { componentsV2Payload } = require('./message-payload');
-          const msg = t('nickFail', lang, { user: `<@${userId}>` });
-          // Only ping once per hour per user to avoid spam
-          const last = member._nickFailAt || 0;
-          if (Date.now() - last < 3600000) return;
-          member._nickFailAt = Date.now();
-          await ch.send(componentsV2Payload([smallContainer(null, msg)])).catch(()=>{});
-        }
-      });
-    } catch(e){
-      logger.warn('[xp-voice] nick fail', e.message);
-    }
   }
 
   let interval = null;

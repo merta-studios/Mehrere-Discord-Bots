@@ -332,7 +332,10 @@ function createXpStore({ logger, env }) {
     try { channels = await guild.channels.fetch(); } catch { return null; }
     for (const channel of channels.filter(c => c.type === ChannelType.GuildText && c.viewable).values()) {
       try {
-        const messages = await channel.messages.fetch({ limit: 30 });
+        // 100 Nachrichten scannen, damit die Leaderboard-Nachricht auch in
+        // sehr aktiven Kanälen zuverlässig gefunden wird (sie wandert nach
+        // unten, je mehr neue Nachrichten dazukommen)
+        const messages = await channel.messages.fetch({ limit: 100 });
         const found = messages.find(m => m.author?.id === client.user.id && JSON.stringify(m.components||[]).includes(marker));
         if (found) return { channel, message: found };
       } catch {}
