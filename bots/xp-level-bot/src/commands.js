@@ -20,6 +20,7 @@ const { LANGS, t, langFromDiscord, DISCORD_LOCALE } = require('./languages');
 const { buildRankEmbed, smallContainer, buildLeaderboardEmbed } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { openPanel } = require('./admin-panel');
+const { handleLevelRolesCommand } = require('./level-roles');
 
 function pick(key) {
   const map = {};
@@ -66,6 +67,12 @@ function defineCommands() {
       .addStringOption(o=>o.setName('image').setDescription('Welches Bild').setDescriptionLocalizations(pick('profileImageDesc')).setRequired(true).addChoices(...profileChoices)),
 
     new SlashCommandBuilder()
+      .setName('level_roles')
+      .setDescription('Passt die Level-Belohnungsrollen an (Formular)')
+      .setDescriptionLocalizations(pick('levelRolesHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    new SlashCommandBuilder()
       .setName('adminpanel')
       .setDescription('Owner-Admin-Panel (nur im DM)')
       .setDescriptionLocalizations(pick('helpAdminPanel'))
@@ -97,6 +104,7 @@ async function handleChatInput(ctx, interaction) {
     case 'rank': return rankCmd(ctx, interaction);
     case 'help': return helpCmd(ctx, interaction);
     case 'admin_set_bot_profile': return profileCmd(ctx, interaction);
+    case 'level_roles': return handleLevelRolesCommand(ctx, interaction);
     case 'adminpanel': return openPanel(ctx, interaction);
     default: return interaction.reply(componentsV2Payload([smallContainer(null,'Unbekannter Befehl.')],{ephemeral:true}));
   }
@@ -180,7 +188,7 @@ async function rankCmd(ctx, interaction){
   if (!guildId) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly','en'))],{ephemeral:true}));
   const cfg = ctx.store.getGuild(guildId);
   const lang = cfg?.lang || langFromDiscord(interaction.locale);
-  if (!cfg) return interaction.reply(componentsV2Payload([smallContainer(null, t('rankNoSetup', lang))],{ephemeral:true}));
+  if (!cfg || !cfg.leaderboardChannelId) return interaction.reply(componentsV2Payload([smallContainer(null, t('rankNoSetup', lang))],{ephemeral:true}));
 
   const userId = interaction.user.id;
   let rankInfo = ctx.store.getRank(guildId, userId);
@@ -215,6 +223,8 @@ async function helpCmd(ctx, interaction){
       `**</rank:${interaction.commandId||'rank'}>**\n${t('helpRank', lang)}`,
       '',
       `**</admin_set_bot_profile:${interaction.commandId||'admin_set_bot_profile'}>**\n${t('helpSetProfile', lang)}`,
+      '',
+      `**</level_roles:${interaction.commandId||'level_roles'}>**\n${t('levelRolesHelp', lang)}`,
       '',
       `**</help:${interaction.commandId||'help'}>**\n${t('helpHelp', lang)}`,
     ].join('\n'))

@@ -138,7 +138,9 @@ function buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now=new Date() }) {
 function buildLevelUpEmbed({ lang, userId, level, xp }) {
   const needed = xpNeeded(level);
   const desc = t('levelUp', lang, { user: `<@${userId}>`, level, xp, needed });
-  const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(desc));
+  // "## " – die Level-Up-Zeile als Markdown-Überschrift (Level 2), damit der Text größer auffällt
+  const content = `## ${desc}`;
+  const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(content));
   return container;
 }
 function buildLevelDownEmbed({ lang, userId, level, xp }) {

@@ -156,11 +156,31 @@ function xpForWords(validWordCount) {
   return capped * 3;
 }
 
-function calculateXpForMessage(content) {
+// ---------------------------------------------------------------------------
+// Medien-XP: Bilder, Videos, Sprachnachrichten & Sticker geben ausgeglichen XP
+// ---------------------------------------------------------------------------
+
+const MEDIA_XP = 15; // entspricht einem 5-Wörter-Text (Mitte der Range 3–30)
+const MAX_MESSAGE_XP = 30;
+
+function isMediaContentType(contentType) {
+  return typeof contentType === 'string' && /^(image|video|audio)\//i.test(contentType.trim());
+}
+
+function calculateXpForMessage(content, opts = {}) {
+  const hasMedia = Boolean(opts && opts.hasMedia);
   const valid = countValidWords(content);
-  if (valid === 0) return { valid, xp: 0 };
-  const xp = xpForWords(valid);
-  return { valid, xp };
+  let xp = xpForWords(valid);
+  if (hasMedia) {
+    if (valid === 0) {
+      // Nur-Medien-Nachricht (Bild/Video/Sprachnachricht/Sticker): ausgeglichene 15 XP
+      xp = MEDIA_XP;
+    } else {
+      // Text + Medien: Bonus, aber nie über das normale Maximum hinaus
+      xp = Math.min(MAX_MESSAGE_XP, xp + MEDIA_XP);
+    }
+  }
+  return { valid, xp, media: hasMedia };
 }
 
 // Spam-Erkennung für Gesamt-Nachricht: Wenn Verhältnis valider Worte zu Roh-Tokens zu niedrig ist
@@ -276,6 +296,100 @@ function stripLvlTag(name) {
 }
 
 // ---------------------------------------------------------------------------
+// Level-Belohnungsrollen – Eingabe-Parsing & Namens-Format (testbar, pur)
+// ---------------------------------------------------------------------------
+
+const DEFAULT_ROLE_TEMPLATE = 'Level {LEVEL}';
+const MAX_LEVEL = 100;
+
+// Buchstaben, die beim Tippen gerne mit Ziffern verwechselt werden: "1O" -> 10
+const CONFUSION_CHARS = { O:'0', o:'0', I:'1', l:'1', Z:'2', z:'2', S:'5', s:'5', B:'8', b:'8', G:'6', g:'6' };
+const LEVEL_MARKER_RE = /(?:lvl|level|lv|niv(?:eau)?|stufe|rank|rang)\s*[.:\-]?\s*(\d+)/i;
+const LEVEL_MARKER_SUFFIX_RE = /^(\d+)\s*(?:lvl|level|lv|niv(?:eau)?|stufe|rank|rang)\b/i;
+
+/**
+ * Interpretiert ein einzelnes Token der Level-Eingabe:
+ * - "6" / "(6)" / "6." -> 6
+ * - "1O" / "l3" / "3b" -> 10 / 13 / 38 (Verwechslungs-Buchstaben werden korrigiert)
+ * - "Level 6" / "lvl6" / "6lvl" -> 6
+ * - Unverständliches (z.B. "abc") -> null (wird intelligent ignoriert)
+ */
+function normalizeLevelToken(raw) {
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  // Reine Zahl
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+
+  // Level-Marker: "Level 6", "lvl6", "niveau 10", "6lvl"
+  let m = s.match(LEVEL_MARKER_RE);
+  if (m) return parseInt(m[1], 10);
+  m = s.match(LEVEL_MARKER_SUFFIX_RE);
+  if (m) return parseInt(m[1], 10);
+
+  // Nur Ziffern + Verwechslungs-Buchstaben -> korrigieren
+  if (/^[\dOoIlZzSsBbGg]+$/.test(s)) {
+    const fixed = s.split('').map((c) => CONFUSION_CHARS[c] || c).join('');
+    if (/^\d+$/.test(fixed)) return parseInt(fixed, 10);
+    return null;
+  }
+
+  // Zahl mit Störzeichen am Rand: "(6)", "6.", "6??"
+  // Negative Zahlen ("-5", "−3") sind keine Level und werden ignoriert
+  m = s.match(/^(\D*)(\d+)(\D*)$/);
+  if (m) {
+    if (/[-−+]/.test(m[1])) return null;
+    return parseInt(m[2], 10);
+  }
+
+  return null;
+}
+
+/**
+ * Parst die kommagetrennte Level-Liste des Admins, sehr tolerant:
+ * - "3,6,10,20", "3, 6, 10, 20", "3,,6,,10", "3 6 10 20", "3;6;10", "3.6.10.20"
+ * - Tippfehler werden intelligent korrigiert ("1O" -> 10), Unverständliches ignoriert
+ * - Rückgabe: aufsteigend sortierte, eindeutige Zahlen (1..100) oder null
+ */
+function parseLevelList(input) {
+  if (input == null) return null;
+  const tokens = String(input).split(/[\s,.;:]+/).filter(Boolean);
+  const levels = new Set();
+  for (const raw of tokens) {
+    const n = normalizeLevelToken(raw);
+    if (n !== null && n >= 1 && n <= MAX_LEVEL) levels.add(n);
+  }
+  const arr = [...levels].sort((a, b) => a - b);
+  return arr.length ? arr : null;
+}
+
+/**
+ * Ersetzt den {LEVEL}-Platzhalter durch die konkrete Zahl.
+ * "Level {LEVEL}" + 3 -> "Level 3"
+ */
+function formatRoleName(template, level) {
+  return String(template || DEFAULT_ROLE_TEMPLATE).replace(/\{LEVEL\}/gi, String(level));
+}
+
+/**
+ * Baut aus dem Format-Template ein Regex, das bestehende Level-Rollen erkennt.
+ * "Level {LEVEL}" -> /^Level (\d+)$/i
+ */
+function roleNamePattern(template) {
+  const parts = String(template || DEFAULT_ROLE_TEMPLATE).split(/\{LEVEL\}/i);
+  const escaped = parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('(\\d+)');
+  try {
+    return new RegExp(`^${escaped}$`, 'i');
+  } catch {
+    return null;
+  }
+}
+
+function hasLevelPlaceholder(template) {
+  return /\{LEVEL\}/i.test(String(template || ''));
+}
+
+// ---------------------------------------------------------------------------
 // Voice XP Logik (testbar)
 // ---------------------------------------------------------------------------
 
@@ -318,4 +432,14 @@ module.exports = {
   getMedal,
   shouldGrantVoiceXp,
   isVoiceEligible,
+  MEDIA_XP,
+  MAX_MESSAGE_XP,
+  isMediaContentType,
+  normalizeLevelToken,
+  parseLevelList,
+  formatRoleName,
+  roleNamePattern,
+  hasLevelPlaceholder,
+  DEFAULT_ROLE_TEMPLATE,
+  MAX_LEVEL,
 };

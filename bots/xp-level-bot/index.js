@@ -6,10 +6,15 @@
  *  - /setup [leaderboard] [mainchat] [language] – nur Admins, 10 Sprachen
  *  - XP pro Nachricht: Worte zählen (Leerzeichen+Zeilen), Spam-Erkennung krass,
  *    3XP pro Wort bis max 30XP, 30s Cooldown
+ *  - Medien-XP: Bilder, Videos, Sprachnachrichten & Sticker geben ausgeglichen 15XP
+ *  - Level-Up-Zeile als "## "-Heading (Markdown Lv2) – größerer Text
+ *  - Level-Rollen: /level_roles (Admin-Formular) erstellt/sortiert Belohnungsrollen,
+ *    Sync bei Level Up/Down (mehrere Rollen, nie entfernen)
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
  *  - Täglich 0 Uhr (TZ pro Sprache): 5,5% Decay, Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
  *  - Voice 25XP/min: nicht muted, mit mind. 1 anderer, >=5s gesprochen, Pause nötig
- *  - Leaderboard stündlich, Container V2, Top15, Decay-Hinweis, Zeit+TZ
+ *  - Leaderboard stündlich + bei Level-Up/Down (max alle 10 Min), Container V2,
+ *    Top15, kurzer Decay-Hinweis, Zeit+TZ, Self-Healing über Marker
  *  - /rank für alle, /help, /admin_set_bot_profile, /adminpanel (Owner DM)
  *  - Nicknames: [Lvl X 🥇] Name (Top3 Medaillen), bei Erfolg sofort, 32 Zeichen
  *  - Bei Verlassen: Daten löschen
@@ -17,7 +22,7 @@
  * ============================================================================
  */
 
-const { GatewayIntentBits, ActivityType, Events, ChannelType, PermissionsBitField } = require('discord.js');
+const { GatewayIntentBits, ActivityType, Events, PermissionsBitField, MessageFlags } = require('discord.js');
 
 const { createXpStore } = require('./src/store');
 const { registerCommands } = require('./src/commands');
@@ -25,6 +30,8 @@ const { handleInteraction } = require('./src/interactions');
 const { sendJoinNotice } = require('./src/admin-panel');
 const { startScheduler } = require('./src/scheduler');
 const { createVoiceTracker } = require('./src/voice');
+const { syncLevelRolesForUser } = require('./src/level-roles');
+const { ensureNickname, refreshRankNicknames, maybeRefreshRankNicknames } = require('./src/nicknames');
 
 module.exports = {
   id: 'xp-level-bot',
@@ -78,61 +85,7 @@ module.exports = {
       }).catch(()=>{});
     };
 
-    // ---- Nickname-Helfer: setzt den Nick, wenn möglich, sonst Hinweis ----
-    // Cooldown gegen Hinweis-Spam pro Server+Nutzer (1h)
-    const nickFailCooldown = new Map();
-
-    function canManageNickname(guild, botMember, targetMember) {
-      if (!botMember || !targetMember) return false;
-      const perms = botMember.permissions;
-      if (!perms?.has(PermissionsBitField.Flags.ManageNicknames) && !perms?.has(PermissionsBitField.Flags.Administrator)) return false;
-      // Der Server-Owner steht immer über allen Rollen – der Bot kann ihn nicht umbenennen
-      if (targetMember.id === guild.ownerId) return false;
-      const botHigh = botMember.roles.highest.position;
-      const targetHigh = targetMember.roles.highest.position;
-      return botHigh > targetHigh;
-    }
-
-    async function sendNickFailHint(guild, userId, lang) {
-      // Discord erlaubt es nie, den Server-Owner umzubenennen –
-      // für den Owner gibt es daher keinen sinnvollen Hinweis (Ausnahme, Hinweis bleibt für alle anderen)
-      if (String(userId) === String(guild.ownerId)) return;
-      const cfg = store.getGuild(guild.id);
-      const key = `${guild.id}:${userId}`;
-      const now = Date.now();
-      if (nickFailCooldown.has(key) && now - nickFailCooldown.get(key) < 3600000) return;
-      nickFailCooldown.set(key, now);
-      const { t } = require('./src/languages');
-      const { smallContainer } = require('./src/embed-builder');
-      const { componentsV2Payload } = require('./src/message-payload');
-      const msgText = t('nickFail', lang, { user: `<@${userId}>` });
-      const ch = await guild.channels.fetch(cfg?.mainChannelId).catch(()=>null);
-      if (ch && ch.isTextBased()) {
-        await ch.send(componentsV2Payload([smallContainer(null, msgText)])).catch(()=>{});
-      }
-    }
-
-    async function ensureNickname(ctx, guild, userId, level, lang) {
-      const member = await guild.members.fetch(userId).catch(()=>null);
-      if (!member) return false;
-      const rankInfo = store.getRank(guild.id, userId);
-      const rank = rankInfo?.rank || null;
-      const { formatNickname, stripLvlTag } = require('./src/logic');
-      const display = stripLvlTag(member.displayName || member.user.username);
-      const newNick = formatNickname(level, display, rank && rank<=3 ? rank : null);
-      if (member.nickname === newNick) return true;
-      if (!canManageNickname(guild, guild.members.me, member)) {
-        await sendNickFailHint(guild, userId, lang);
-        return false;
-      }
-      try {
-        await member.setNickname(newNick);
-        return true;
-      } catch(err){
-        await sendNickFailHint(guild, userId, lang);
-        return false;
-      }
-    }
+    // Nickname-Helfer (Level-Tag + Medaillen-Refresh) liegen in ./src/nicknames
 
     client.once(Events.ClientReady, async () => {
       updatePresence();
@@ -165,25 +118,33 @@ module.exports = {
         if (msg.system) return;
 
         const cfg = store.getGuild(msg.guild.id);
-        if (!cfg) return; // nicht eingerichtet
+        // nicht eingerichtet (oder nur Level-Rollen ohne /setup): kein XP
+        if (!cfg || !cfg.leaderboardChannelId) return;
 
         // Optional: ignorieren falls Nachricht von Webhook? Lassen wir zu
         const content = msg.content || '';
-        if (!content.trim()) return;
+
+        // Medien (Bilder, Videos, Sprachnachrichten, Sticker) zählen als XP-Träger
+        const hasMedia = Boolean(
+          (msg.attachments && msg.attachments.some((a) => /^(image|video|audio)\//i.test(a.contentType || a.content_type || '')))
+          || (msg.stickers && msg.stickers.size > 0)
+          || (msg.flags && msg.flags.has(MessageFlags.IsVoiceMessage))
+        );
+        if (!content.trim() && !hasMedia) return;
 
         const { calculateXpForMessage, isSpamMessage, isOnCooldown, applyXpGain } = require('./src/logic');
 
         // Spam Gesamtnachricht? Krass Erkennung – wenn Nachricht als Spam gilt, kein XP
-        if (isSpamMessage(content)) return;
+        // (nur bei Text-Inhalt; reine Medien-Nachrichten sind von Natur aus nicht spam-bar)
+        if (content.trim() && isSpamMessage(content)) return;
 
-        const { valid, xp } = calculateXpForMessage(content);
-        if (xp <= 0 || valid === 0) return;
+        const { valid, xp } = calculateXpForMessage(content, { hasMedia });
+        if (xp <= 0) return;
 
         const user = store.ensureUser(msg.guild.id, msg.author.id);
         if (isOnCooldown(user.lastXpGain, Date.now())) return;
 
         // XP vergeben
-        const beforeLevel = user.level;
         const res = applyXpGain(user, xp);
         user.level = res.level;
         user.xp = res.xp;
@@ -195,6 +156,16 @@ module.exports = {
 
         if (res.leveledUp || res.leveledDown) {
           await handleLevelChange(ctx, msg, user, res, cfg);
+        } else {
+          // XP-only-Gewinn: Bei gleichem Level können sich die Ränge trotzdem
+          // verschieben (mehr XP überholt weniger XP). Wenn der Nutzer damit
+          // in die Top 3 rutscht, ändert sich die Medaille im Nickname.
+          try {
+            const rankInfo = store.getRank(msg.guild.id, msg.author.id);
+            if (rankInfo && rankInfo.rank <= 3) {
+              await maybeRefreshRankNicknames(ctx, msg.guild, msg.author.id, cfg.lang);
+            }
+          } catch(e){ logger.warn('[xp-level-bot] medal refresh fail', e.message); }
         }
       } catch(e){
         logger.warn('[xp-level-bot] messageCreate Fehler:', e.message);
@@ -204,13 +175,28 @@ module.exports = {
     async function handleLevelChange(ctx, sourceMsg, user, res, cfg){
       const guild = sourceMsg.guild;
       const lang = cfg.lang || 'de';
-      const { buildLevelUpEmbed, buildLevelDownEmbed, smallContainer } = require('./src/embed-builder');
+      const { buildLevelUpEmbed, buildLevelDownEmbed } = require('./src/embed-builder');
       const { componentsV2Payload } = require('./src/message-payload');
 
-      // Nickname sofort updaten (oder Hinweis senden, falls Rechte fehlen)
+      // Nickname ZUVERLÄSSIG aktualisieren: Top 5 + betroffener Nutzer werden
+      // geprüft, damit verrückte Plätze (z.B. neu Platz 2 statt 1) sofort die
+      // richtige Medaille im Anzeigenamen bekommen
       try {
-        await ensureNickname(ctx, guild, user.userId, res.level, lang);
-      } catch(e){ logger.warn('[xp-level-bot] nick update fail', e.message); }
+        await refreshRankNicknames(ctx, guild, user.userId, lang);
+      } catch(e){ logger.warn('[xp-level-bot] nick refresh fail', e.message); }
+
+      // Level-Rollen synchronisieren: fehlende Rollen adden (mehrere möglich),
+      // vorhandene werden bei Level-Down nie entfernt
+      try {
+        await syncLevelRolesForUser({ ctx, guild, userId: user.userId, level: res.level });
+      } catch(e){ logger.warn('[xp-level-bot] level roles sync fail', e.message); }
+
+      // Leaderboard: stündlich + zusätzlich bei jedem Level-Up/Down,
+      // aber frühestens alle 10 Minuten (Throttle im Scheduler)
+      try {
+        const { maybeRefreshLeaderboard } = require('./src/scheduler');
+        if (cfg && cfg.leaderboardChannelId) await maybeRefreshLeaderboard(ctx, cfg, guild);
+      } catch(e){ logger.warn('[xp-level-bot] leaderboard refresh fail', e.message); }
 
       // Announcement: versuche erst bei der Nachricht zu replyen, sonst Haupt-Chat
       const container = res.leveledUp ? buildLevelUpEmbed({lang, userId:user.userId, level:res.level, xp:res.xp})
@@ -267,7 +253,10 @@ module.exports = {
         if (!cfg) return;
         const existing = store.getUser(member.guild.id, member.id);
         const level = existing ? existing.level : 1;
-        await ensureNickname(ctx, member.guild, member.id, level, cfg.lang);
+        // Level-Rollen beim Beitritt direkt vergeben (unabhängig vom /setup-Status)
+        await syncLevelRolesForUser({ ctx, guild: member.guild, userId: member.id, level }).catch(()=>{});
+        if (!cfg.leaderboardChannelId) return; // kein XP-Setup -> Nickname erst nach /setup
+        await ensureNickname(ctx, member.guild, member.id, level, cfg.lang).catch(()=>{});
       } catch(e){ logger.warn('[xp-level-bot] guildMemberAdd nick fail', e.message); }
     });
 
