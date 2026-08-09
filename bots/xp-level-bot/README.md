@@ -17,7 +17,7 @@ Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche 
 | **Täglicher Schwund** | **Jeden Tag um 0 Uhr** (Zeitzone der Server-Sprache) verliert jeder **7%** der für sein nächstes Level nötigen XP (`ceil(needed*0.07)`). Fällt XP ≤0, **verlierst du ein Level** und landest bei **93%** des neuen Levels. Viel chatten verhindert Abstieg! ⚠️ Hinweis steht auch im Leaderboard. |
 | **Voice-XP** | Pro Minute im Voice (nicht stumm/taub, mind. 1 weitere nicht-stumme Person im selben Channel) **25 XP** – aber nur wenn in der Minute **≥5s aktiv gesprochen** wurde **und** mind. **eine Sprechpause** dabei war (60s Dauer-Sprechen ohne Pause zählt nicht). |
 | **Verlassen** | Wer den Server verlässt, verliert alle Level/XP sofort (Daten gelöscht). |
-| **Nickname** | Sofort nach Level Up/Down: `[Lvl {LVL} | #🥇] Anzeigename` – Top15 bekommen `#🥇🥈🥉` bzw. `#4` … `#15`. Wird bestehender Tag überschrieben, bei >32 Zeichen wird Anzeigename rechts gekürzt. Kann Bot nicht umbenennen (z.B. Owner) → Ping im Haupt-Chat: „Ich brauche Rolle über allen anderen!“. |
+| **Nickname** | Sofort nach Level Up/Down: `[Lvl {LVL} 🥇] Anzeigename` – nur die **Top 3** bekommen eine Medaille (`🥇🥈🥉`) in den Nicknamen. Wird bestehender Tag überschrieben, bei >32 Zeichen wird Anzeigename rechts gekürzt. Kann Bot nicht umbenennen → Ping im Haupt-Chat: „Ich brauche Rolle über allen anderen!“ (Ausnahme: der **Server-Owner** bekommt diesen Hinweis nicht, da Discord es nie erlaubt, ihn umzubenennen). |
 | **Leaderboard** | Stündlich aktualisiert, **Top15** nach Level → XP, mit **letzter Aktualisierung + Zeitzone** & Stunden-Hinweis & Schwund-Warnung. Marker `xp_leader::v1::` für Self-Healing. |
 | **Announcements** | Bei Auf-/Abstieg **Reply auf die auslösende Nachricht** (oder Haupt-Chat als Fallback), User-Mention, neues Level + `xp/needed XP`, auf Server-Sprache. |
 
@@ -134,7 +134,7 @@ Wie Birthday Bot 100% Components V2:
 ## 🔧 Troubleshooting
 
 - **Leaderboard erscheint nicht?** Bot braucht `View Channel` + `Send Messages` in beiden Setup-Kanälen. `/setup` neu ausführen.
-- **Nicknames ändern nicht?** Rolle nach oben ziehen, `Change Nickname` geben. Owner kann nie umbenannt werden → Bot pingt dann im Haupt-Chat (einmal pro Stunde).
+- **Nicknames ändern nicht?** Rolle nach oben ziehen, `Change Nickname` geben. Owner kann nie umbenannt werden → er bekommt daher auch keinen Hinweis (für alle anderen pingt der Bot einmal pro Stunde im Haupt-Chat).
 - **Voice-XP kommt nicht?** Mind. 2 unmuted Personen, 5s reden, Pause. Bot muss nicht im Channel sein – Heuristik über Mute-Toggles + Präsenz.
 - **Täglicher Decay zu hart?** 7% ist wenig (bei Lvl50 ≈63 XP, bei Lvl1 ≈6 XP). Viel chatten = easy halten.
 - **Turso Limits?** Check https://app.turso.tech → Metrics. Bei RAM-first sollten <100 Writes/Tag sein.

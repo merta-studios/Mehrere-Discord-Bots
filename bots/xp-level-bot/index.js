@@ -11,7 +11,7 @@
  *  - Voice 25XP/min: nicht muted, mit mind. 1 anderer, >=5s gesprochen, Pause nötig
  *  - Leaderboard stündlich, Container V2, Top15, Decay-Hinweis, Zeit+TZ
  *  - /rank für alle, /help, /admin_set_bot_profile, /adminpanel (Owner DM)
- *  - Nicknames: [Lvl X | #🥇] Name (Top15 Medaillen), bei Erfolg sofort, 32 Zeichen
+ *  - Nicknames: [Lvl X 🥇] Name (Top3 Medaillen), bei Erfolg sofort, 32 Zeichen
  *  - Bei Verlassen: Daten löschen
  *  - Turso: RAM-first, Dirty-Tracking, Batch-Flush bei SIGTERM + alle 5min Backup
  * ============================================================================
@@ -94,6 +94,9 @@ module.exports = {
     }
 
     async function sendNickFailHint(guild, userId, lang) {
+      // Discord erlaubt es nie, den Server-Owner umzubenennen –
+      // für den Owner gibt es daher keinen sinnvollen Hinweis (Ausnahme, Hinweis bleibt für alle anderen)
+      if (String(userId) === String(guild.ownerId)) return;
       const cfg = store.getGuild(guild.id);
       const key = `${guild.id}:${userId}`;
       const now = Date.now();
@@ -116,7 +119,7 @@ module.exports = {
       const rank = rankInfo?.rank || null;
       const { formatNickname, stripLvlTag } = require('./src/logic');
       const display = stripLvlTag(member.displayName || member.user.username);
-      const newNick = formatNickname(level, display, rank && rank<=15 ? rank : null);
+      const newNick = formatNickname(level, display, rank && rank<=3 ? rank : null);
       if (member.nickname === newNick) return true;
       if (!canManageNickname(guild, guild.members.me, member)) {
         await sendNickFailHint(guild, userId, lang);

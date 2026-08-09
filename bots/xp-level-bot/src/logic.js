@@ -239,12 +239,10 @@ function getMedal(rank) {
 }
 
 function formatNickname(level, displayName, rank = null) {
+  // Nur die Top 3 bekommen eine Medaille in den Nicknamen: [Lvl 2 🥈]
   let suffix = '';
-  if (rank !== null && rank >= 1 && rank <= 15) {
-    const medal = getMedal(rank);
-    // für Top3 medal emoji, sonst Zahl
-    if (rank <= 3) suffix = ` | #${medal}`;
-    else suffix = ` | #${medal}`;
+  if (rank !== null && rank >= 1 && rank <= 3) {
+    suffix = ` ${getMedal(rank)}`;
   }
   const tag = `[Lvl ${level}${suffix}]`;
   let nick = `${tag} ${displayName}`;
