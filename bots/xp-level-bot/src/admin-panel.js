@@ -194,13 +194,29 @@ async function handlePanelSelect(ctx, interaction){
 }
 
 async function sendJoinNotice(ctx, guild){
-  if(!ctx.ownerId) return;
+  if(!ctx.ownerId) {
+    ctx.logger.warn('[xp-level-bot] Join-Notice übersprungen: keine Owner-ID konfiguriert.');
+    return;
+  }
   try{
-    const owner = await guild.fetchOwner().catch(()=>null);
-    const ownerUser = await ctx.client.users.fetch(ctx.ownerId);
-    const notice = t('apJoinNotice','de',{name:guild.name,members:guild.memberCount.toLocaleString('de-DE'),owner:owner?`<@${owner.id}>`:'?'});
+    const ownerMention = guild.ownerId ? `<@${guild.ownerId}>` : '?';
+    const notice = t('apJoinNotice','de',{
+      name:guild.name,
+      members:guild.memberCount.toLocaleString('de-DE'),
+      owner:ownerMention,
+    });
+    const ownerUser = ctx.client.users.cache.get(ctx.ownerId) || await ctx.client.users.fetch(ctx.ownerId);
+    const dm = await ownerUser.createDM();
     const container = smallContainer('👋 Neuer XP-Server!', notice);
-    await ownerUser.send(componentsV2Payload([container]));
+    try {
+      await dm.send(componentsV2Payload([container]));
+    } catch(componentErr) {
+      // Fallback: Falls Discord/DMs das Container-Layout in diesem Moment nicht akzeptieren,
+      // schicken wir sicherheitshalber reinen Text statt die Info ganz zu verlieren.
+      await dm.send({ content: `👋 Neuer XP-Server!\n\n${notice.replace(/\*\*/g, '')}` });
+      ctx.logger.warn('[xp-level-bot] Join-Notice nur als Text gesendet:', componentErr.message);
+    }
+    ctx.logger.info(`[xp-level-bot] Join-Notice an Owner für ${guild.name} gesendet.`);
   } catch(err){ ctx.logger.warn('[xp-level-bot] Join-Notice fehlgeschlagen:', err.message); }
 }
 

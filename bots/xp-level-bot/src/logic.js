@@ -50,6 +50,8 @@ function xpNeeded(level) {
 
 function nextLevelXp(level) { return xpNeeded(level); }
 
+const DAILY_DECAY_RATE = 0.055;
+
 // ---------------------------------------------------------------------------
 // Wortzählung & Spam-Erkennung – KRASS robust
 // ---------------------------------------------------------------------------
@@ -206,25 +208,36 @@ function applyXpGain(user, amount) {
 }
 
 function applyDailyDecay(user) {
-  // täglich 7% von benötigt für nächstes Level abziehen
+  // täglich 5,5% von den für das nächste Level nötigen XP abziehen
+  // Falls das nicht mehr in die aktuellen XP passt, wird der echte Restbetrag
+  // ins vorige Level mitgenommen statt pauschal auf einen Fixwert zu setzen.
+  const startLevel = user.level;
   let level = user.level;
   let xp = user.xp;
   const needed = xpNeeded(level);
-  const decay = Math.ceil(needed * 0.07);
-  xp -= decay;
-  if (xp <= 0) {
-    // Achtung: wenn 0 erreicht, level verlieren falls >1
-    if (level > 1) {
-      level -= 1;
-      const newNeeded = xpNeeded(level);
-      xp = Math.floor(newNeeded * 0.93);
-      return { level, xp, leveledDown: true, decay, dropped: true };
-    } else {
-      xp = 0;
-      return { level, xp, leveledDown: false, decay, dropped: false };
+  const decay = Math.ceil(needed * DAILY_DECAY_RATE);
+  let remainingDecay = decay;
+
+  while (remainingDecay > 0) {
+    if (xp >= remainingDecay) {
+      xp -= remainingDecay;
+      remainingDecay = 0;
+      break;
     }
+
+    remainingDecay -= xp;
+    if (level <= 1) {
+      xp = 0;
+      remainingDecay = 0;
+      break;
+    }
+
+    level -= 1;
+    xp = xpNeeded(level);
   }
-  return { level, xp, leveledDown: false, decay, dropped: false };
+
+  const leveledDown = level < startLevel;
+  return { level, xp, leveledDown, decay, dropped: leveledDown };
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +304,7 @@ module.exports = {
   formatTimeInTz,
   xpNeeded,
   nextLevelXp,
+  DAILY_DECAY_RATE,
   countValidWords,
   xpForWords,
   calculateXpForMessage,

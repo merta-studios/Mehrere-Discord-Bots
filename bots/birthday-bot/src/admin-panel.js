@@ -364,17 +364,26 @@ async function handlePanelSelect(ctx, interaction) {
 // ---------------------------------------------------------------------------
 
 async function sendJoinNotice(ctx, guild) {
-  if (!ctx.ownerId) return;
+  if (!ctx.ownerId) {
+    ctx.logger.warn('[birthday-bot] Join-Notice übersprungen: keine Owner-ID konfiguriert.');
+    return;
+  }
   try {
-    const owner = await guild.fetchOwner().catch(() => null);
-    const ownerUser = await ctx.client.users.fetch(ctx.ownerId);
     const notice = t('apJoinNotice', 'de', {
       name: guild.name,
       members: guild.memberCount.toLocaleString('de-DE'),
-      owner: owner ? `<@${owner.id}>` : '?',
+      owner: guild.ownerId ? `<@${guild.ownerId}>` : '?',
     });
+    const ownerUser = ctx.client.users.cache.get(ctx.ownerId) || await ctx.client.users.fetch(ctx.ownerId);
+    const dm = await ownerUser.createDM();
     const container = smallContainer('👋 Neuer Server!', notice);
-    await ownerUser.send(componentsV2Payload([container]));
+    try {
+      await dm.send(componentsV2Payload([container]));
+    } catch (componentErr) {
+      await dm.send({ content: `👋 Neuer Server!\n\n${notice.replace(/\*\*/g, '')}` });
+      ctx.logger.warn('[birthday-bot] Join-Notice nur als Text gesendet:', componentErr.message);
+    }
+    ctx.logger.info(`[birthday-bot] Join-Notice an Owner für ${guild.name} gesendet.`);
   } catch (err) {
     ctx.logger.warn('[birthday-bot] Join-Notice konnte nicht gesendet werden:', err.message);
   }

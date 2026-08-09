@@ -7,7 +7,7 @@
  *  - XP pro Nachricht: Worte zählen (Leerzeichen+Zeilen), Spam-Erkennung krass,
  *    3XP pro Wort bis max 30XP, 30s Cooldown
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
- *  - Täglich 0 Uhr (TZ pro Sprache): 7% Decay, bei 0 => Level-1 und 93%
+ *  - Täglich 0 Uhr (TZ pro Sprache): 5,5% Decay, Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
  *  - Voice 25XP/min: nicht muted, mit mind. 1 anderer, >=5s gesprochen, Pause nötig
  *  - Leaderboard stündlich, Container V2, Top15, Decay-Hinweis, Zeit+TZ
  *  - /rank für alle, /help, /admin_set_bot_profile, /adminpanel (Owner DM)
