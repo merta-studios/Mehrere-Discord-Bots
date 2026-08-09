@@ -7,6 +7,8 @@ const {
   SeparatorBuilder,
   TextDisplayBuilder,
   ActionRowBuilder,
+  SectionBuilder,
+  ThumbnailBuilder,
 } = require('discord.js');
 
 const { LANGS, t, tzOf, formatToday } = require('./languages');
@@ -89,7 +91,7 @@ function buildLeaderboardEmbed({ lang='de', entries=[], now=new Date(), guildNam
   return container;
 }
 
-// Rank Container für /rank (ephemeral oder public)
+// Rank Container für /rank (ephemeral oder public) – Components V2 mit Thumbnail statt Embed
 function buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now=new Date() }) {
   // rankInfo: {rank, total, user:{level,xp}} or null
   const container = new ContainerBuilder();
@@ -116,14 +118,20 @@ function buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now=new Date() }) {
     xp, needed, nextLevel,
     bar, percent, remaining
   });
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${t('rankTitle', lang)}\n\n${body}`));
-
-  let embed = null;
+  const content = `# ${t('rankTitle', lang)}\n\n${body}`;
   if (avatarUrl) {
-    const { EmbedBuilder } = require('discord.js');
-    embed = new EmbedBuilder().setThumbnail(avatarUrl).setColor(0x57F287);
+    try {
+      const section = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(content))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(avatarUrl));
+      container.addSectionComponents(section);
+    } catch {
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(content));
+    }
+  } else {
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(content));
   }
-  return { container, embed };
+  return { container, embed: null };
 }
 
 // Level Up/Down Container (für Haupt-Chat)
