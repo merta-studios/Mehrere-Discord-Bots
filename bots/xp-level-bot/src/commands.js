@@ -198,9 +198,9 @@ async function rankCmd(ctx, interaction){
     if (full) rankInfo = full;
   }
   const avatarUrl = interaction.user.displayAvatarURL({ size: 256 });
-  const { container, embed } = buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now: new Date() });
+  const { container } = buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now: new Date() });
   // Öffentliche Nachricht – für alle sichtbar (nicht nur für den Command-Benutzer)
-  return interaction.reply(componentsV2Payload([container], { embeds: embed ? [embed] : [] }));
+  return interaction.reply(componentsV2Payload([container]));
 }
 
 async function helpCmd(ctx, interaction){
