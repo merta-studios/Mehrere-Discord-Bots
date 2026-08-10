@@ -1,6 +1,6 @@
 /**
  * Slash-Commands XP Bot – Definition & Handler
- * Commands: /setup, /rank, /help, /admin_set_bot_profile, /adminpanel
+ * Commands: /setup, /rank, /help, /admin_set_bot_profile, /level_roles, /adminpanel
  */
 
 const {
@@ -89,23 +89,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * auftauchten. Deshalb: mehrere Versuche mit Abstand + Erfolgs-Flag, das der
  * Scheduler nutzt, um es regelmäßig erneut zu versuchen, bis es klappt.
  */
-async function registerCommands(ctx) {
+async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
   const commands = defineCommands().map(c=>c.toJSON());
-  const rest = new REST({version:'10'}).setToken(ctx.token);
+  const rest = restFactory ? restFactory(ctx.token) : new REST({version:'10'}).setToken(ctx.token);
   const clientId = ctx.client.user.id;
-  const RETRY_DELAYS_MS = [0, 15_000, 60_000, 5 * 60_000];
+  const RETRY_DELAYS_MS = retryDelays || [0, 15_000, 60_000, 5 * 60_000];
   for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
     if (RETRY_DELAYS_MS[attempt]) await sleep(RETRY_DELAYS_MS[attempt]);
     try {
       if (ctx.devGuildId) {
-        await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), {body: commands});
-        ctx.logger.info(`[xp-level-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert.`);
+        const res = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), {body: commands});
+        ctx.logger.info(`[xp-level-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert: ${registeredNames(res)}`);
       } else {
-        await rest.put(Routes.applicationCommands(clientId), {body: commands});
+        const res = await rest.put(Routes.applicationCommands(clientId), {body: commands});
         for (const guild of ctx.client.guilds.cache.values()) {
           await rest.put(Routes.applicationGuildCommands(clientId, guild.id), {body: []}).catch(()=>{});
         }
-        ctx.logger.info('[xp-level-bot] Commands global registriert (bis zu 1h bis überall sichtbar).');
+        ctx.logger.info(`[xp-level-bot] Commands global registriert (bis zu 1h bis überall sichtbar): ${registeredNames(res)}`);
       }
       ctx.commandsRegistered = true;
       return true;
@@ -116,6 +116,12 @@ async function registerCommands(ctx) {
   }
   ctx.commandsRegistered = false; // Scheduler versucht es weiter alle 15 Minuten
   return false;
+}
+
+/** Discord gibt die registrierten Commands zurück – Namen fürs Log (Beweis, dass z.B. /level_roles angelegt wurde). */
+function registeredNames(res) {
+  if (Array.isArray(res) && res.length) return res.map((c) => c.name).join(', ');
+  return 'unbekannt';
 }
 
 async function handleChatInput(ctx, interaction) {

@@ -120,8 +120,10 @@ test('detectBurst: braucht genug Nachrichten von genug verschiedenen Leuten im F
   assert.equal(detectBurst(enough, now), true);
   const oneUser = Array.from({ length: 12 }, () => ({ uid: 'a', ts: now }));
   assert.equal(detectBurst(oneUser, now), false, 'nur 1 Person tauscht sich nicht aus');
-  const tooOld = Array.from({ length: 10 }, (_, i) => ({ uid: i % 2 ? 'a' : 'b', ts: now - 120_000 }));
-  assert.equal(detectBurst(tooOld, now), false, 'außerhalb des 75s-Fensters');
+  const within = Array.from({ length: 10 }, (_, i) => ({ uid: i % 2 ? 'a' : 'b', ts: now - 120_000 }));
+  assert.equal(detectBurst(within, now), true, '120 s alt liegt noch IM 140-s-Fenster');
+  const tooOld = Array.from({ length: 10 }, (_, i) => ({ uid: i % 2 ? 'a' : 'b', ts: now - 145_000 }));
+  assert.equal(detectBurst(tooOld, now), false, 'außerhalb des 140s-Fensters');
 });
 
 test('canDropBonus: max. 4 am Tag & Mindestabstand 1h30', () => {

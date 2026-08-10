@@ -2,7 +2,7 @@
  * Bonus-Belohnungen – zufällige XP-Geschenke im Haupt-Chat.
  *
  * Auslösung (alles muss passen):
- * - Aktivitäts-Burst im Haupt-Chat: >=8 Nachrichten von >=2 Personen in 75s
+ * - Aktivitäts-Burst im Haupt-Chat: >=8 Nachrichten von >=2 Personen in 140s
  * - Würfel: nur mit 25% Chance pro Burst (nicht bei jedem Gespräch!)
  * - Maximal 4 Drops pro Tag (Kalendertag in der Sprach-Zeitzone, persistiert)
  * - Mindestabstand zwischen zwei Drops: 1 Stunde 30 Minuten
