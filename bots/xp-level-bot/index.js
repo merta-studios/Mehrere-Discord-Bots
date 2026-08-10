@@ -11,8 +11,8 @@
  *  - Level-Rollen: /level_roles (Admin-Formular) erstellt/sortiert Belohnungsrollen,
  *    Sync bei Level Up/Down (mehrere Rollen, nie entfernen)
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
- *  - Bonus-Drops: Bei viel Haupt-Chat-Aktivität (>=8 Msg/>=2 Leute/75s) erscheint
- *    manchmal (25% Chance) eine XP-Belohnung (20–40 XP) mit „Einsammeln“-Button –
+ *  - Bonus-Drops: Bei viel Haupt-Chat-Aktivität (>=5 Msg/>=2 Leute/5min) erscheint
+ *    manchmal (35% Chance) eine XP-Belohnung (20–40 XP) mit „Einsammeln“-Button –
  *    der erste Klick gewinnt; max. 4/Tag, mind. 1h30 Abstand, verfällt nach 10min
  *  - Täglich 0 Uhr (TZ pro Sprache): 10% Decay; wer 24h keine XP verdient hat,
  *    bekommt +5 Prozentpunkte pro weiterem inaktivem Tag (10→15→20→25%…),
