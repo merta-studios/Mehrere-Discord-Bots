@@ -10,8 +10,12 @@ const path = require('path');
 function createXpStore({ logger, env } = {}) {
   const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, lang, leaderboardMessageId, lastDailyDecay}
   const users = new Map(); // guildId -> Map(userId -> {guildId,userId,level,xp,lastXpGain})
-  let commandIds = {}; // cmdName -> id
-  const guildCommandIds = new Map(); // guildId -> { [cmdName]: id }
+  let commandIds = {}; // cmdName -> id  (NUR globale Command-IDs!)
+  const guildCommandIds = new Map(); // guildId -> { [cmdName]: id } (nur Dev-Gilde)
+  // Merkt sich, in welchem Scope die gespeicherten IDs zuletzt registriert wurden:
+  //   'global'      -> commandIds enthält echte globale Snowflakes
+  //   'guild:<id>'  -> commandIds darf NICHT als global behandelt werden (nur Guild-Slot vertrauenswürdig)
+  let commandIdScope = null;
   let dirtyMetadata = false;
 
   const dirtyGuilds = new Set();
@@ -126,7 +130,7 @@ function createXpStore({ logger, env } = {}) {
       });
     }
     try {
-      const metaRes = await db.execute("SELECT key, value FROM bot_metadata WHERE key IN ('command_ids', 'guild_command_ids')");
+      const metaRes = await db.execute("SELECT key, value FROM bot_metadata WHERE key IN ('command_ids', 'guild_command_ids', 'command_id_scope')");
       for (const row of metaRes.rows) {
         if (row.key === 'command_ids') {
           const parsed = parseJsonCol(row.value, {});
@@ -136,6 +140,9 @@ function createXpStore({ logger, env } = {}) {
           if (parsed && typeof parsed === 'object') {
             for (const [gid, ids] of Object.entries(parsed)) guildCommandIds.set(gid, ids);
           }
+        } else if (row.key === 'command_id_scope') {
+          const parsed = parseJsonCol(row.value, null);
+          if (typeof parsed === 'string' && parsed !== '') commandIdScope = parsed;
         }
       }
     } catch (e) {
@@ -169,6 +176,9 @@ function createXpStore({ logger, env } = {}) {
       if (data.commandIds && typeof data.commandIds === 'object') {
         commandIds = { ...data.commandIds };
       }
+      if (data.commandIdScope && typeof data.commandIdScope === 'string') {
+        commandIdScope = data.commandIdScope;
+      }
       if (data.guildCommandIds && typeof data.guildCommandIds === 'object') {
         for (const [gid, ids] of Object.entries(data.guildCommandIds)) {
           guildCommandIds.set(gid, ids);
@@ -184,6 +194,7 @@ function createXpStore({ logger, env } = {}) {
       guilds: Object.fromEntries([...guilds.entries()]),
       users: {},
       commandIds,
+      commandIdScope,
       guildCommandIds: Object.fromEntries([...guildCommandIds.entries()]),
     };
     for (const [gid, m] of users.entries()) obj.users[gid] = Object.fromEntries([...m.entries()]);
@@ -210,8 +221,21 @@ function createXpStore({ logger, env } = {}) {
       try { saveToFile(); } catch {}
     }
   }
+  function getCommandIdScope() {
+    return commandIdScope;
+  }
+  function setCommandIdScope(scope) {
+    if (typeof scope === 'string') {
+      commandIdScope = scope;
+      dirtyMetadata = true;
+      try { saveToFile(); } catch {}
+    }
+  }
   function getGuildCommandIds(guildId) {
     return guildCommandIds.get(guildId) || null;
+  }
+  function getAllGuildCommandIds() {
+    return Object.fromEntries([...guildCommandIds.entries()]);
   }
   function setGuildCommandIds(guildId, ids) {
     if (guildId && ids && typeof ids === 'object') {
@@ -383,6 +407,11 @@ function createXpStore({ logger, env } = {}) {
                   ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
             args: [JSON.stringify(Object.fromEntries([...guildCommandIds.entries()]))],
           });
+          statements.push({
+            sql: `INSERT INTO bot_metadata (key, value) VALUES ('command_id_scope', ?)
+                  ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+            args: [JSON.stringify(commandIdScope)],
+          });
           dirtyMetadata = false;
         }
         if (statements.length) {
@@ -447,7 +476,9 @@ function createXpStore({ logger, env } = {}) {
     init,
     getGuild, setGuild, deleteGuild, getAllGuilds, getGuildIds,
     getUser, ensureUser, setUser, deleteUser, getUsersForGuild, getLeaderboard, getRank, getAllUsersCount,
-    getCommandIds, getCommandId, setCommandIds, getGuildCommandIds, setGuildCommandIds, deleteGuildCommandIds, clearGuildCommandIds,
+    getCommandIds, getCommandId, setCommandIds,
+    getCommandIdScope, setCommandIdScope,
+    getGuildCommandIds, getAllGuildCommandIds, setGuildCommandIds, deleteGuildCommandIds, clearGuildCommandIds,
     flush,
     startBackupInterval, stopBackupInterval,
     findLeaderboardMessage,

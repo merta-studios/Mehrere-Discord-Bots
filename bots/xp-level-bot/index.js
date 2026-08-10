@@ -88,6 +88,8 @@ module.exports = {
       rest: new REST({ version: '10' }).setToken(token),
       store,
       commandIds: store.getCommandIds ? store.getCommandIds() : {},
+      // Scope der gespeicherten Command-IDs: 'global' | 'guild:<id>' | null
+      commandIdScope: store.getCommandIdScope ? store.getCommandIdScope() : null,
       guildCommandIds: new Map(),
       panelSessions: new Map(),
     };
