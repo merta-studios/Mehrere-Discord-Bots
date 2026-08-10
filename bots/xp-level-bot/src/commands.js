@@ -82,6 +82,24 @@ function defineCommands() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Normalisiert eine Guild-ID (trimmt, entfernt <@!123>-Mention-Form). */
+function normalizeGuildId(value) {
+  return typeof value === 'string' && value.trim() !== ''
+    ? value.trim().replace(/^<@!?(\d+)>$/, '$1')
+    : null;
+}
+
+/** Loggt die Registrierung pro Befehl mit Scope + Discord-Snowflake (insbesondere /level_roles). */
+function logRegistration(logger, scopeLabel, res) {
+  const list = Array.isArray(res) ? res : [];
+  logger?.info?.(
+    `[xp-level-bot] Command-Registrierung erfolgreich (Scope: ${scopeLabel}) – ${list.length} Commands:`
+  );
+  for (const c of list) {
+    logger?.info?.(`[xp-level-bot]   /${c.name} -> snowflake ${c.id}`);
+  }
+}
+
 /**
  * Registriert die Slash-Commands bei Discord.
  *
@@ -94,8 +112,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *    alte/verwaiste Guild-Commands auf bestehenden Servern mit `{ body: [] }` auf.
  *    Alte Guild-Commands (aus früheren Versionen oder versehentlicher Dev-Guild-Nutzung)
  *    überschreiben/blockieren sonst globale Commands wie `/level_roles`.
- * 4. Command-IDs werden in `ctx.commandIds` und persistent im `store` gespeichert.
- * 5. Nachvollziehbares Logging mit Route, Guild-ID, Command-Namen und Discord-IDs.
+ * 4. STRENGE SCOPE-TRENNUNG (Versuch 5): Dev-Guild-Command-IDs dürfen NIE in den
+ *    globalen ID-Slot (`ctx.commandIds` / `store.setCommandIds`) geschrieben werden.
+ *    Sonst rendert `/help` auf normalen Servern `</level_roles:DEV_GUILD_ID>` –
+ *    Discord kennt diese Snowflake dort nicht und meldet „Kein Befehl gefunden".
+ *    Dev-Guild-IDs gehören ausschließlich in `ctx.guildCommandIds` /
+ *    `store.setGuildCommandIds(devGuildId, ids)`.
+ * 5. Nachvollziehbares Logging mit Scope (global vs. Guild-ID), Route,
+ *    Command-Namen und den von Discord vergebenen Snowflake-IDs.
  */
 async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
   const commands = defineCommands().map((c) => c.toJSON());
@@ -107,10 +131,7 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
     return false;
   }
 
-  const rawDev = ctx.devGuildId;
-  const devGuildId = typeof rawDev === 'string' && rawDev.trim() !== ''
-    ? rawDev.trim().replace(/^<@!?(\d+)>$/, '$1')
-    : null;
+  const devGuildId = normalizeGuildId(ctx.devGuildId);
 
   const RETRY_DELAYS_MS = retryDelays || [0, 5_000, 15_000, 30_000];
 
@@ -118,37 +139,46 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
     if (RETRY_DELAYS_MS[attempt]) await sleep(RETRY_DELAYS_MS[attempt]);
     try {
       if (devGuildId) {
+        // ---------- Scope: Guild (nur Dev-Gilde) ----------
         const route = Routes.applicationGuildCommands(clientId, devGuildId);
         const res = await rest.put(route, { body: commands });
         const ids = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
 
-        ctx.commandIds = { ...(ctx.commandIds || {}), ...ids };
+        // Dev-Guild-IDs NUR in den Guild-Slot – der globale Slot bleibt unangetastet!
         ctx.guildCommandIds = ctx.guildCommandIds || new Map();
         ctx.guildCommandIds.set(devGuildId, ids);
-
-        if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
         if (ctx.store?.setGuildCommandIds) ctx.store.setGuildCommandIds(devGuildId, ids);
+        ctx.commandIdScope = `guild:${devGuildId}`;
+        if (ctx.store?.setCommandIdScope) ctx.store.setCommandIdScope(`guild:${devGuildId}`);
 
-        const summary = (res || []).map((c) => `${c.name} (ID: ${c.id})`).join(', ');
-        ctx.logger?.info?.(
-          `[xp-level-bot] Registriert: ${summary} (Dev-Gilde ${devGuildId}, Route: ${route})`
-        );
+        logRegistration(ctx.logger, `guild ${devGuildId} (Route: ${route})`, res);
       } else {
+        // ---------- Scope: Global (Produktion) ----------
         const route = Routes.applicationCommands(clientId);
         const res = await rest.put(route, { body: commands });
         const ids = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
 
+        // Globale IDs sind die einzige Quelle für `ctx.commandIds` + Store
         ctx.commandIds = ids;
         if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
+        ctx.commandIdScope = 'global';
+        if (ctx.store?.setCommandIdScope) ctx.store.setCommandIdScope('global');
 
-        // Im Produktivbetrieb alte Guild-Command-IDs aufräumen
+        // Veraltete Guild-Command-IDs im Store löschen, damit weder
+        // `ensureCommandIds` noch `commandMention` alte Dev-Guild-Snowflakes
+        // als Fallback verwenden (Prüfpunkt 3).
+        const staleGuildSets = ctx.store?.getAllGuildCommandIds
+          ? Object.keys(ctx.store.getAllGuildCommandIds()).length
+          : (ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.size : 0);
         if (ctx.guildCommandIds instanceof Map) ctx.guildCommandIds.clear();
         if (ctx.store?.clearGuildCommandIds) ctx.store.clearGuildCommandIds();
+        if (staleGuildSets > 0) {
+          ctx.logger?.info?.(
+            `[xp-level-bot] ${staleGuildSets} veraltete Guild-Command-ID-Sätze aus dem Store entfernt – globale IDs sind jetzt die einzige Quelle.`
+          );
+        }
 
-        const summary = (res || []).map((c) => `${c.name} (ID: ${c.id})`).join(', ');
-        ctx.logger?.info?.(
-          `[xp-level-bot] Registriert: ${summary} (global, Route: ${route})`
-        );
+        logRegistration(ctx.logger, `global (Route: ${route})`, res);
 
         // Alte Guild-Commands aufräumen, damit keine veralteten Commands neue globale Commands (wie /level_roles) shadowen
         const cachedGuilds = ctx.client?.guilds?.cache?.values() ? [...ctx.client.guilds.cache.values()] : [];
@@ -169,7 +199,7 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
     } catch (err) {
       const detail = err?.rawError ? JSON.stringify(err.rawError).slice(0, 500) : '';
       ctx.logger?.error?.(
-        `[xp-level-bot] Command-Registrierung fehlgeschlagen (Versuch ${attempt + 1}/${RETRY_DELAYS_MS.length}, Route: ${devGuildId ? 'guild ' + devGuildId : 'global'}): ${err.message} ${detail}`
+        `[xp-level-bot] Command-Registrierung fehlgeschlagen (Versuch ${attempt + 1}/${RETRY_DELAYS_MS.length}, Scope: ${devGuildId ? 'guild ' + devGuildId : 'global'}): ${err.message} ${detail}`
       );
     }
   }
@@ -181,18 +211,21 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
 /**
  * Stellt sicher, dass die Command-IDs vor dem Rendern von /help geladen sind.
  * Reihenfolge: Memory -> persistenter Store -> Discord REST GET Fallback -> Auto-Re-Register Fallback.
+ *
+ * SCOPE-LOGIK (Versuch 5):
+ * - Auf der Dev-Gilde (guildId === devGuildId) werden Guild-Command-IDs verwendet.
+ * - Auf ALLEN anderen Servern werden NUR globale Command-IDs verwendet – nie
+ *   Guild-IDs einer fremden (Dev-)Gilde, sonst „Kein Befehl gefunden".
  */
 async function ensureCommandIds(ctx, guildId = null) {
   const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'adminpanel'];
   const hasAll = (obj) => obj && typeof obj === 'object' && needed.every((name) => Boolean(obj[name]));
 
-  const rawDev = ctx.devGuildId;
-  const devGuildId = typeof rawDev === 'string' && rawDev.trim() !== ''
-    ? rawDev.trim().replace(/^<@!?(\d+)>$/, '$1')
-    : null;
+  const devGuildId = normalizeGuildId(ctx.devGuildId);
+  const isDevGuildCall = Boolean(devGuildId && guildId && String(guildId) === devGuildId);
 
-  // 1. In-Memory Check
-  if (devGuildId && guildId === devGuildId && ctx.guildCommandIds instanceof Map && hasAll(ctx.guildCommandIds.get(guildId))) {
+  // 1. In-Memory Check (Guild-Slot zuerst, aber NUR auf der Dev-Gilde)
+  if (isDevGuildCall && ctx.guildCommandIds instanceof Map && hasAll(ctx.guildCommandIds.get(guildId))) {
     return ctx.guildCommandIds.get(guildId);
   }
   if (hasAll(ctx.commandIds)) {
@@ -200,15 +233,15 @@ async function ensureCommandIds(ctx, guildId = null) {
   }
 
   // 2. Store Check (übersteht Bot-Restarts sofort ohne REST-Aufruf)
-  if (ctx.store?.getCommandIds && hasAll(ctx.store.getCommandIds())) {
-    ctx.commandIds = { ...(ctx.commandIds || {}), ...ctx.store.getCommandIds() };
-    return ctx.commandIds;
-  }
-  if (devGuildId && guildId === devGuildId && ctx.store?.getGuildCommandIds && hasAll(ctx.store.getGuildCommandIds(guildId))) {
+  if (isDevGuildCall && ctx.store?.getGuildCommandIds && hasAll(ctx.store.getGuildCommandIds(guildId))) {
     const storedG = ctx.store.getGuildCommandIds(guildId);
     ctx.guildCommandIds = ctx.guildCommandIds || new Map();
     ctx.guildCommandIds.set(guildId, storedG);
     return storedG;
+  }
+  if (ctx.store?.getCommandIds && hasAll(ctx.store.getCommandIds())) {
+    ctx.commandIds = { ...(ctx.commandIds || {}), ...ctx.store.getCommandIds() };
+    return ctx.commandIds;
   }
 
   // 3. Fallback: Command-IDs direkt von der Discord REST API abrufen
@@ -218,22 +251,23 @@ async function ensureCommandIds(ctx, guildId = null) {
     try {
       const rest = ctx.rest || new REST({ version: '10' }).setToken(token);
 
-      if (devGuildId) {
+      if (isDevGuildCall) {
+        // Nur auf der Dev-Gilde selbst die Guild-Commands laden – und nur in den
+        // Guild-Slot schreiben, nie in den globalen Slot.
         const fetched = await rest.get(Routes.applicationGuildCommands(clientId, devGuildId));
         if (Array.isArray(fetched) && fetched.length > 0) {
           const ids = Object.fromEntries(fetched.map((c) => [c.name, c.id]));
-          ctx.commandIds = { ...(ctx.commandIds || {}), ...ids };
           ctx.guildCommandIds = ctx.guildCommandIds || new Map();
           ctx.guildCommandIds.set(devGuildId, ids);
-          if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
           if (ctx.store?.setGuildCommandIds) ctx.store.setGuildCommandIds(devGuildId, ids);
           if (hasAll(ids)) return ids;
         }
       } else {
+        // Normaler Server / Produktion: IMMER die globalen Commands laden.
         const fetched = await rest.get(Routes.applicationCommands(clientId));
         if (Array.isArray(fetched) && fetched.length > 0) {
           const ids = Object.fromEntries(fetched.map((c) => [c.name, c.id]));
-          ctx.commandIds = { ...(ctx.commandIds || {}), ...ids };
+          ctx.commandIds = ids;
           if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
           if (hasAll(ids)) return ids;
         }
@@ -254,15 +288,29 @@ async function ensureCommandIds(ctx, guildId = null) {
 /**
  * Erzeugt eine klickbare Command-Mention im Format </name:id>.
  * Fallback auf /name nur dann, wenn wirklich keine ID auffindbar ist.
+ *
+ * SCOPE-LOGIK (Versuch 5, Prüfpunkt 1):
+ * - Guild-Command-IDs (aus `ctx.guildCommandIds` / Store) dürfen AUSSCHLIESSLICH
+ *   auf der Dev-Gilde selbst verwendet werden (guildId === devGuildId).
+ * - Auf normalen Servern (guildId !== devGuildId) wird NIE eine Guild-Command-ID
+ *   aus einer anderen (Dev-)Gilde gerendert – sonst meldet Discord beim Klick
+ *   „Kein Befehl gefunden". Dort zählt zwingend die GLOBALE Command-ID.
  */
 function commandMention(ctx, name, guildId = null) {
-  const guildIds = guildId && ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(guildId) : null;
-  const storedGuildIds = guildId && ctx.store?.getGuildCommandIds ? ctx.store.getGuildCommandIds(guildId) : null;
-  const id =
-    guildIds?.[name] ||
-    storedGuildIds?.[name] ||
-    ctx.commandIds?.[name] ||
-    (ctx.store?.getCommandId ? ctx.store.getCommandId(name) : null);
+  const devGuildId = normalizeGuildId(ctx.devGuildId);
+  const isDevGuild = Boolean(devGuildId && guildId && String(guildId) === devGuildId);
+
+  let id = null;
+  if (isDevGuild) {
+    // Nur auf der Dev-Gilde selbst dürfen Guild-Command-IDs verwendet werden.
+    const guildIds = ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(guildId) : null;
+    const storedGuildIds = ctx.store?.getGuildCommandIds ? ctx.store.getGuildCommandIds(guildId) : null;
+    id = guildIds?.[name] || storedGuildIds?.[name];
+  }
+  if (!id) {
+    // Auf allen normalen Servern: ausschließlich die globale Command-ID.
+    id = ctx.commandIds?.[name] || (ctx.store?.getCommandId ? ctx.store.getCommandId(name) : null);
+  }
 
   return id ? `</${name}:${id}>` : `/${name}`;
 }

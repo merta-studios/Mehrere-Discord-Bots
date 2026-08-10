@@ -97,6 +97,8 @@ function makeCtx(overrides = {}) {
     client: { user: { id: 'app1' }, guilds: { cache: new Map([['g1', { id: 'g1' }]]) } },
     devGuildId: null,
     store,
+    commandIds: {},
+    guildCommandIds: new Map(),
     ...overrides,
   };
 }
@@ -153,8 +155,21 @@ test('registerCommands mit Dev-Gilde registriert gezielt dort inkl. /level_roles
   assert.equal(calls.length, 1);
   assert.equal(calls[0].route, Routes.applicationGuildCommands('app1', '123456789012345678'));
   assert.ok(calls[0].body.some((c) => c.name === 'level_roles'));
-  assert.equal(ctx.commandIds.level_roles, 'dev-id-level_roles');
+
+  // WICHTIG (Versuch 5): Dev-Guild-IDs gehören NUR in den Guild-Slot –
+  // der globale Slot und der Store-Global-Slot dürfen NICHT verschmutzt werden,
+  // sonst rendert /help auf normalen Servern </level_roles:DEV_GUILD_ID>
+  // („Kein Befehl gefunden").
+  assert.equal(ctx.commandIds?.level_roles, undefined, 'Dev-ID darf nicht im globalen Memory-Slot landen');
+  assert.equal(ctx.store.getCommandId('level_roles'), null, 'Dev-ID darf nicht im globalen Store-Slot landen');
+
+  // Guild-Slot enthält die Dev-Guild-IDs
   assert.equal(ctx.guildCommandIds.get('123456789012345678').level_roles, 'dev-id-level_roles');
+  assert.equal(ctx.store.getGuildCommandIds('123456789012345678').level_roles, 'dev-id-level_roles');
+
+  // Scope ist als Guild-Scope markiert
+  assert.equal(ctx.commandIdScope, 'guild:123456789012345678');
+  assert.equal(ctx.store.getCommandIdScope(), 'guild:123456789012345678');
 });
 
 test('registerCommands ignoriert leere/Whitespace Dev-Gilde und registriert global', async () => {
@@ -228,20 +243,64 @@ test('ensureCommandIds lädt IDs von Discord REST GET nach wenn RAM und Store le
   assert.equal(ctx.store.getCommandId('level_roles'), '1005');
 });
 
-test('commandMention nutzt Memory, Store und Guild-IDs und formatiert </name:id>', () => {
+test('commandMention: Guild-IDs NUR auf der Dev-Gilde, sonst zwingend globale IDs', () => {
   const store = createXpStore({ env: () => '' });
   store.setCommandIds({ setup: 'store-setup' });
 
   const ctx = {
     store,
+    devGuildId: 'g1',
     commandIds: { help: 'global-help', level_roles: 'global-level' },
     guildCommandIds: new Map([['g1', { help: 'guild-help', level_roles: 'guild-level' }]]),
   };
 
+  // Auf der Dev-Gilde selbst: Guild-IDs erlaubt
   assert.equal(commandMention(ctx, 'level_roles', 'g1'), '</level_roles:guild-level>');
+  assert.equal(commandMention(ctx, 'help', 'g1'), '</help:guild-help>');
+  // Auf normalen Servern: NIE Guild-IDs, IMMER die globale ID
+  assert.equal(commandMention(ctx, 'level_roles', 'g2'), '</level_roles:global-level>');
   assert.equal(commandMention(ctx, 'help', 'g2'), '</help:global-help>');
   assert.equal(commandMention(ctx, 'setup', 'g2'), '</setup:store-setup>');
   assert.equal(commandMention(ctx, 'missing', 'g1'), '/missing');
+});
+
+test('commandMention: ohne Dev-Gilde werden vorhandene Guild-IDs komplett ignoriert', () => {
+  const store = createXpStore({ env: () => '' });
+  store.setGuildCommandIds('g1', { level_roles: 'stored-guild-level' });
+
+  const ctx = {
+    store,
+    devGuildId: null,
+    commandIds: { level_roles: 'global-level' },
+    guildCommandIds: new Map([['g1', { level_roles: 'guild-level' }]]),
+  };
+
+  // Keine Dev-Gilde konfiguriert -> Guild-IDs dürfen nie verwendet werden
+  assert.equal(commandMention(ctx, 'level_roles', 'g1'), '</level_roles:global-level>');
+  // Wenn keine globale ID existiert: reiner Text-Fallback, NICHT die fremde Guild-ID
+  assert.equal(commandMention(ctx, 'level_roles', 'g1').includes('guild-level'), false);
+});
+
+test('commandMention: Dev-Guild-ID aus Store wird auf normalen Servern nie verwendet (Prüfpunkt 1)', () => {
+  // Szenario: Bot lief früher mit XP_BOT_GUILD_ID (Dev-Modus). Der Store enthält
+  // noch Dev-Guild-IDs im Guild-Slot. Auf einem NORMALEN Server darf /help daraus
+  // niemals </level_roles:DEV_ID> bauen, sondern nur die globale ID nutzen –
+  // bzw. den Text-Fallback, wenn keine globale ID existiert.
+  const store = createXpStore({ env: () => '' });
+  store.setGuildCommandIds('999999999', { level_roles: 'dev-snowflake-111', setup: 'dev-snowflake-222' });
+  store.setCommandIdScope('guild:999999999');
+
+  const ctx = {
+    store,
+    devGuildId: '999999999',
+    commandIds: {},
+    guildCommandIds: new Map([['999999999', { level_roles: 'dev-snowflake-111' }]]),
+  };
+
+  // Normaler Server (g2 != Dev-Gilde 999999999):
+  assert.equal(commandMention(ctx, 'level_roles', 'g2'), '/level_roles');
+  // Dev-Gilde selbst: Guild-ID ok
+  assert.equal(commandMention(ctx, 'level_roles', '999999999'), '</level_roles:dev-snowflake-111>');
 });
 
 test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', async () => {
@@ -319,4 +378,155 @@ test('ensureCommandIds registriert automatisch neu, falls REST GET unvollständi
   assert.equal(putCalled, true, 'Sollte registerCommands ausführen, um fehlenden Command /level_roles zu registrieren');
   assert.equal(ids.level_roles, 'new-level_roles');
   assert.equal(ctx.commandIds.level_roles, 'new-level_roles');
+});
+
+test('/level_roles ist ein valider Admin-Command für globale Registrierung (Prüfpunkt 2)', () => {
+  const cmd = defineCommands().map((c) => c.toJSON()).find((c) => c.name === 'level_roles');
+  assert.ok(cmd, '/level_roles muss definiert sein');
+
+  // default_member_permissions: Administrator (Bit "8") als String – exakt das
+  // Format, das Discord für globale Commands verlangt. Admin-Mitglieder sehen
+  // den Befehl im /-Menü, normale Mitglieder nicht (Discord-Design).
+  assert.equal(cmd.default_member_permissions, '8', 'Administrator-Permission muss als String "8" gesetzt sein');
+  assert.equal(typeof cmd.description, 'string');
+  assert.ok(cmd.description.length >= 1 && cmd.description.length <= 100);
+
+  // Keine Pflicht-Optionen nach optionalen, valide Optionsnamen – wird von
+  // validateCommand abgedeckt, hier explizit nochmal für level_roles:
+  assert.deepEqual(validateCommand(cmd), [], 'level_roles-JSON muss Discord-API-valide sein');
+});
+
+test('globale Registrierung löscht alte Guild-Command-IDs aus dem Store (Prüfpunkt 3)', async () => {
+  const calls = [];
+  const fakeRest = {
+    put: async (route, { body }) => {
+      calls.push({ route, body });
+      return (body || []).map((c) => ({ id: `global-${c.name}`, name: c.name }));
+    },
+  };
+  const ctx = makeCtx({
+    // Simuliert veralteten Store aus der Dev-Gilden-Zeit:
+    store: (() => {
+      const s = createXpStore({ env: () => '' });
+      s.setGuildCommandIds('111111111', { level_roles: 'old-dev-id', setup: 'old-dev-setup' });
+      s.setGuildCommandIds('222222222', { level_roles: 'old-dev-id-2' });
+      return s;
+    })(),
+    guildCommandIds: new Map([['111111111', { level_roles: 'old-dev-id' }]]),
+  });
+
+  const ok = await registerCommands(ctx, { restFactory: () => fakeRest, retryDelays: [0] });
+  assert.equal(ok, true);
+
+  // Alte Guild-IDs sind aus Memory UND Store entfernt
+  assert.equal(ctx.guildCommandIds.size, 0);
+  assert.deepEqual(ctx.store.getAllGuildCommandIds(), {}, 'keine Guild-IDs mehr im Store');
+  // Globale IDs sind die einzige Quelle
+  assert.equal(ctx.commandIds.level_roles, 'global-level_roles');
+  assert.equal(ctx.store.getCommandId('level_roles'), 'global-level_roles');
+  // Scope als global markiert
+  assert.equal(ctx.commandIdScope, 'global');
+  assert.equal(ctx.store.getCommandIdScope(), 'global');
+});
+
+test('ensureCommandIds lädt auf normalen Servern GLOBALE Commands, auch wenn Dev-Gilde gesetzt ist (Prüfpunkt 1)', async () => {
+  const routes = [];
+  const fakeRest = {
+    get: async (route) => {
+      routes.push(route);
+      return [
+        { id: '4001', name: 'setup' },
+        { id: '4002', name: 'rank' },
+        { id: '4003', name: 'help' },
+        { id: '4004', name: 'admin_set_bot_profile' },
+        { id: '4005', name: 'level_roles' },
+        { id: '4006', name: 'adminpanel' },
+      ];
+    },
+  };
+  // Bot ist in der Dev-Gilde konfiguriert, /help wird aber auf normalem Server g2 aufgerufen
+  const ctx = makeCtx({ devGuildId: '123456789012345678', rest: fakeRest, commandIds: {} });
+  const ids = await ensureCommandIds(ctx, 'g2');
+
+  assert.equal(routes.length, 1, 'exakt ein REST-Aufruf');
+  assert.equal(routes[0], Routes.applicationCommands('app1'), 'muss die GLOBALE Route laden, nicht die Dev-Gilden-Route');
+  assert.equal(ids.level_roles, '4005');
+  // Keine Dev-Guild-IDs im globalen Slot
+  assert.equal(ctx.guildCommandIds.has('123456789012345678'), false);
+});
+
+test('ensureCommandIds lädt auf der Dev-Gilde die Guild-Commands und verschmutzt den globalen Slot nicht', async () => {
+  const routes = [];
+  const fakeRest = {
+    get: async (route) => {
+      routes.push(route);
+      return [
+        { id: '5001', name: 'setup' },
+        { id: '5002', name: 'rank' },
+        { id: '5003', name: 'help' },
+        { id: '5004', name: 'admin_set_bot_profile' },
+        { id: '5005', name: 'level_roles' },
+        { id: '5006', name: 'adminpanel' },
+      ];
+    },
+  };
+  const ctx = makeCtx({ devGuildId: '123456789012345678', rest: fakeRest, commandIds: {} });
+  const ids = await ensureCommandIds(ctx, '123456789012345678');
+
+  assert.equal(routes[0], Routes.applicationGuildCommands('app1', '123456789012345678'));
+  assert.equal(ids.level_roles, '5005');
+  assert.equal(ctx.guildCommandIds.get('123456789012345678').level_roles, '5005');
+  // Globaler Slot bleibt unangetastet (keine Dev-Pollution!)
+  assert.equal(ctx.commandIds.level_roles, undefined);
+  assert.equal(ctx.store.getCommandId('level_roles'), null);
+});
+
+test('Logging nennt Scope und die Discord-Snowflake pro Command, inkl. /level_roles (Prüfpunkt 4)', async () => {
+  const logs = [];
+  const fakeRest = {
+    put: async (route, { body }) => {
+      return (body || []).map((c) => ({ id: `sf-${c.name}`, name: c.name }));
+    },
+  };
+  const ctx = makeCtx({
+    logger: { info: (m) => logs.push(m), warn() {}, error() {} },
+  });
+
+  await registerCommands(ctx, { restFactory: () => fakeRest, retryDelays: [0] });
+
+  const joined = logs.join('\n');
+  // Scope-Typ explizit geloggt
+  assert.ok(/Scope: global/.test(joined), `Scope fehlt im Log:\n${joined}`);
+  // Snowflake pro Befehl geloggt – insbesondere level_roles
+  assert.ok(/\/level_roles -> snowflake sf-level_roles/.test(joined), `level_roles-Snowflake fehlt im Log:\n${joined}`);
+  assert.ok(/\/setup -> snowflake sf-setup/.test(joined), `setup-Snowflake fehlt im Log:\n${joined}`);
+
+  // Auch im Dev-Gilden-Modus: Scope nennt die Guild-ID
+  logs.length = 0;
+  const ctxDev = makeCtx({
+    devGuildId: '123456789012345678',
+    logger: { info: (m) => logs.push(m), warn() {}, error() {} },
+  });
+  await registerCommands(ctxDev, { restFactory: () => fakeRest, retryDelays: [0] });
+  const joinedDev = logs.join('\n');
+  assert.ok(/Scope: guild 123456789012345678/.test(joinedDev), `Guild-Scope fehlt im Log:\n${joinedDev}`);
+  assert.ok(/\/level_roles -> snowflake sf-level_roles/.test(joinedDev), `level_roles-Snowflake fehlt im Dev-Log:\n${joinedDev}`);
+});
+
+test('store persistiert den Command-ID-Scope über Datei-Neustart hinweg', async () => {
+  const store = createXpStore({ env: () => '' });
+  store.setCommandIdScope('global');
+  assert.equal(store.getCommandIdScope(), 'global');
+
+  // Neuer Store (simulierter Bot-Restart) lädt aus der Fallback-Datei
+  const store2 = createXpStore({ env: () => '' });
+  await store2.init();
+  assert.equal(store2.getCommandIdScope(), 'global', 'Scope muss nach Restart aus dem Store geladen werden');
+
+  // Guild-Scope-Roundtrip
+  const store3 = createXpStore({ env: () => '' });
+  store3.setCommandIdScope('guild:123456789012345678');
+  const store4 = createXpStore({ env: () => '' });
+  await store4.init();
+  assert.equal(store4.getCommandIdScope(), 'guild:123456789012345678');
 });
