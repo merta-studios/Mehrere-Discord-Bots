@@ -50,7 +50,46 @@ function xpNeeded(level) {
 
 function nextLevelXp(level) { return xpNeeded(level); }
 
-const DAILY_DECAY_RATE = 0.055;
+// Täglicher XP-Verlust um 0 Uhr:
+// - Basis: 10% des Level-Bedarfs, wenn man in den letzten 24h aktiv war (XP verdient hat)
+// - Jeder weitere Tag ohne verdiente XP: +5 Prozentpunkte (1. inaktiver Tag = 10%, dann 15%, 20%, 25%, …)
+const DAILY_DECAY_RATE = 0.10;
+const INACTIVE_DECAY_STEP = 0.05;
+
+/**
+ * Decay-Anteil für die nächste 0-Uhr-Abrechnung.
+ * inactiveDays = wie viele Tage in Folge der Nutzer (ab heute/dieser Abrechnung)
+ * inaktiv ist. 0 (aktiv) und 1 (erster inaktiver Tag) -> 10%, danach +5% pro Tag.
+ */
+function decayRateForInactiveDays(inactiveDays) {
+  const days = Math.max(0, Math.floor(Number(inactiveDays) || 0));
+  if (days <= 1) return DAILY_DECAY_RATE;
+  // Ganzzahl-Prozentrechnung, damit 10 % + 5 % exakt 0.15 ergibt (kein Float-Fehler)
+  const percent = Math.min(100, 10 + (days - 1) * Math.round(INACTIVE_DECAY_STEP * 100));
+  return percent / 100;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** War der Nutzer in den letzten 24h aktiv (irgendwelche XP verdient)? */
+function wasActiveRecently(user, now = Date.now()) {
+  const last = user?.lastActivity || user?.lastXpGain || 0;
+  return last > 0 && (now - last) < DAY_MS;
+}
+
+/**
+ * Wie viele XP verliert der Nutzer bei der nächsten 0-Uhr-Abrechnung?
+ * Aktiv in den letzten 24h -> 10%. Sonst steigt der Inaktivitäts-Streak an.
+ */
+function nextDecayInfo(user, now = Date.now()) {
+  const inactiveDays = wasActiveRecently(user, now) ? 0 : (user?.inactiveDays || 0) + 1;
+  const rate = decayRateForInactiveDays(inactiveDays);
+  const level = Math.max(1, user?.level || 1);
+  const raw = Math.ceil(xpNeeded(level) * rate);
+  // Wer auf Level 1 mit 0 XP steht, kann faktisch nichts verlieren
+  const decay = level === 1 && (user?.xp || 0) <= 0 ? 0 : raw;
+  return { inactiveDays, rate, percent: Math.round(rate * 100), decay };
+}
 
 // ---------------------------------------------------------------------------
 // Wortzählung & Spam-Erkennung – KRASS robust
@@ -227,15 +266,15 @@ function applyXpGain(user, amount) {
   return { level, xp, leveledUp: false, leveledDown: false, leveled: false };
 }
 
-function applyDailyDecay(user) {
-  // täglich 5,5% von den für das nächste Level nötigen XP abziehen
+function applyDailyDecay(user, rate = DAILY_DECAY_RATE) {
+  // täglich `rate` (Standard: 10%) von den für das nächste Level nötigen XP abziehen
   // Falls das nicht mehr in die aktuellen XP passt, wird der echte Restbetrag
   // ins vorige Level mitgenommen statt pauschal auf einen Fixwert zu setzen.
   const startLevel = user.level;
   let level = user.level;
   let xp = user.xp;
   const needed = xpNeeded(level);
-  const decay = Math.ceil(needed * DAILY_DECAY_RATE);
+  const decay = Math.ceil(needed * Math.min(1, Math.max(0, rate)));
   let remainingDecay = decay;
 
   while (remainingDecay > 0) {
@@ -411,6 +450,48 @@ function isVoiceEligible(memberVoiceState, channelMemberCount) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Bonus-Belohnungen (zufällige XP-Geschenke im Haupt-Chat) – reine Logik
+// ---------------------------------------------------------------------------
+
+const BONUS_XP_MIN = 20;
+const BONUS_XP_MAX = 40;
+const BONUS_MAX_PER_DAY = 4;
+const BONUS_MIN_SPACING_MS = 90 * 60 * 1000; // mind. 1h 30min zwischen zwei Drops
+const BONUS_WINDOW_MS = 140_000; // Aktivitäts-Fenster: 140 Sekunden (lockerer Burst)
+const BONUS_MIN_MESSAGES = 8; // mind. so viele Nachrichten im Fenster
+const BONUS_MIN_USERS = 2; // von mind. so vielen verschiedenen Personen
+const BONUS_DROP_CHANCE = 0.25; // nicht bei jedem Gespräch: 25% Chance pro Burst
+const BONUS_ROLL_COOLDOWN_MS = 10 * 60 * 1000; // nach einer Wertung 10min Ruhe
+const BONUS_CLAIM_MS = 10 * 60 * 1000; // Drops verfallen nach 10 Minuten
+
+/** Zufällige Bonus-Höhe (20–40 XP, Ganzzahl). rng injizierbar für Tests. */
+function rollBonusXp(rng = Math.random) {
+  return BONUS_XP_MIN + Math.floor(rng() * (BONUS_XP_MAX - BONUS_XP_MIN + 1));
+}
+
+/**
+ * Erkennt einen Aktivitäts-Burst: mindestens `minMessages` Nachrichten von
+ * mindestens `minUsers` verschiedenen Personen im Zeitfenster.
+ * `entries`: [{uid, ts}] – veraltete Einträge werden intern ignoriert.
+ */
+function detectBurst(entries, now = Date.now(), { windowMs = BONUS_WINDOW_MS, minMessages = BONUS_MIN_MESSAGES, minUsers = BONUS_MIN_USERS } = {}) {
+  const fresh = entries.filter((e) => e && typeof e.ts === 'number' && now - e.ts <= windowMs);
+  const users = new Set(fresh.map((e) => e.uid));
+  return fresh.length >= minMessages && users.size >= minUsers;
+}
+
+/**
+ * Darf aktuell ein neuer Bonus-Drop kommen? (Tageslimit + Mindestabstand)
+ * state: { dayKey, count, lastDropAt } (für den heutigen Tag)
+ */
+function canDropBonus(state, now = Date.now()) {
+  if (!state) return true;
+  if ((state.count || 0) >= BONUS_MAX_PER_DAY) return false;
+  if (state.lastDropAt && now - state.lastDropAt < BONUS_MIN_SPACING_MS) return false;
+  return true;
+}
+
 module.exports = {
   pad,
   tzParts,
@@ -419,6 +500,24 @@ module.exports = {
   xpNeeded,
   nextLevelXp,
   DAILY_DECAY_RATE,
+  INACTIVE_DECAY_STEP,
+  decayRateForInactiveDays,
+  wasActiveRecently,
+  nextDecayInfo,
+  DAY_MS,
+  rollBonusXp,
+  detectBurst,
+  canDropBonus,
+  BONUS_XP_MIN,
+  BONUS_XP_MAX,
+  BONUS_MAX_PER_DAY,
+  BONUS_MIN_SPACING_MS,
+  BONUS_WINDOW_MS,
+  BONUS_MIN_MESSAGES,
+  BONUS_MIN_USERS,
+  BONUS_DROP_CHANCE,
+  BONUS_ROLL_COOLDOWN_MS,
+  BONUS_CLAIM_MS,
   countValidWords,
   xpForWords,
   calculateXpForMessage,

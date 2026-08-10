@@ -7,9 +7,22 @@ steckt in den Komponenten selbst.
 
 ## Funktionen
 
-- **/setup [language] [channel]** – **Nur für Admins:** Liste in 10 Sprachen einrichten
-  (Kanal optional, sonst aktueller Kanal). Bestehende Listen werden
-  gefunden: Einträge bleiben beim Umstellen von Sprache/Kanal erhalten.
+- **/setup [language] [channel] [birthday_role]** – **Nur für Admins:** Liste in
+  10 Sprachen einrichten (Kanal optional, sonst aktueller Kanal). Mit der
+  optionalen **`birthday_role`** bekommen Geburtstagskinder diese Rolle für
+  **24 Stunden** am Ehrentag (Vergabe um 0 Uhr, stündliches Aufräumen nimmt
+  sie nach dem Tag wieder weg; die Rollen-ID steckt im Listen-Marker).
+  Bestehende Listen werden gefunden: Einträge & Rolle bleiben beim Umstellen
+  von Sprache/Kanal erhalten.
+- **/event create | /event delete** – **Nur für Admins:** Server-Events in die
+  Liste aufnehmen (Formular: Name, Tag, Monat – **jedes Datum erlaubt, keine
+  7-Tage-Regel**, Bestätigungs-Container mit ✅/✏️/❌) oder per Auswahlmenü
+  wieder entfernen. Events erscheinen mit **Namen statt Erwähnung**
+  einsortiert in der Geburtstagsliste, **maximal 5 gleichzeitig**. Um 0 Uhr am
+  Event-Tag postet der Bot **„🚀 Heute findet ein Event statt!“** mit
+  „Interessenten“-Abschnitt und **„Interessant! 😂“**-Button (nur im
+  betreffenden Kanal, 24 h lang klickbar). Danach wird das Event **aus der
+  Liste gelöscht** (kein jährlicher Kreislauf wie bei Geburtstagen).
 - **Modernes Container-Layout (Components V2)** – Kein farbiger Rand an der Seite,
   Titel `🎂 Geburtstage` direkt beim Datumstext oben, keine störenden Footer oder
   Zeitstempel unten, Trennlinien (Dividers) und Buttons direkt im Container.

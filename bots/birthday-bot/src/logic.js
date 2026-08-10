@@ -120,6 +120,27 @@ function isWithinHours(createdTimestamp, hours = 24) {
   return Date.now() - createdTimestamp <= hours * HOUR_MS;
 }
 
+const EVENT_NAME_MAX = 45;
+
+/**
+ * Event-Name aufräumen: Der Name reist als `🚀 **Name**`-Zeile in der
+ * Listen-Nachricht (unsere „Datenbank“) und im täglichen Event-Post mit.
+ * Rausfliegen daher: Zeilenumbrüche, `*` (würde das Bold-Parsing brechen),
+ * `|` (Zeilen-Trenner), unsichtbare Zeichen und `@` (keine Pings in Namen).
+ * Rückgabe: bereinigter Name (1–45 Zeichen) oder null, wenn nichts übrig bleibt.
+ */
+function sanitizeEventName(raw) {
+  if (typeof raw !== 'string') return null;
+  const name = raw
+    .replace(/[​‌‍﻿]/g, '') // Zero-Width-Zeichen entfernen
+    .replace(/[\r\n\t]+/g, ' ') // Zeilenumbrüche würden das Listen-Parsing brechen
+    .replace(/[*|@`~]/g, '') // Format-/Zeilen-Brecher & Pings entfernen
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!name) return null;
+  return name.length > EVENT_NAME_MAX ? name.slice(0, EVENT_NAME_MAX).trim() : name;
+}
+
 module.exports = {
   pad,
   tzParts,
@@ -133,5 +154,7 @@ module.exports = {
   isWithinSevenDays,
   parseDayInput,
   isWithinHours,
+  sanitizeEventName,
+  EVENT_NAME_MAX,
   LANGS,
 };

@@ -9,10 +9,12 @@ const {
   ActionRowBuilder,
   SectionBuilder,
   ThumbnailBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require('discord.js');
 
 const { LANGS, t, tzOf, formatToday } = require('./languages');
-const { xpNeeded, getMedal } = require('./logic');
+const { xpNeeded, getMedal, nextDecayInfo } = require('./logic');
 
 const LEADERBOARD_MARKER = 'xp_leader::v1::';
 
@@ -110,13 +112,17 @@ function buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now=new Date() }) {
   const filled = Math.round((percent/100)*BAR_SEGMENTS);
   const bar = '⬛'.repeat(filled) + '⬜'.repeat(BAR_SEGMENTS-filled);
   const remaining = Math.max(0, needed - xp);
+  // Wie viele XP gehen heute Nacht um 0 Uhr verloren? (10%, bei Inaktivität mehr)
+  const decayInfo = nextDecayInfo(rankInfo.user, now.getTime());
   const body = t('rankBody', lang, {
     user: `<@${userId}>`,
     rank: rankInfo.rank,
     total: rankInfo.total,
     level: lvl,
     xp, needed, nextLevel,
-    bar, percent, remaining
+    bar, percent, remaining,
+    decayXp: decayInfo.decay,
+    decayPercent: decayInfo.percent,
   });
   const content = `# ${t('rankTitle', lang)}\n\n${body}`;
   if (avatarUrl) {
@@ -161,6 +167,69 @@ function smallContainer(title, desc) {
 
 function smallEmbed(_c, title, desc){ return smallContainer(title,desc); }
 
+// ---------------------------------------------------------------------------
+// Bonus-Belohnungen (Zufalls-XP-Geschenke im Haupt-Chat)
+// ---------------------------------------------------------------------------
+
+/**
+ * Offener Bonus-Drop: Text nennt die genaue XP-Zahl, der „Einsammeln“-Button
+ * ist aktiv. Der Marker `xp-bonus:` dient der Wiedererkennung.
+ */
+function buildBonusDropEmbed({ lang, xp, dropId }) {
+  const container = new ContainerBuilder();
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `# ${t('bonusTitle', lang)}\n\n${t('bonusBody', lang, { xp })}\n\u200Bxp-bonus:${dropId}\u200B`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`xp_bonus_claim_${dropId}`)
+        .setStyle(ButtonStyle.Success)
+        .setLabel(t('bonusBtn', lang))
+    )
+  );
+  return container;
+}
+
+/** Eingeforderter Drop: Button bleibt sichtbar, aber deaktiviert; Text pingt den Schnellsten. */
+function buildBonusClaimedEmbed({ lang, xp, claimerId, dropId }) {
+  const container = new ContainerBuilder();
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `# ${t('bonusClaimedTitle', lang)}\n\n${t('bonusClaimedBody', lang, { user: `<@${claimerId}>`, xp })}\n\u200Bxp-bonus:${dropId}\u200B`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`xp_bonus_claim_${dropId}`)
+        .setStyle(ButtonStyle.Success)
+        .setLabel(t('bonusBtn', lang))
+        .setDisabled(true)
+    )
+  );
+  return container;
+}
+
+/** Verfallener Drop (niemand war schnell genug), Button deaktiviert. */
+function buildBonusExpiredEmbed({ lang, xp, dropId }) {
+  const container = new ContainerBuilder();
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `# ${t('bonusExpiredTitle', lang)}\n\n${t('bonusExpiredBody', lang, { xp })}\n\u200Bxp-bonus:${dropId}\u200B`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`xp_bonus_claim_${dropId}`)
+        .setStyle(ButtonStyle.Success)
+        .setLabel(t('bonusBtn', lang))
+        .setDisabled(true)
+    )
+  );
+  return container;
+}
+
 module.exports = {
   LEADERBOARD_MARKER,
   extractAllText,
@@ -168,6 +237,9 @@ module.exports = {
   buildRankEmbed,
   buildLevelUpEmbed,
   buildLevelDownEmbed,
+  buildBonusDropEmbed,
+  buildBonusClaimedEmbed,
+  buildBonusExpiredEmbed,
   smallContainer,
   smallEmbed,
 };

@@ -11,7 +11,12 @@
  *  - Level-Rollen: /level_roles (Admin-Formular) erstellt/sortiert Belohnungsrollen,
  *    Sync bei Level Up/Down (mehrere Rollen, nie entfernen)
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
- *  - Täglich 0 Uhr (TZ pro Sprache): 5,5% Decay, Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
+ *  - Bonus-Drops: Bei viel Haupt-Chat-Aktivität (>=8 Msg/>=2 Leute/75s) erscheint
+ *    manchmal (25% Chance) eine XP-Belohnung (20–40 XP) mit „Einsammeln“-Button –
+ *    der erste Klick gewinnt; max. 4/Tag, mind. 1h30 Abstand, verfällt nach 10min
+ *  - Täglich 0 Uhr (TZ pro Sprache): 10% Decay; wer 24h keine XP verdient hat,
+ *    bekommt +5 Prozentpunkte pro weiterem inaktivem Tag (10→15→20→25%…),
+ *    Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
  *  - Voice 25XP/min: nicht muted, mit mind. 1 anderer, >=5s gesprochen, Pause nötig
  *  - Leaderboard stündlich + bei Level-Up/Down (max alle 10 Min), Container V2,
  *    Top15, kurzer Decay-Hinweis, Zeit+TZ, Self-Healing über Marker
@@ -89,7 +94,9 @@ module.exports = {
 
     client.once(Events.ClientReady, async () => {
       updatePresence();
-      await registerCommands(ctx);
+      // Registrierung hat intern mehrere Versuche mit Abstand (bei Fehlschlag
+      // versucht es der Scheduler weiter alle 15 min) – deshalb nicht blockierend.
+      void registerCommands(ctx);
       // Scan for existing leaderboards that are not in store (self-healing find)
       for (const guild of client.guilds.cache.values()){
         if (store.getGuild(guild.id)) continue;
@@ -107,21 +114,46 @@ module.exports = {
       logger.info(`[xp-level-bot] Bereit auf ${client.guilds.cache.size} Servern – ${store.getAllUsersCount()} Nutzer im RAM`);
     });
 
+    // ---------------- Bonus-Belohnungen (Zufalls-XP-Drops im Haupt-Chat) ----------------
+    const { createBonusDropper } = require('./src/bonus');
+    const bonusDropper = createBonusDropper({
+      ctx,
+      // Level-Up/Down eines Bonus-Gewinners: gleiche Nachbereitung wie Chat-XP
+      onLevelChange: async (guild, cfg, user, res, sourceMsg) => {
+        try { await handleLevelChange(ctx, sourceMsg && sourceMsg.guild ? sourceMsg : { guild, channel: null }, user, res, cfg); } catch {}
+      },
+      onXpOnly: async (guild, cfg, user, userId) => {
+        try {
+          const rankInfo = store.getRank(guild.id, userId);
+          if (rankInfo && rankInfo.rank <= 3) {
+            await maybeRefreshRankNicknames(ctx, guild, userId, cfg.lang || 'de');
+          }
+        } catch {}
+      },
+    });
+    ctx.bonusDropper = bonusDropper;
+
     // ---------------- Interactions ----------------
     client.on('interactionCreate', (interaction)=>{ void handleInteraction(ctx, interaction); });
 
     // ---------------- Message XP ----------------
     client.on('messageCreate', async (msg)=>{
       try {
+        // Bots UND Webhooks bekommen nichts: kein XP, kein Level, kein Nickname, keine Boni
         if (msg.author?.bot) return;
+        if (msg.webhookId) return;
         if (!msg.guild) return;
         if (msg.system) return;
 
         const cfg = store.getGuild(msg.guild.id);
-        // nicht eingerichtet (oder nur Level-Rollen ohne /setup): kein XP
+        // nicht eingerichtet (oder nur Level-Rollen ohne /setup): kein XP, kein Bonus
         if (!cfg || !cfg.leaderboardChannelId) return;
 
-        // Optional: ignorieren falls Nachricht von Webhook? Lassen wir zu
+        // Bonus-System beobachtet den Haupt-Chat (vergibt selbst kein XP ohne Button-Klick)
+        if (cfg.mainChannelId && msg.channel.id === cfg.mainChannelId) {
+          void bonusDropper.onMessage(msg, cfg);
+        }
+
         const content = msg.content || '';
 
         // Medien (Bilder, Videos, Sprachnachrichten, Sticker) zählen als XP-Träger
@@ -141,14 +173,20 @@ module.exports = {
         const { valid, xp } = calculateXpForMessage(content, { hasMedia });
         if (xp <= 0) return;
 
+        // Merken, ob der Nutzer ganz neu ist: Wer bei Level 1 seine allerersten
+        // XP bekommt, soll SOFORT den Nickname-Tag [Lvl 1] tragen – nicht erst
+        // ab dem ersten Level-Aufstieg.
+        const isFirstEverXp = !store.getUser(msg.guild.id, msg.author.id);
         const user = store.ensureUser(msg.guild.id, msg.author.id);
-        if (isOnCooldown(user.lastXpGain, Date.now())) return;
+        const now = Date.now();
+        if (isOnCooldown(user.lastXpGain, now)) return;
 
         // XP vergeben
         const res = applyXpGain(user, xp);
         user.level = res.level;
         user.xp = res.xp;
-        user.lastXpGain = Date.now();
+        user.lastXpGain = now;
+        user.lastActivity = now; // Aktivitäts-Stempel für den Inaktivitäts-Decay
         store.setUser(user);
         // Nicht jede Nachricht flushen – Dirty tracking reicht, Backup alle 5min + SIGTERM
         // Bei Level-Up sofort flushen damit nichts verloren geht
@@ -156,6 +194,11 @@ module.exports = {
 
         if (res.leveledUp || res.leveledDown) {
           await handleLevelChange(ctx, msg, user, res, cfg);
+        } else if (isFirstEverXp) {
+          // Erste XP überhaupt → Nickname-Tag [Lvl 1] sofort setzen
+          try {
+            await refreshRankNicknames(ctx, msg.guild, msg.author.id, cfg.lang || 'de');
+          } catch(e){ logger.warn('[xp-level-bot] first-xp nick fail', e.message); }
         } else {
           // XP-only-Gewinn: Bei gleichem Level können sich die Ränge trotzdem
           // verschieben (mehr XP überholt weniger XP). Wenn der Nutzer damit
@@ -249,6 +292,8 @@ module.exports = {
     client.on('guildMemberAdd', async (member)=>{
       try {
         if (!member.guild) return;
+        // Bots (und damit auch andere Bots) bekommen weder Rollen noch Nickname-Tags
+        if (member.user?.bot) return;
         const cfg = store.getGuild(member.guild.id);
         if (!cfg) return;
         const existing = store.getUser(member.guild.id, member.id);

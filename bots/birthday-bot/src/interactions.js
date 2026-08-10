@@ -9,7 +9,7 @@
 const { MessageFlags } = require('discord.js');
 
 const { t, formatBirthday, matchMonth, langFromDiscord } = require('./languages');
-const { parseDayInput, isValidDate, isWithinSevenDays, isWithinHours } = require('./logic');
+const { parseDayInput, isValidDate, isWithinSevenDays, isWithinHours, sanitizeEventName } = require('./logic');
 const {
   extractAllText,
   buildEntryModal,
@@ -17,6 +17,10 @@ const {
   buildDeleteConfirmationEmbed,
   buildSevenDayErrorEmbed,
   buildCongratsEmbed,
+  buildEventModal,
+  buildEventConfirmationEmbed,
+  buildEventCongratsEmbed,
+  decodeEventName,
   smallContainer,
 } = require('./embed-builder');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
@@ -54,6 +58,10 @@ async function handleInteraction(ctx, interaction) {
     if (interaction.isStringSelectMenu()) {
       if (interaction.customId.startsWith(PANEL_PREFIX)) {
         return await handlePanelSelect(ctx, interaction);
+      }
+      // „Welches Event löschen?“ aus /event delete
+      if (interaction.customId === 'bday_event_delete') {
+        return await eventDeleteSelect(ctx, interaction);
       }
     }
     return null;
@@ -178,6 +186,45 @@ async function handleButton(ctx, interaction) {
   // Gratulieren auf dem Geburtstags-Gruß
   if (id.startsWith('bday_congrats_')) {
     return congrats(ctx, interaction, id);
+  }
+
+  // Event-Bestätigung (Erstellen)
+  if (id === 'bday_event_yes') {
+    return eventConfirmYes(ctx, interaction);
+  }
+  if (id === 'bday_event_edit') {
+    const pending = ctx.pendingEvent.get(interaction.user.id);
+    if (!pending) {
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, t('errGeneric', 'en'))], { ephemeral: true })
+      );
+    }
+    await interaction.showModal(
+      buildEventModal(pending.lang, { day: pending.day, month: pending.month, name: pending.name })
+    );
+    if (!isEphemeralMessage(interaction.message)) {
+      await interaction.message.delete().catch(() => {});
+    }
+    return null;
+  }
+  if (id === 'bday_event_no') {
+    ctx.pendingEvent.delete(interaction.user.id);
+    const entry = ctx.store.get(interaction.guildId);
+    const lang = entry?.lang || langFromDiscord(interaction.locale);
+    const note = t('cancelNote', lang);
+    if (isEphemeralMessage(interaction.message)) {
+      return interaction.update(componentsV2Payload([smallContainer(null, note)]));
+    }
+    await interaction.deferUpdate().catch(() => {});
+    await interaction.message.delete().catch(() => {});
+    return interaction.followUp(
+      componentsV2Payload([smallContainer(null, note)], { ephemeral: true })
+    );
+  }
+
+  // „Interessant! 😂“ auf der Event-Nachricht
+  if (id === 'bday_event_interest') {
+    return eventInterest(ctx, interaction);
   }
 
   return null;
@@ -332,7 +379,201 @@ async function handleModal(ctx, interaction) {
   if (interaction.customId === 'admin_bday_modal') {
     return adminModalSubmit(ctx, interaction);
   }
+  if (interaction.customId === 'bday_event_modal') {
+    return eventModalSubmit(ctx, interaction);
+  }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Events (/event create → Formular → Bestätigung)
+// ---------------------------------------------------------------------------
+
+const MAX_EVENTS = 5; // maximal so viele Events gleichzeitig pro Server
+
+/** /event create: Formular prüfen → Bestätigungs-Container (ephemer, 3 Buttons). */
+async function eventModalSubmit(ctx, interaction) {
+  const entry0 = ctx.store.get(interaction.guildId);
+  const errLang = entry0?.lang || langFromDiscord(interaction.locale);
+
+  const nameRaw = interaction.fields.getTextInputValue('name');
+  const dayRaw = interaction.fields.getTextInputValue('day');
+  const monthRaw = interaction.fields.getTextInputValue('month');
+
+  const name = sanitizeEventName(nameRaw);
+  if (!name) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('eventInvalidName', errLang))], { ephemeral: true })
+    );
+  }
+  const day = parseDayInput(dayRaw);
+  if (!day) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errInvalidDay', errLang))], { ephemeral: true })
+    );
+  }
+  const mm = matchMonth(monthRaw);
+  if (!mm) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errInvalidMonth', errLang))], { ephemeral: true })
+    );
+  }
+  // Bei Events ist JEDES Datum erlaubt – die 7-Tage-Regel gilt nur für Geburtstage.
+  if (!isValidDate(day, mm.month)) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errInvalidDate', errLang))], { ephemeral: true })
+    );
+  }
+
+  const entry = ctx.store.get(interaction.guildId);
+  const lang = entry?.lang || langFromDiscord(interaction.locale);
+
+  if ((entry?.events || []).length >= MAX_EVENTS) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('eventLimit', lang, { max: MAX_EVENTS }))], { ephemeral: true })
+    );
+  }
+
+  ctx.pendingEvent.set(interaction.user.id, { day, month: mm.month, name, lang, guildId: interaction.guildId });
+
+  const confirmation = buildEventConfirmationEmbed({ name, day, month: mm.month, lang });
+  if (isEphemeralMessage(interaction.message)) {
+    return interaction.update(componentsV2Payload([confirmation]));
+  }
+  return interaction.reply(componentsV2Payload([confirmation], { ephemeral: true }));
+}
+
+/**
+ * Event-Bestätigung „Bestätigen“: Event in die Liste einsortieren (wie die
+ * Geburtstage, nur mit Namen statt Erwähnung) – max. 5 Events gleichzeitig.
+ */
+async function eventConfirmYes(ctx, interaction) {
+  const pending = ctx.pendingEvent.get(interaction.user.id);
+
+  const finish = (containers) => {
+    if (isEphemeralMessage(interaction.message)) {
+      return interaction.update(componentsV2Payload(containers));
+    }
+    return (async () => {
+      await interaction.deferUpdate().catch(() => {});
+      await interaction.message.delete().catch(() => {});
+      return interaction.followUp(componentsV2Payload(containers, { ephemeral: true }));
+    })();
+  };
+
+  if (!pending) {
+    return finish([smallContainer(null, t('errGeneric', 'en'))]);
+  }
+  ctx.pendingEvent.delete(interaction.user.id);
+
+  const entry = ctx.store.get(interaction.guildId);
+  if (!entry) {
+    return finish([smallContainer(null, t('errNoList', 'en'))]);
+  }
+  const lang = entry.lang;
+
+  // Limit nochmal gegen den FRISCHEN Listenstand prüfen (damit nichts kippt,
+  // falls inzwischen ein Event gefeuert oder gelöscht wurde)
+  let tooMany = false;
+  await ctx.store.refresh(
+    entry,
+    null,
+    (events) => {
+      const fresh = events.filter((e) => !(String(e.name).toLowerCase() === pending.name.toLowerCase()));
+      if (fresh.length >= MAX_EVENTS) { tooMany = true; return events; }
+      return [...fresh, { event: true, name: pending.name, day: pending.day, month: pending.month }];
+    }
+  );
+  if (tooMany) {
+    return finish([smallContainer(null, t('eventLimit', lang, { max: MAX_EVENTS }))]);
+  }
+
+  const date = formatBirthday(pending.day, pending.month, lang);
+  return finish([smallContainer(null, t('eventCreated', lang, { name: `**${pending.name}**`, date }))]);
+}
+
+/** /event delete: gewähltes Event aus dem Auswahlmenü löschen. */
+async function eventDeleteSelect(ctx, interaction) {
+  const entry = ctx.store.get(interaction.guildId);
+  const lang = entry?.lang || langFromDiscord(interaction.locale);
+
+  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
+  if (!perms?.has(require('discord.js').PermissionFlagsBits.Administrator)) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true })
+    );
+  }
+  if (!entry) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errNoList', lang))], { ephemeral: true })
+    );
+  }
+
+  const value = interaction.values?.[0] || '';
+  const m = value.match(/^(\d{1,2})\.(\d{1,2})\.([0-9a-f]+)$/i);
+  const name = m ? decodeEventName(m[3]) : null;
+  if (!m || !name) {
+    return interaction.update(componentsV2Payload([smallContainer(null, t('errGeneric', lang))]));
+  }
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+
+  let removed = false;
+  await ctx.store.refresh(entry, null, (events) =>
+    events.filter((e) => {
+      const match =
+        e.day === day && e.month === month && String(e.name).toLowerCase() === name.toLowerCase();
+      if (match) removed = true;
+      return !match;
+    })
+  );
+
+  const desc = removed ? t('eventDeleted', lang, { name: `**${name}**` }) : t('eventNoEvents', lang);
+  return interaction.update(componentsV2Payload([smallContainer(null, desc)]));
+}
+
+/**
+ * „Interessant! 😂“-Button auf der 0-Uhr-Event-Nachricht.
+ * Analog zu den Geburtstags-Glückwünschen: Die Interessenten stecken im
+ * Container selbst (keine DB), jeder nur einmal, Fenster: 24 Stunden.
+ */
+async function eventInterest(ctx, interaction) {
+  const entry = ctx.store.get(interaction.guildId);
+  const lang = entry?.lang || langFromDiscord(interaction.locale);
+  const clickerId = interaction.user.id;
+
+  const rawText = extractAllText(interaction.message);
+  const marker = rawText.match(/bday-event:(\d{4}-\d{2}-\d{2}):([0-9a-f]+)/i);
+  const name = marker ? decodeEventName(marker[2]) : null;
+  if (!marker || !name) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: true })
+    );
+  }
+  const dateKey = marker[1];
+  const boldName = `**${name}**`;
+
+  // Interesse-Melden nur 24 Stunden nach dem Post (dann ist das Event durch)
+  if (!isWithinHours(interaction.message?.createdTimestamp, 24)) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('eventInterestClosed', lang, { name: boldName }))], { ephemeral: true })
+    );
+  }
+
+  const interested = [...new Set([...rawText.matchAll(/<@!?([^>]+)>/g)].map((mm) => mm[1]))];
+  if (interested.includes(clickerId)) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('eventAlreadyInterested', lang, { name: boldName }))], { ephemeral: true })
+    );
+  }
+  interested.push(clickerId);
+
+  const { container } = buildEventCongratsEmbed({ name, lang, dateKey, interested });
+  await interaction.update(componentsV2Payload([container]));
+
+  return interaction.followUp(
+    componentsV2Payload([smallContainer(null, t('eventInterestedDone', lang, { name: boldName }))], { ephemeral: true })
+  );
 }
 
 /** Eigenes Eintragen: validieren → Bestätigungs-Container mit den 3 Buttons. */

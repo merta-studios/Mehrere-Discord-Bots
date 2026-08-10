@@ -40,6 +40,11 @@ async function tick(ctx, counter) {
       if (dayChanged || counter % HOURLY_TICK === 0) {
         await ctx.store.refresh(entry);
         refreshed = true;
+        // Geburtstagsrollen zurücknehmen, deren 24h vorbei sind (self-healing
+        // auch nach Neustarts: entscheidend ist, ob HEUTE Geburtstag ist)
+        if (ctx.store.cleanupBirthdayRoles) {
+          await ctx.store.cleanupBirthdayRoles(entry).catch(() => {});
+        }
       }
 
       // Neuer Tag (0 Uhr in der Sprach-Zeitzone) → Geburtstags-Check.

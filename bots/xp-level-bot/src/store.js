@@ -59,7 +59,7 @@ function createXpStore({ logger, env }) {
       level_role_ids TEXT
     );`);
     // Migration für Bestands-Tabellen (ältere DBs ohne die Level-Rollen-Spalten)
-    for (const col of ['level_role_template TEXT', 'level_role_levels TEXT', 'level_role_ids TEXT']) {
+    for (const col of ['level_role_template TEXT', 'level_role_levels TEXT', 'level_role_ids TEXT', 'bonus_state TEXT']) {
       try { await db.execute(`ALTER TABLE guild_configs ADD COLUMN ${col}`); } catch {}
     }
     await db.execute(`CREATE TABLE IF NOT EXISTS user_levels (
@@ -68,8 +68,14 @@ function createXpStore({ logger, env }) {
       level INTEGER NOT NULL,
       xp INTEGER NOT NULL,
       last_xp_gain INTEGER NOT NULL,
+      inactive_days INTEGER,
+      last_activity INTEGER,
       PRIMARY KEY (guild_id, user_id)
     );`);
+    // Migration für Bestands-Tabellen (ältere DBs ohne Inaktivitäts-/Aktivitäts-Spalten)
+    for (const col of ['inactive_days INTEGER', 'last_activity INTEGER']) {
+      try { await db.execute(`ALTER TABLE user_levels ADD COLUMN ${col}`); } catch {}
+    }
     // Index für schnelle leaderboard queries falls direkt DB genutzt wird
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_user_levels_guild ON user_levels(guild_id);`);
   }
@@ -93,6 +99,7 @@ function createXpStore({ logger, env }) {
         levelRoleTemplate: row.level_role_template || null,
         levelRoleLevels: parseJsonCol(row.level_role_levels, null),
         levelRoleIds: parseJsonCol(row.level_role_ids, null),
+        bonusState: parseJsonCol(row.bonus_state, null),
       });
     }
     const uRes = await db.execute('SELECT * FROM user_levels');
@@ -105,6 +112,8 @@ function createXpStore({ logger, env }) {
         level: row.level,
         xp: row.xp,
         lastXpGain: row.last_xp_gain || 0,
+        inactiveDays: row.inactive_days || 0,
+        lastActivity: row.last_activity || 0,
       });
     }
   }
@@ -178,7 +187,7 @@ function createXpStore({ logger, env }) {
     if (!m) { m = new Map(); users.set(guildId, m); }
     let u = m.get(userId);
     if (!u) {
-      u = { guildId, userId, level: 1, xp: 0, lastXpGain: 0 };
+      u = { guildId, userId, level: 1, xp: 0, lastXpGain: 0, inactiveDays: 0, lastActivity: 0 };
       m.set(userId, u);
       dirtyUsers.add(`${guildId}:${userId}`);
     }
@@ -248,8 +257,8 @@ function createXpStore({ logger, env }) {
           const g = guilds.get(gid);
           if (!g) continue;
           statements.push({
-            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids, bonus_state)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id) DO UPDATE SET
                     leaderboard_channel_id=excluded.leaderboard_channel_id,
                     main_channel_id=excluded.main_channel_id,
@@ -258,7 +267,8 @@ function createXpStore({ logger, env }) {
                     last_daily_decay=excluded.last_daily_decay,
                     level_role_template=excluded.level_role_template,
                     level_role_levels=excluded.level_role_levels,
-                    level_role_ids=excluded.level_role_ids`,
+                    level_role_ids=excluded.level_role_ids,
+                    bonus_state=excluded.bonus_state`,
             args: [
               g.guildId,
               g.leaderboardChannelId || '',
@@ -269,6 +279,7 @@ function createXpStore({ logger, env }) {
               g.levelRoleTemplate || null,
               g.levelRoleLevels ? JSON.stringify(g.levelRoleLevels) : null,
               g.levelRoleIds ? JSON.stringify(g.levelRoleIds) : null,
+              g.bonusState ? JSON.stringify(g.bonusState) : null,
             ]
           });
         }
@@ -278,11 +289,12 @@ function createXpStore({ logger, env }) {
           const u = m?.get(uid);
           if (!u) continue;
           statements.push({
-            sql: `INSERT INTO user_levels (guild_id, user_id, level, xp, last_xp_gain)
-                  VALUES (?, ?, ?, ?, ?)
+            sql: `INSERT INTO user_levels (guild_id, user_id, level, xp, last_xp_gain, inactive_days, last_activity)
+                  VALUES (?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id, user_id) DO UPDATE SET
-                    level=excluded.level, xp=excluded.xp, last_xp_gain=excluded.last_xp_gain`,
-            args: [u.guildId, u.userId, u.level, u.xp, u.lastXpGain || 0]
+                    level=excluded.level, xp=excluded.xp, last_xp_gain=excluded.last_xp_gain,
+                    inactive_days=excluded.inactive_days, last_activity=excluded.last_activity`,
+            args: [u.guildId, u.userId, u.level, u.xp, u.lastXpGain || 0, u.inactiveDays || 0, u.lastActivity || 0]
           });
         }
         if (statements.length) {

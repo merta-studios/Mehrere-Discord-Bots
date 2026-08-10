@@ -1,6 +1,6 @@
 /**
  * Slash-Commands XP Bot – Definition & Handler
- * Commands: /setup, /rank, /help, /admin_set_bot_profile, /adminpanel
+ * Commands: /setup, /rank, /help, /admin_set_bot_profile, /level_roles, /adminpanel
  */
 
 const {
@@ -80,22 +80,48 @@ function defineCommands() {
   ];
 }
 
-async function registerCommands(ctx) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Registriert die Slash-Commands bei Discord. Geschehene Fehler (Rate-Limit,
+ * Discord-Hickup beim Hosting-Restart) wurden früher nur geloggt – neue
+ * Commands (z.B. /level_roles) fehlten danach dauerhaft, obwohl sie im /help
+ * auftauchten. Deshalb: mehrere Versuche mit Abstand + Erfolgs-Flag, das der
+ * Scheduler nutzt, um es regelmäßig erneut zu versuchen, bis es klappt.
+ */
+async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
   const commands = defineCommands().map(c=>c.toJSON());
-  const rest = new REST({version:'10'}).setToken(ctx.token);
+  const rest = restFactory ? restFactory(ctx.token) : new REST({version:'10'}).setToken(ctx.token);
   const clientId = ctx.client.user.id;
-  try {
-    if (ctx.devGuildId) {
-      await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), {body: commands});
-      ctx.logger.info(`[xp-level-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert.`);
-    } else {
-      await rest.put(Routes.applicationCommands(clientId), {body: commands});
-      for (const guild of ctx.client.guilds.cache.values()) {
-        await rest.put(Routes.applicationGuildCommands(clientId, guild.id), {body: []}).catch(()=>{});
+  const RETRY_DELAYS_MS = retryDelays || [0, 15_000, 60_000, 5 * 60_000];
+  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
+    if (RETRY_DELAYS_MS[attempt]) await sleep(RETRY_DELAYS_MS[attempt]);
+    try {
+      if (ctx.devGuildId) {
+        const res = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), {body: commands});
+        ctx.logger.info(`[xp-level-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert: ${registeredNames(res)}`);
+      } else {
+        const res = await rest.put(Routes.applicationCommands(clientId), {body: commands});
+        for (const guild of ctx.client.guilds.cache.values()) {
+          await rest.put(Routes.applicationGuildCommands(clientId, guild.id), {body: []}).catch(()=>{});
+        }
+        ctx.logger.info(`[xp-level-bot] Commands global registriert (bis zu 1h bis überall sichtbar): ${registeredNames(res)}`);
       }
-      ctx.logger.info('[xp-level-bot] Commands global registriert (bis zu 1h).');
+      ctx.commandsRegistered = true;
+      return true;
+    } catch(err){
+      const detail = err?.rawError ? JSON.stringify(err.rawError).slice(0, 500) : '';
+      ctx.logger.error(`[xp-level-bot] Command-Reg fehlgeschlagen (Versuch ${attempt + 1}/${RETRY_DELAYS_MS.length}): ${err.message} ${detail}`);
     }
-  } catch(err){ ctx.logger.error('[xp-level-bot] Command-Reg fehlgeschlagen:', err.message); }
+  }
+  ctx.commandsRegistered = false; // Scheduler versucht es weiter alle 15 Minuten
+  return false;
+}
+
+/** Discord gibt die registrierten Commands zurück – Namen fürs Log (Beweis, dass z.B. /level_roles angelegt wurde). */
+function registeredNames(res) {
+  if (Array.isArray(res) && res.length) return res.map((c) => c.name).join(', ');
+  return 'unbekannt';
 }
 
 async function handleChatInput(ctx, interaction) {
