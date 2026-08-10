@@ -1,22 +1,16 @@
 /**
- * Scheduler XP Bot:
- * - Minütlich: prüft ob Tag für Gilde gewechselt (0 Uhr in Guild-TZ) -> daily decay
- *   (10% Basis, +5 Prozentpunkte pro zusätzlichem inaktivem Tag)
- * - Stündlich: Leaderboard neu rendern (zeitbasiert: wenn >55min seit letztem stündlichen Refresh)
- *   FIX: Stündlich ist jetzt unabhängig von Level-Up-Refreshes. Früher wurde der Hourly-Timer
- *   durch jedes Level-Up zurückgesetzt, sodass bei viel Aktivität das Board scheinbar nur bei
- *   Level-Ups aktualisiert wurde. Jetzt gibt es zwei getrennte Tracker:
- *     lastLeaderboardRefresh (Throttle 10min für Level-Up)
- *     lastHourlyRefresh      (55min für stündlich)
- * - Zusätzlich bei Level-Up/Down: Leaderboard aktualisieren, wenn die letzte
- *   Aktualisierung länger als 10 Minuten her ist (Throttle)
- * - Selbstheilung: schlägt die Command-Registrierung beim Start fehl, wird sie regelmäßig erneut versucht
- * - 5min: Backup flush
- * - NEU (Zuverlässigkeits-Fix): Stündliche Aktualisierung ist jetzt deutlich zuverlässiger:
- *   * persisted Timestamp (entry.lastLeaderboardRefresh) überlebt Restarts
- *   * schneller Retry (2 min) statt 10 min bei fehlgeschlagener stündlicher Aktualisierung
- *   * doppelter Startup-Refresh (5s + 15s) + sofortige hourlyDue-Erkennung nach Restart
- *   * Fallback-Kanalsuche wenn die gespeicherte Channel-ID nicht fetchbar ist
+ * Scheduler des XP-Bots.
+ *
+ * Die drei zeitkritischen Aufgaben laufen absichtlich unabhängig voneinander:
+ *  1. täglicher Decay / Command-Selbstheilung / Backup
+ *  2. geplante Bonus-Drops
+ *  3. stündliches Leaderboard
+ *
+ * Dadurch kann ein langsamer Discord-Request beim Leaderboard weder Bonus-Drops
+ * noch den Tageswechsel blockieren. Ebenso besitzt das stündliche Leaderboard
+ * einen EIGENEN, persistierten Zeitstempel. Level-Up-Refreshes verändern diesen
+ * Zeitstempel nicht – genau diese Vermischung war die Ursache dafür, dass das
+ * Board trotz angeblichem Stunden-Timer über viele Stunden stehen blieb.
  */
 
 const { todayKey } = require('./logic');
@@ -24,28 +18,39 @@ const { buildLeaderboardEmbed } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { syncLevelRolesForUser } = require('./level-roles');
 const { refreshRankNicknames } = require('./nicknames');
+const { sendLevelAnnouncement } = require('./level-announcements');
 
 const MINUTE_MS = 60_000;
 const LEADERBOARD_MIN_REFRESH_MS = 10 * 60 * 1000;
-const LEADERBOARD_HOURLY_MS = 55 * 60 * 1000; // stündlich (mit Toleranz)
-const LEADERBOARD_HOURLY_RETRY_MS = 2 * 60 * 1000; // schneller Retry bei Fehler (2 min statt 10)
-const COMMAND_RETRY_EVERY_TICKS = 15; // alle 15 min erneut versuchen
+// Prüfung erfolgt minütlich. 55 Minuten geben ausreichend Toleranz für einen
+// verzögerten Event-Loop und halten den sichtbaren Zeitstempel sicher frisch.
+const LEADERBOARD_HOURLY_MS = 55 * 60 * 1000;
+const LEADERBOARD_HOURLY_RETRY_MS = 2 * 60 * 1000;
+const COMMAND_RETRY_EVERY_TICKS = 15;
+// Kein einzelner Discord-/Netzwerk-Request darf einen Scheduler dauerhaft
+// einfrieren. Nach 45s wird der Lock freigegeben; der nächste Tick kann heilen.
+const SCHEDULER_GUILD_TASK_TIMEOUT_MS = 45_000;
 
-// Wann wurde das Leaderboard pro Gilde zuletzt (erfolgreich) aktualisiert (für 10min Throttle)?
-const lastLeaderboardRefresh = new Map(); // guildId -> timestamp
-// Wann wurde das Leaderboard zuletzt STÜNDLICH aktualisiert (unabhängig von Level-Ups)?
-const lastHourlyRefresh = new Map(); // guildId -> timestamp
-// Wann wurde es zuletzt VERSUCHT (dämpft Log-/API-Spam bei dauerhaften Fehlern)
-const lastLeaderboardAttempt = new Map(); // guildId -> timestamp
+// Allgemeiner letzter erfolgreicher Edit (Throttle für Level-Up/-Down).
+const lastLeaderboardRefresh = new Map();
+// Ausschließlich letzter erfolgreicher Stunden-/Startup-/Decay-Edit.
+const lastHourlyRefresh = new Map();
+// Ausschließlich letzter VERSUCH des Stunden-Refreshs.
+const lastLeaderboardAttempt = new Map();
+
+function asTimestamp(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
 function isLeaderboardRefreshDue(guildId, now = Date.now()) {
   const last = lastLeaderboardRefresh.get(guildId) || 0;
-  return (now - last) >= LEADERBOARD_MIN_REFRESH_MS;
+  return now - last >= LEADERBOARD_MIN_REFRESH_MS;
 }
 
 function isHourlyRefreshDue(guildId, now = Date.now()) {
   const last = lastHourlyRefresh.get(guildId) || 0;
-  return (now - last) >= LEADERBOARD_HOURLY_MS;
+  return now - last >= LEADERBOARD_HOURLY_MS;
 }
 
 function noteLeaderboardRefresh(guildId, now = Date.now()) {
@@ -54,51 +59,38 @@ function noteLeaderboardRefresh(guildId, now = Date.now()) {
 
 function noteHourlyRefresh(guildId, now = Date.now()) {
   lastHourlyRefresh.set(guildId, now);
-  lastLeaderboardRefresh.set(guildId, now); // stündlich gilt auch als allgemeines Refresh für Throttle
+  // Ein Stunden-Edit ist natürlich zugleich ein allgemeiner Edit.
+  lastLeaderboardRefresh.set(guildId, now);
 }
 
 /**
- * Synchronisiert die In-Memory-Maps mit persistierten Timestamps aus dem Store.
- * Damit überlebt ein Restart den Hourly-Timer – gleichzeitig bleibt für Tests
- * alles kompatibel (falls kein persisted Feld vorhanden ist, bleibt Map bei 0).
+ * Lädt die beiden UNABHÄNGIGEN Zeitstempel aus der Persistenz.
+ *
+ * Wichtig: Für `lastHourlyRefresh` gibt es absichtlich KEINEN Fallback auf das
+ * alte Feld `lastLeaderboardRefresh`. Das alte Feld wurde von Level-Ups
+ * überschrieben und ist daher als Stunden-Zeitstempel unbrauchbar. Bestehende
+ * Installationen ohne das neue Feld erhalten beim nächsten Start sofort einen
+ * frischen Stunden-Refresh und sind danach sauber migriert.
  */
 function syncMapsFromEntry(entry) {
-  if (!entry || !entry.guildId) return;
-  const persisted = entry.lastLeaderboardRefresh || entry.lastLeaderboardUpdate || 0;
-  if (persisted) {
-    const curHourly = lastHourlyRefresh.get(entry.guildId) || 0;
-    const curGeneral = lastLeaderboardRefresh.get(entry.guildId) || 0;
-    // Nur übernehmen wenn Map noch leer oder persisted neuer ist
-    if (!curHourly || persisted > curHourly) lastHourlyRefresh.set(entry.guildId, persisted);
-    if (!curGeneral || persisted > curGeneral) lastLeaderboardRefresh.set(entry.guildId, persisted);
+  if (!entry?.guildId) return;
+
+  const persistedGeneral = asTimestamp(entry.lastLeaderboardRefresh || entry.lastLeaderboardUpdate);
+  if (persistedGeneral > (lastLeaderboardRefresh.get(entry.guildId) || 0)) {
+    lastLeaderboardRefresh.set(entry.guildId, persistedGeneral);
+  }
+
+  const persistedHourly = asTimestamp(entry.lastHourlyLeaderboardRefresh);
+  if (persistedHourly > (lastHourlyRefresh.get(entry.guildId) || 0)) {
+    lastHourlyRefresh.set(entry.guildId, persistedHourly);
   }
 }
 
-function startScheduler({ ctx }){
-  // Pendente Timestamps aus dem Store in die Maps laden (überlebt Restarts)
-  try {
-    for (const entry of ctx.store.getAllGuilds()) syncMapsFromEntry(entry);
-  } catch {}
-  let counter = 0;
-  const timer = setInterval(()=>{ counter+=1; void tick(ctx, counter).catch(()=>{}); }, MINUTE_MS);
-  timer.unref?.();
-  // Doppelter Startup-Refresh für maximale Zuverlässigkeit nach Neustart:
-  // 1. nach 5s (schnell, aber Cache ist bereits bereit)
-  // 2. nach 15s (zweiter Versuch falls der erste noch an fehlender Cache/Channel scheiterte)
-  setTimeout(()=> {
-    try { for (const e of ctx.store.getAllGuilds()) syncMapsFromEntry(e); } catch {}
-    void tick(ctx, 0).catch(()=>{});
-  }, 5_000);
-  setTimeout(()=> void tick(ctx, 0).catch(()=>{}), 15_000);
-  return ()=> clearInterval(timer);
-}
-
 /**
- * Holt die Gilde robust: erst Cache, dann API. Nur wenn Discord die Gilde
- * definitiv nicht kennt (10004 Unknown Guild → Bot wurde entfernt), wird die
- * Konfiguration verworfen.
+ * Holt eine Gilde robust. Nur Discord-Code 10004 bedeutet definitiv, dass der
+ * Bot entfernt wurde; bei Netz-/Cachefehlern bleibt die Konfiguration erhalten.
  */
-async function resolveGuild(ctx, guildId){
+async function resolveGuild(ctx, guildId) {
   const cached = ctx.client.guilds.cache.get(guildId);
   if (cached) return { guild: cached, gone: false };
   try {
@@ -110,200 +102,323 @@ async function resolveGuild(ctx, guildId){
   }
 }
 
-let tickRunning = false;
+function withTimeout(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} nach ${Math.round(ms / 1000)}s abgebrochen`)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
-async function tick(ctx, counter){
-  if (tickRunning) return;
-  tickRunning = true;
-  try {
-    return await tickInner(ctx, counter);
-  } finally {
-    tickRunning = false;
+async function forEachConfiguredGuild(ctx, taskName, handler) {
+  const entries = ctx.store.getAllGuilds();
+  const jobs = entries.map((entry) => {
+    const job = (async () => {
+      const { guild, gone } = await resolveGuild(ctx, entry.guildId);
+      if (gone) {
+        ctx.store.deleteGuild(entry.guildId);
+        return;
+      }
+      if (!guild) {
+        ctx.logger.warn(`[xp-level-bot] ${taskName}: Gilde ${entry.guildId} aktuell nicht erreichbar (Config bleibt)`);
+        return;
+      }
+      await handler(entry, guild);
+    })();
+    return withTimeout(
+      job,
+      SCHEDULER_GUILD_TASK_TIMEOUT_MS,
+      `${taskName} für Gilde ${entry.guildId}`
+    );
+  });
+  const results = await Promise.allSettled(jobs);
+
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      ctx.logger.warn(`[xp-level-bot] ${taskName} fehlgeschlagen:`, result.reason?.message || result.reason);
+    }
   }
 }
 
-async function tickInner(ctx, counter){
-  const now = new Date();
-  const nowMs = Date.now();
-
+async function runMaintenanceTick(ctx, counter, now = new Date()) {
   if (ctx.commandsRegistered === false && counter % COMMAND_RETRY_EVERY_TICKS === 1) {
     try {
       const { registerCommands } = require('./commands');
       await registerCommands(ctx);
-    } catch {}
-  }
-  if (counter > 0 && counter % (24 * 60) === 0) {
-    ctx.commandsRegistered = false;
-  }
-
-  for (const entry of ctx.store.getAllGuilds()){
-    // In-Memory-Maps mit persistiertem Stand abgleichen (falls entry gerade aktualisiert wurde)
-    syncMapsFromEntry(entry);
-    const { guild, gone } = await resolveGuild(ctx, entry.guildId);
-    if (gone){ ctx.store.deleteGuild(entry.guildId); continue; }
-    if (!guild){ ctx.logger.warn(`[xp-level-bot] Gilde ${entry.guildId} aktuell nicht erreichbar – überspringe Tick (Config bleibt)`); continue; }
-    try {
-      const dayKey = todayKey(entry.lang);
-      if (entry.lastDailyDecay !== dayKey) {
-        await applyDailyDecayForGuild(ctx, entry, guild);
-        entry.lastDailyDecay = dayKey;
-        ctx.store.setGuild(entry);
-      }
-
-      if (ctx.bonusDropper) {
-        try {
-          await ctx.bonusDropper.checkScheduled(entry, guild, now);
-        } catch (e) {
-          ctx.logger.warn(`[xp-level-bot] Bonus-Scheduler Fehler Gilde ${entry.guildId}:`, e.message);
-        }
-      }
-
-      // Stündlich Leaderboard – UNABHÄNGIG von Level-Up-Refreshes
-      // hourlyDue basiert auf persistiertem Timestamp, damit Restarts kein Delay verursachen
-      const persistedHourly = entry.lastLeaderboardRefresh || entry.lastLeaderboardUpdate || 0;
-      const lastHourly = lastHourlyRefresh.get(entry.guildId) || persistedHourly || 0;
-      const lastAttempt = lastLeaderboardAttempt.get(entry.guildId) || 0;
-      const hourlyDue = (nowMs - lastHourly) >= LEADERBOARD_HOURLY_MS;
-      // Für stündlich: schneller Retry (2 min) damit nach einem Fehler nicht 10 min gewartet wird
-      const attemptReady = (nowMs - lastAttempt) >= LEADERBOARD_HOURLY_RETRY_MS;
-
-      if (counter === 0 || (hourlyDue && attemptReady)) {
-        lastLeaderboardAttempt.set(entry.guildId, nowMs);
-        await refreshLeaderboard(ctx, entry, guild, now, { isHourly: true });
-      }
-    } catch(err){
-      ctx.logger.warn(`[xp-level-bot] Tick Fehler Gilde ${entry.guildId}:`, err.message);
+    } catch (err) {
+      ctx.logger.warn('[xp-level-bot] Command-Selbstheilung fehlgeschlagen:', err?.message || err);
     }
   }
+  if (counter > 0 && counter % (24 * 60) === 0) ctx.commandsRegistered = false;
 
-  if (counter % 5 === 0) {
-    void ctx.store.flush().catch(()=>{});
-  }
+  await forEachConfiguredGuild(ctx, 'Maintenance', async (entry, guild) => {
+    const dayKey = todayKey(entry.lang, now);
+    if (entry.lastDailyDecay === dayKey) return;
+    await applyDailyDecayForGuild(ctx, entry, guild);
+    entry.lastDailyDecay = dayKey;
+    ctx.store.setGuild(entry);
+  });
+
+  if (counter % 5 === 0) void ctx.store.flush().catch(() => {});
+}
+
+async function runBonusTick(ctx, now = new Date()) {
+  if (!ctx.bonusDropper) return;
+  await forEachConfiguredGuild(ctx, 'Bonus-Scheduler', async (entry, guild) => {
+    try {
+      await ctx.bonusDropper.checkScheduled(entry, guild, now);
+    } catch (err) {
+      ctx.logger.warn(`[xp-level-bot] Bonus-Scheduler Fehler Gilde ${entry.guildId}:`, err?.message || err);
+    }
+  });
+}
+
+async function runLeaderboardTick(ctx, now = new Date(), { force = false } = {}) {
+  const nowMs = now.getTime();
+  await forEachConfiguredGuild(ctx, 'Leaderboard-Scheduler', async (entry, guild) => {
+    syncMapsFromEntry(entry);
+    const lastHourly = lastHourlyRefresh.get(entry.guildId) || asTimestamp(entry.lastHourlyLeaderboardRefresh);
+    const lastAttempt = lastLeaderboardAttempt.get(entry.guildId) || 0;
+    const hourlyDue = nowMs - lastHourly >= LEADERBOARD_HOURLY_MS;
+    const attemptReady = nowMs - lastAttempt >= LEADERBOARD_HOURLY_RETRY_MS;
+
+    if (!force && (!hourlyDue || !attemptReady)) return;
+    lastLeaderboardAttempt.set(entry.guildId, nowMs);
+    await refreshLeaderboard(ctx, entry, guild, now, { isHourly: true });
+  });
 }
 
 /**
- * Aktualisiert das Leaderboard bei Level-Up/Down, aber maximal alle 10 Minuten.
- * (Der stündliche Tick läuft unabhängig davon immer.)
+ * Rückwärtskompatibler kombinierter Tick (und nützlich für Integrationstests).
+ * Im echten Scheduler werden die drei Funktionen getrennt gestartet.
  */
-async function maybeRefreshLeaderboard(ctx, entry, guild) {
-  if (!isLeaderboardRefreshDue(entry.guildId)) return false;
-  await refreshLeaderboard(ctx, entry, guild, new Date(), { isHourly: false });
-  return true;
+async function tick(ctx, counter = 1, opts = {}) {
+  const now = opts.now instanceof Date ? opts.now : new Date();
+  await Promise.all([
+    runMaintenanceTick(ctx, counter, now),
+    runBonusTick(ctx, now),
+    runLeaderboardTick(ctx, now, { force: opts.forceHourly === true || counter === 0 }),
+  ]);
 }
 
-async function applyDailyDecayForGuild(ctx, entry, guild){
+function startScheduler({ ctx }) {
+  try {
+    for (const entry of ctx.store.getAllGuilds()) syncMapsFromEntry(entry);
+  } catch {}
+
+  let counter = 0;
+  let stopped = false;
+  const running = new Set();
+  const timers = new Set();
+
+  const launch = (name, fn) => {
+    if (stopped || running.has(name)) return;
+    running.add(name);
+    void Promise.resolve()
+      .then(fn)
+      .catch((err) => ctx.logger.warn(`[xp-level-bot] Scheduler-Task ${name} fehlgeschlagen:`, err?.message || err))
+      .finally(() => running.delete(name));
+  };
+
+  const heartbeat = (startup = false) => {
+    if (stopped) return;
+    counter += 1;
+    const now = new Date();
+    // Getrennte Locks: Ein hängender Task blockiert die beiden anderen nicht.
+    launch('maintenance', () => runMaintenanceTick(ctx, counter, now));
+    launch('bonus', () => runBonusTick(ctx, now));
+    launch('leaderboard', () => runLeaderboardTick(ctx, now, { force: startup }));
+  };
+
+  const startupTimer = setTimeout(() => heartbeat(true), 5_000);
+  startupTimer.unref?.();
+  timers.add(startupTimer);
+
+  const interval = setInterval(() => heartbeat(false), MINUTE_MS);
+  interval.unref?.();
+  timers.add(interval);
+
+  return () => {
+    stopped = true;
+    for (const timer of timers) {
+      clearTimeout(timer);
+      clearInterval(timer);
+    }
+    timers.clear();
+  };
+}
+
+/**
+ * Zusätzlicher Leaderboard-Edit nach Level-Up/-Down, max. alle 10 Minuten.
+ * Dieser Pfad verändert ausschließlich den allgemeinen Throttle, niemals den
+ * unabhängigen Stunden-Zeitstempel.
+ */
+async function maybeRefreshLeaderboard(ctx, entry, guild) {
+  syncMapsFromEntry(entry);
+  if (!isLeaderboardRefreshDue(entry.guildId)) return false;
+  return refreshLeaderboard(ctx, entry, guild, new Date(), { isHourly: false });
+}
+
+async function applyDailyDecayForGuild(ctx, entry, guild) {
   const lang = entry.lang || 'de';
   const users = ctx.store.getUsersForGuild(entry.guildId);
   if (!users.length) return;
+
   const { applyDailyDecay, nextDecayInfo } = require('./logic');
   let decayed = 0;
-  let leveledDownUsers = [];
-  for (const u of users){
-    const info = nextDecayInfo(u, Date.now());
-    u.inactiveDays = info.inactiveDays;
-    const before = { level: u.level, xp: u.xp };
-    const res = applyDailyDecay(u, info.rate);
+  const leveledDownUsers = [];
+  for (const user of users) {
+    const info = nextDecayInfo(user, Date.now());
+    user.inactiveDays = info.inactiveDays;
+    const before = { level: user.level, xp: user.xp };
+    const res = applyDailyDecay(user, info.rate);
     if (res.level !== before.level || res.xp !== before.xp) {
-      u.level = res.level;
-      u.xp = res.xp;
-      decayed++;
-      if (res.leveledDown) leveledDownUsers.push({ userId: u.userId, level: res.level, xp: res.xp });
+      user.level = res.level;
+      user.xp = res.xp;
+      decayed += 1;
+      if (res.leveledDown) leveledDownUsers.push({ userId: user.userId, level: res.level, xp: res.xp });
     }
-    ctx.store.setUser(u);
+    ctx.store.setUser(user);
   }
-  ctx.logger.info(`[xp-level-bot] Daily decay ${guild.name}: ${decayed} Nutzer angepasst, ${leveledDownUsers.length} Level-Downs`);
-  await ctx.store.flush();
-  for (const ld of leveledDownUsers) {
-    try {
-      let ch = await guild.channels.fetch(entry.mainChannelId).catch(()=>null);
-      if (!ch || !ch.isTextBased()) continue;
-      const { buildLevelDownEmbed } = require('./embed-builder');
-      const container = buildLevelDownEmbed({ lang, userId: ld.userId, level: ld.level, xp: ld.xp });
-      await ch.send(componentsV2Payload([container])).catch(()=>{});
-      await refreshRankNicknames(ctx, guild, ld.userId, lang).catch(()=>{});
-      await syncLevelRolesForUser({ ctx, guild, userId: ld.userId, level: ld.level }).catch(()=>{});
-    } catch{}
+
+  ctx.logger.info(
+    `[xp-level-bot] Daily decay ${guild.name}: ${decayed} Nutzer angepasst, ${leveledDownUsers.length} Level-Downs`
+  );
+  // Persistenz sofort parallel starten, aber auch Level-Down-Ankündigungen
+  // niemals auf Turso warten lassen.
+  const decayFlush = ctx.store
+    .flush()
+    .catch((err) => ctx.logger.warn('[xp-level-bot] Decay-Flush fehlgeschlagen:', err?.message || err));
+
+  // Erst zuverlässig ankündigen, danach Nickname und Rollen nachziehen.
+  for (const down of leveledDownUsers) {
+    await sendLevelAnnouncement({
+      ctx,
+      guild,
+      cfg: entry,
+      userId: down.userId,
+      res: { ...down, leveledUp: false, leveledDown: true, leveled: true },
+      source: 'decay',
+    });
+    await Promise.allSettled([
+      refreshRankNicknames(ctx, guild, down.userId, lang),
+      syncLevelRolesForUser({ ctx, guild, userId: down.userId, level: down.level }),
+    ]);
   }
-  // Nach dem Decay das Leaderboard direkt aktualisieren – zählt als stündliches Update
+  await decayFlush;
+
+  // Nach dem Decay ist das Board ohnehin frisch; das zählt legitim als
+  // Stunden-Refresh und verhindert einen zweiten gleichzeitigen Mitternachts-Edit.
   await refreshLeaderboard(ctx, entry, guild, new Date(), { isHourly: true });
 }
 
-async function refreshLeaderboard(ctx, entry, guild, now, opts = {}){
-  const isHourly = opts.isHourly !== false; // default true für Rückwärtskompatibilität, aber explizit false bei Level-Up
-  // Wenn aufgerufen ohne opts (alte Aufrufe), behandle als hourly, damit nichts kaputt geht
-  const treatAsHourly = opts.isHourly === true || (Object.keys(opts).length === 0);
+async function fetchLeaderboardChannel(ctx, entry, guild) {
+  let channel = guild.channels?.cache?.get?.(entry.leaderboardChannelId) || null;
+  if (!channel) {
+    try {
+      channel = await ctx.client.channels.fetch(entry.leaderboardChannelId);
+    } catch {}
+  }
+  if (!channel) {
+    try {
+      channel = await guild.channels.fetch(entry.leaderboardChannelId);
+    } catch {}
+  }
+  if (channel?.isTextBased?.()) return channel;
+
+  // Self-Healing über den unsichtbaren Marker der bestehenden Nachricht.
   try {
-    // Kanal robust holen: erst per ID, bei Fehler Fallback über Marker-Suche (z.B. wenn Channel-ID veraltet)
-    let channel = await ctx.client.channels.fetch(entry.leaderboardChannelId).catch(()=>null);
-    if (!channel || !channel.isTextBased()) {
-      // Fallback: versuche, die Leaderboard-Nachricht global zu finden und daraus den Kanal zu ermitteln
-      try {
-        const found = await ctx.store.findLeaderboardMessage(guild, ctx.client);
-        if (found && found.channel && found.channel.isTextBased()) {
-          channel = found.channel;
-          entry.leaderboardChannelId = found.channel.id;
-          entry.leaderboardMessageId = found.message.id;
-          ctx.logger.info(`[xp-level-bot] Leaderboard-Kanal via Fallback gefunden (${guild.name} → ${channel.id})`);
-        }
-      } catch {}
+    const found = await ctx.store.findLeaderboardMessage(guild, ctx.client);
+    if (found?.channel?.isTextBased?.()) {
+      entry.leaderboardChannelId = found.channel.id;
+      entry.leaderboardMessageId = found.message.id;
+      ctx.logger.info(
+        `[xp-level-bot] Leaderboard-Kanal via Marker gefunden (${guild.name} → ${found.channel.id})`
+      );
+      return found.channel;
     }
-    if (!channel || !channel.isTextBased()) {
-      ctx.logger.warn(`[xp-level-bot] Leaderboard-Kanal ${entry.leaderboardChannelId} nicht erreichbar (${guild.name})`);
+  } catch {}
+  return null;
+}
+
+async function refreshLeaderboard(ctx, entry, guild, now = new Date(), opts = {}) {
+  // Ohne opts bleibt das historische Verhalten "hourly" erhalten. Alle internen
+  // Level-Up-Aufrufe übergeben dagegen explizit isHourly:false.
+  const treatAsHourly = opts.isHourly === true || Object.keys(opts).length === 0;
+  try {
+    const channel = await fetchLeaderboardChannel(ctx, entry, guild);
+    if (!channel) {
+      ctx.logger.warn(
+        `[xp-level-bot] Leaderboard-Kanal ${entry.leaderboardChannelId} nicht erreichbar (${guild.name})`
+      );
       return false;
     }
+
     const entries = ctx.store.getLeaderboard(entry.guildId, 15);
     const container = buildLeaderboardEmbed({ lang: entry.lang, entries, now, guildName: guild.name });
+    const payload = componentsV2Payload([container]);
 
-    let msg = null;
-    if (entry.leaderboardMessageId) msg = await channel.messages.fetch(entry.leaderboardMessageId).catch(()=>null);
-    if (!msg) {
-      const found = await ctx.store.findLeaderboardMessage(guild, ctx.client);
+    let message = null;
+    if (entry.leaderboardMessageId) {
+      message = await channel.messages.fetch(entry.leaderboardMessageId).catch(() => null);
+    }
+    if (!message) {
+      const found = await ctx.store.findLeaderboardMessage(guild, ctx.client).catch(() => null);
       if (found) {
-        msg = found.message;
+        message = found.message;
         entry.leaderboardChannelId = found.channel.id;
         entry.leaderboardMessageId = found.message.id;
       }
     }
 
     let success = false;
-    if (msg) {
+    let staleMessage = null;
+    if (message) {
       try {
-        await msg.edit(componentsV2Payload([container]));
+        await message.edit(payload);
         success = true;
       } catch (err) {
-        ctx.logger.warn(`[xp-level-bot] Leaderboard-Edit fehlgeschlagen (${guild.name}): ${err.message} – sende neu.`);
-        await msg.delete().catch(()=>{});
-        msg = null;
+        // Alte Nachricht erst löschen, NACHDEM die Ersatznachricht erfolgreich
+        // gesendet wurde. So bleibt bei einem zweiten API-Fehler wenigstens das
+        // bestehende Board sichtbar.
+        staleMessage = message;
+        message = null;
+        ctx.logger.warn(
+          `[xp-level-bot] Leaderboard-Edit fehlgeschlagen (${guild.name}): ${err.message} – sende Ersatz.`
+        );
       }
-    }
-    if (!msg) {
-      const newMsg = await channel.send(componentsV2Payload([container])).catch((e)=>{
-        ctx.logger.warn(`[xp-level-bot] Leaderboard-Send fehlgeschlagen (${guild.name}): ${e.message}`);
-        return null;
-      });
-      if (!newMsg) return false;
-      entry.leaderboardMessageId = newMsg.id;
-      success = true;
     }
 
-    if (success) {
-      const ts = Date.now();
-      noteLeaderboardRefresh(entry.guildId, ts);
-      if (treatAsHourly) {
-        noteHourlyRefresh(entry.guildId, ts);
-      }
-      // Persistierten Timestamp aktualisieren (überlebt Restarts, sichtbar in DB/File)
-      entry.lastLeaderboardRefresh = ts;
-      entry.lastLeaderboardUpdate = ts;
-      ctx.store.setGuild(entry);
-      // Schneller Flush damit Restart den frischen Timestamp nicht verliert
-      void ctx.store.flush().catch(()=>{});
-      ctx.logger.info(`[xp-level-bot] Leaderboard aktualisiert (${guild.name})${treatAsHourly ? ' [stündlich]' : ' [level]'}`);
-      return true;
+    if (!message) {
+      const replacement = await channel.send(payload).catch((err) => {
+        ctx.logger.warn(`[xp-level-bot] Leaderboard-Send fehlgeschlagen (${guild.name}): ${err.message}`);
+        return null;
+      });
+      if (!replacement) return false;
+      entry.leaderboardMessageId = replacement.id;
+      success = true;
+      if (staleMessage) await staleMessage.delete().catch(() => {});
     }
-    return false;
-  } catch(e){
-    ctx.logger.warn(`[xp-level-bot] Leaderboard refresh failed ${guild.name}:`, e.message);
+
+    if (!success) return false;
+
+    const ts = Date.now();
+    noteLeaderboardRefresh(entry.guildId, ts);
+    entry.lastLeaderboardRefresh = ts;
+    entry.lastLeaderboardUpdate = ts; // Kompatibilität mit alten File-Fallbacks
+    if (treatAsHourly) {
+      noteHourlyRefresh(entry.guildId, ts);
+      entry.lastHourlyLeaderboardRefresh = ts;
+    }
+    ctx.store.setGuild(entry);
+    void ctx.store.flush().catch(() => {});
+    ctx.logger.info(
+      `[xp-level-bot] Leaderboard aktualisiert (${guild.name})${treatAsHourly ? ' [stündlich]' : ' [level]'}`
+    );
+    return true;
+  } catch (err) {
+    ctx.logger.warn(`[xp-level-bot] Leaderboard refresh failed ${guild.name}:`, err?.message || err);
     return false;
   }
 }
@@ -311,17 +426,20 @@ async function refreshLeaderboard(ctx, entry, guild, now, opts = {}){
 module.exports = {
   startScheduler,
   tick,
+  runMaintenanceTick,
+  runBonusTick,
+  runLeaderboardTick,
   refreshLeaderboard,
   maybeRefreshLeaderboard,
   isLeaderboardRefreshDue,
   isHourlyRefreshDue,
   noteLeaderboardRefresh,
   noteHourlyRefresh,
+  syncMapsFromEntry,
   applyDailyDecayForGuild,
   LEADERBOARD_MIN_REFRESH_MS,
   LEADERBOARD_HOURLY_MS,
   LEADERBOARD_HOURLY_RETRY_MS,
-  // Expose maps for testing / debugging
   _lastLeaderboardRefresh: lastLeaderboardRefresh,
   _lastHourlyRefresh: lastHourlyRefresh,
   _lastLeaderboardAttempt: lastLeaderboardAttempt,

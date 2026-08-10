@@ -395,6 +395,7 @@ async function setupCmd(ctx, interaction) {
   });
   if (!msg) return interaction.editReply(componentsV2Payload([smallContainer(null, t('errGeneric', lang))]));
 
+  const createdAt = now.getTime();
   const cfg = {
     ...(existing || {}),
     guildId: interaction.guild.id,
@@ -403,6 +404,11 @@ async function setupCmd(ctx, interaction) {
     lang,
     leaderboardMessageId: msg.id,
     lastDailyDecay: todayKeyForLang(lang),
+    // /setup hat das Board gerade erfolgreich gesendet. Beide unabhängigen
+    // Timer starten daher exakt hier; spätere Level-Ups ändern nur das erste Feld.
+    lastLeaderboardRefresh: createdAt,
+    lastLeaderboardUpdate: createdAt,
+    lastHourlyLeaderboardRefresh: createdAt,
   };
   ctx.store.setGuild(cfg);
   await ctx.store.flush();

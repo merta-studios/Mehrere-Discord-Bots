@@ -17,8 +17,8 @@ function tzParts(tz, date = new Date()) {
   return { year:Number(parts.year), month:Number(parts.month), day:Number(parts.day), hour:Number(parts.hour), minute:Number(parts.minute) };
 }
 
-function todayKey(lang) {
-  const t = tzParts(tzOf(lang));
+function todayKey(lang, date = new Date()) {
+  const t = tzParts(tzOf(lang), date);
   return `${t.year}-${pad(t.month)}-${pad(t.day)}`;
 }
 
@@ -459,21 +459,24 @@ function isVoiceEligible(memberVoiceState, channelMemberCount) {
 //  - Anzahl und Uhrzeiten werden deterministisch aus (Guild-ID + Tag) abgeleitet
 //    → stabil über Neustarts hinweg und für jeden Server anders
 //  - alle Termine liegen mindestens 1 Stunde auseinander
-//  - nur zwischen 06:00 und 00:30 Uhr Ortszeit (kein mitten in der Nacht)
+//  - nur zwischen 06:00 und 23:59 Uhr Ortszeit (eindeutig derselbe Kalendertag)
 //  - ein Drop ist 1 Stunde lang einsammelbar (BONUS_CLAIM_MS) und verfällt dann
 
 const BONUS_XP_MIN = 20;
 const BONUS_XP_MAX = 40;
 const BONUS_CLAIM_MS = 60 * 60 * 1000; // Belohnung ist 1 Stunde gültig
-// Geplante Termine (Minuten ab 0:00 Uhr Ortszeit): 06:00 bis 00:30 (nächster Tag)
+// Geplante Termine (Minuten ab 0:00 Uhr Ortszeit): 06:00 bis 23:59.
+// Das alte Maximum 00:30 (= Minute 1470) gehörte bereits zum Folgetag, während
+// der persistierte Tageszustand um 00:00 wechselte. Dadurch konnten diese Slots
+// dem falschen Datum zugeordnet werden. Ein Kalendertag endet nun eindeutig 23:59.
 const BONUS_SLOT_MIN = 6 * 60; // 06:00
-const BONUS_SLOT_MAX = 24 * 60 + 30; // 00:30 = 1470
+const BONUS_SLOT_MAX = 23 * 60 + 59; // 23:59
 const BONUS_SLOT_SPACING = 60; // mind. 1 Stunde Abstand
 const BONUS_COUNT_MIN = 2; // 2 bis 4 Drops pro Tag
 const BONUS_COUNT_MAX = 4;
-// Toleranz, ab der ein überfälliger Slot noch ausgelöst wird (Scheduler-Ticks,
-// kleine Verzögerungen). Verpasste Termine werden sonst übersprungen.
-const BONUS_SLOT_GRACE_MIN = 6;
+// Der isolierte Scheduler prüft minütlich. Eine Stunde Toleranz schützt zusätzlich
+// vor Render-Schlaf, Deployments und vorübergehenden Discord-Ausfällen.
+const BONUS_SLOT_GRACE_MIN = 60;
 
 /** Zufällige Bonus-Höhe (20–40 XP, Ganzzahl). rng injizierbar für Tests. */
 function rollBonusXp(rng = Math.random) {
@@ -513,9 +516,9 @@ function seededRngForDay(guildId, dayKey) {
 /**
  * Plant die Bonus-Termine eines Servers für einen Tag.
  * Gibt ein aufsteigend sortiertes Array von "Minuten ab 0 Uhr Ortszeit" zurück
- * (z. B. 450 = 07:30, 1470 = 00:30 des Folgetags). Alle Termine liegen
- * mindestens BONUS_SLOT_SPACING Minuten auseinander und innerhalb des
- * Tagesfensters [BONUS_SLOT_MIN, BONUS_SLOT_MAX].
+ * (z. B. 450 = 07:30, 1439 = 23:59). Alle Termine liegen mindestens
+ * BONUS_SLOT_SPACING Minuten auseinander und innerhalb desselben Kalendertags
+ * im Tagesfenster [BONUS_SLOT_MIN, BONUS_SLOT_MAX].
  * `rng` injizierbar für Tests (Standard: Math.random).
  */
 function planDailyBonusSlots(guildId, dayKey, rng = Math.random) {
@@ -538,8 +541,9 @@ function currentMinuteOfDay(lang, now = new Date()) {
 
 /** Prüft, ob ein geplanter Slot gerade (oder in der Toleranz) fällig ist. */
 function isSlotDue(slot, minuteOfDay, graceMin = BONUS_SLOT_GRACE_MIN) {
-  const clock = slot % 1440; // 1470 → 00:30, 1440 → 00:00
-  const diff = (minuteOfDay - clock + 1440) % 1440;
+  const diff = minuteOfDay - slot;
+  // Kein Modulo über Mitternacht: Slot und minuteOfDay gehören immer zum
+  // gleichen lokalen Kalendertag. So kann 23:59 nicht um 00:01 vorzeitig feuern.
   return diff >= 0 && diff <= graceMin;
 }
 
