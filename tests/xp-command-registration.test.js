@@ -104,12 +104,12 @@ test('alle 6 Command-JSONs sind Discord-API-valide (inkl. /level_roles)', () => 
   }
 });
 
-test('registerCommands PUT-t den kompletten Satz inkl. /level_roles an die globale Route', async () => {
+test('registerCommands PUT-t den kompletten Satz inkl. /level_roles global UND sofort in bekannte Gilden', async () => {
   const calls = [];
   const fakeRest = {
     put: async (route, { body }) => {
       calls.push({ route, body });
-      return (body || []).map((c, i) => ({ id: String(i), name: c.name }));
+      return (body || []).map((c, i) => ({ id: `${route}:${i}`, name: c.name }));
     },
   };
   const ctx = makeCtx();
@@ -124,9 +124,11 @@ test('registerCommands PUT-t den kompletten Satz inkl. /level_roles an die globa
   assert.ok(names.includes('level_roles'), `/level_roles fehlt im Registrierungs-Payload! Enthalten: ${names.join(', ')}`);
   assert.deepEqual(names, ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'adminpanel']);
 
-  // Danach: Guild-Commands der bekannten Gilden geleert (keine Duplikate)
+  // Danach: gleiches vollständiges Set als Guild-Commands, damit neue Commands
+  // ohne Discords globale Cache-Wartezeit sofort sichtbar sind.
   assert.equal(calls[1].route, Routes.applicationGuildCommands('app1', 'g1'));
-  assert.deepEqual(calls[1].body, []);
+  assert.deepEqual(calls[1].body.map((c) => c.name), names);
+  assert.ok(ctx.guildCommandIds.get('g1').level_roles, 'Guild-spezifische /level_roles-ID wurde gespeichert');
 });
 
 test('registerCommands mit Dev-Gilde registriert dort (sofort sichtbar) inkl. /level_roles', async () => {
@@ -166,4 +168,37 @@ test('registerCommands setzt bei Dauerfehler commandsRegistered=false (Scheduler
 
   assert.equal(ok, false);
   assert.equal(ctx.commandsRegistered, false, 'false = Scheduler versucht alle 15 min erneut');
+});
+
+test('commandMention nutzt Guild-Command-IDs und fällt sonst sauber auf /name zurück', () => {
+  const { commandMention } = require('../bots/xp-level-bot/src/commands');
+  const ctx = {
+    commandIds: { help: 'global-help', level_roles: 'global-level' },
+    guildCommandIds: new Map([['g1', { help: 'guild-help', level_roles: 'guild-level' }]]),
+  };
+  assert.equal(commandMention(ctx, 'level_roles', 'g1'), '</level_roles:guild-level>');
+  assert.equal(commandMention(ctx, 'help', 'g2'), '</help:global-help>');
+  assert.equal(commandMention(ctx, 'missing', 'g1'), '/missing');
+});
+
+test('/help antwortet ohne ReferenceError und enthält /level_roles', async () => {
+  const { handleChatInput } = require('../bots/xp-level-bot/src/commands');
+  let replyPayload = null;
+  const ctx = {
+    store: { getGuild: () => ({ lang: 'de' }) },
+    commandIds: { help: '1', setup: '2', rank: '3', admin_set_bot_profile: '4', level_roles: '5' },
+    guildCommandIds: new Map([['g1', { help: '11', setup: '12', rank: '13', admin_set_bot_profile: '14', level_roles: '15' }]]),
+  };
+  const interaction = {
+    commandName: 'help',
+    guildId: 'g1',
+    locale: 'de',
+    isChatInputCommand: () => true,
+    reply: async (payload) => { replyPayload = payload; return payload; },
+  };
+
+  await handleChatInput(ctx, interaction);
+
+  const text = JSON.stringify(replyPayload.components.map((c) => c.toJSON ? c.toJSON() : c));
+  assert.ok(text.includes('</level_roles:15>'), text);
 });

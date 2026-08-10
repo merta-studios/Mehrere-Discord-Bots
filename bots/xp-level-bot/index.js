@@ -71,7 +71,11 @@ module.exports = {
       logger,
       env,
       ownerId: String(env('XP_BOT_OWNER_ID','') || env('BIRTHDAY_BOT_OWNER_ID','') || '').trim().replace(/^<@!?(\d+)>$/,'$1'),
-      devGuildId: env('XP_BOT_GUILD_ID','') || env('BIRTHDAY_BOT_GUILD_ID',''),
+      // Wichtig: Der XP-Bot darf NICHT auf BIRTHDAY_BOT_GUILD_ID zurückfallen.
+      // Sonst werden XP-Commands nur in dieser einen Birthday-Dev-Gilde
+      // registriert; neue globale Commands wie /level_roles tauchen dann auf
+      // den echten Servern nicht auf.
+      devGuildId: env('XP_BOT_GUILD_ID',''),
       rest: new REST({version:'10'}).setToken(token),
       store,
       panelSessions: new Map(),

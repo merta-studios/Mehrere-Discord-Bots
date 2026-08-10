@@ -100,14 +100,31 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
       if (ctx.devGuildId) {
         const res = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), {body: commands});
         ctx.commandIds = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
+        ctx.guildCommandIds = ctx.guildCommandIds || new Map();
+        ctx.guildCommandIds.set(ctx.devGuildId, ctx.commandIds);
         ctx.logger.info(`[xp-level-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert: ${registeredNames(res)}`);
       } else {
+        // Global registrieren (für neue Server) UND zusätzlich sofort in jede
+        // bekannte Gilde schreiben. Discord kann globale Commands bis zu 1h
+        // cachen; genau dadurch blieb ein neuer Command wie /level_roles in
+        // bestehenden Servern scheinbar „für immer“ unsichtbar. Der Guild-PUT
+        // macht das Set sofort sichtbar und überschreibt alte Guild-Sets.
         const res = await rest.put(Routes.applicationCommands(clientId), {body: commands});
         ctx.commandIds = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
+        ctx.guildCommandIds = ctx.guildCommandIds || new Map();
+
+        let guildSyncOk = true;
         for (const guild of ctx.client.guilds.cache.values()) {
-          await rest.put(Routes.applicationGuildCommands(clientId, guild.id), {body: []}).catch(()=>{});
+          try {
+            const guildRes = await rest.put(Routes.applicationGuildCommands(clientId, guild.id), {body: commands});
+            ctx.guildCommandIds.set(guild.id, Object.fromEntries((guildRes || []).map((c) => [c.name, c.id])));
+          } catch (err) {
+            guildSyncOk = false;
+            ctx.logger.warn(`[xp-level-bot] Guild-Command-Sync fehlgeschlagen (${guild.id}): ${err.message}`);
+          }
         }
-        ctx.logger.info(`[xp-level-bot] Commands global registriert (bis zu 1h bis überall sichtbar): ${registeredNames(res)}`);
+        ctx.logger.info(`[xp-level-bot] Commands global + in ${ctx.client.guilds.cache.size} Gilden registriert: ${registeredNames(res)}`);
+        if (!guildSyncOk) throw new Error('Mindestens eine Guild-Command-Registrierung ist fehlgeschlagen.');
       }
       ctx.commandsRegistered = true;
       return true;
@@ -246,18 +263,24 @@ async function helpCmd(ctx, interaction){
       `# ${t('helpTitle', lang)}`,
       t('helpDesc', lang),
       '',
-      `**${commandMention(ctx, 'setup')}**\n${t('helpSetup', lang)}`,
+      `**${commandMention(ctx, 'setup', interaction.guildId)}**\n${t('helpSetup', lang)}`,
       '',
-      `**${commandMention(ctx, 'rank')}**\n${t('helpRank', lang)}`,
+      `**${commandMention(ctx, 'rank', interaction.guildId)}**\n${t('helpRank', lang)}`,
       '',
-      `**${commandMention(ctx, 'admin_set_bot_profile')}**\n${t('helpSetProfile', lang)}`,
+      `**${commandMention(ctx, 'admin_set_bot_profile', interaction.guildId)}**\n${t('helpSetProfile', lang)}`,
       '',
-      `**${commandMention(ctx, 'level_roles')}**\n${t('levelRolesHelp', lang)}`,
+      `**${commandMention(ctx, 'level_roles', interaction.guildId)}**\n${t('levelRolesHelp', lang)}`,
       '',
-      `**${commandMention(ctx, 'help')}**\n${t('helpHelp', lang)}`,
+      `**${commandMention(ctx, 'help', interaction.guildId)}**\n${t('helpHelp', lang)}`,
     ].join('\n'))
   );
   return interaction.reply(componentsV2Payload([container]));
+}
+
+function commandMention(ctx, name, guildId) {
+  const guildIds = guildId && ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(guildId) : null;
+  const id = guildIds?.[name] || ctx.commandIds?.[name];
+  return id ? `</${name}:${id}>` : `/${name}`;
 }
 
 async function profileCmd(ctx, interaction){
@@ -303,4 +326,4 @@ function todayKeyForLang(lang){
   return `${t.year}-${pad(t.month)}-${pad(t.day)}`;
 }
 
-module.exports = { defineCommands, registerCommands, handleChatInput, pick };
+module.exports = { defineCommands, registerCommands, handleChatInput, pick, commandMention };
