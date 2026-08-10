@@ -131,7 +131,7 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
 
         const summary = (res || []).map((c) => `${c.name} (ID: ${c.id})`).join(', ');
         ctx.logger?.info?.(
-          `[xp-level-bot] Slash-Commands in Dev-Gilde ${devGuildId} registriert (${(res || []).length} Commands, Route: ${route}): ${summary}`
+          `[xp-level-bot] Registriert: ${summary} (Dev-Gilde ${devGuildId}, Route: ${route})`
         );
       } else {
         const route = Routes.applicationCommands(clientId);
@@ -141,9 +141,13 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
         ctx.commandIds = ids;
         if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
 
+        // Im Produktivbetrieb alte Guild-Command-IDs aufräumen
+        if (ctx.guildCommandIds instanceof Map) ctx.guildCommandIds.clear();
+        if (ctx.store?.clearGuildCommandIds) ctx.store.clearGuildCommandIds();
+
         const summary = (res || []).map((c) => `${c.name} (ID: ${c.id})`).join(', ');
         ctx.logger?.info?.(
-          `[xp-level-bot] Slash-Commands global registriert (${(res || []).length} Commands, Route: ${route}): ${summary}`
+          `[xp-level-bot] Registriert: ${summary} (global, Route: ${route})`
         );
 
         // Alte Guild-Commands aufräumen, damit keine veralteten Commands neue globale Commands (wie /level_roles) shadowen
@@ -151,6 +155,7 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
         for (const guild of cachedGuilds) {
           try {
             await rest.put(Routes.applicationGuildCommands(clientId, guild.id), { body: [] });
+            if (ctx.store?.deleteGuildCommandIds) ctx.store.deleteGuildCommandIds(guild.id);
           } catch (cleanErr) {
             ctx.logger?.warn?.(
               `[xp-level-bot] Alte Guild-Commands aufräumen für Gilde ${guild.id} übersprungen/fehlgeschlagen: ${cleanErr.message}`
@@ -175,14 +180,19 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
 
 /**
  * Stellt sicher, dass die Command-IDs vor dem Rendern von /help geladen sind.
- * Reihenfolge: Memory -> persistenter Store -> Discord REST GET Fallback.
+ * Reihenfolge: Memory -> persistenter Store -> Discord REST GET Fallback -> Auto-Re-Register Fallback.
  */
 async function ensureCommandIds(ctx, guildId = null) {
-  const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles'];
+  const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'adminpanel'];
   const hasAll = (obj) => obj && typeof obj === 'object' && needed.every((name) => Boolean(obj[name]));
 
+  const rawDev = ctx.devGuildId;
+  const devGuildId = typeof rawDev === 'string' && rawDev.trim() !== ''
+    ? rawDev.trim().replace(/^<@!?(\d+)>$/, '$1')
+    : null;
+
   // 1. In-Memory Check
-  if (guildId && ctx.guildCommandIds instanceof Map && hasAll(ctx.guildCommandIds.get(guildId))) {
+  if (devGuildId && guildId === devGuildId && ctx.guildCommandIds instanceof Map && hasAll(ctx.guildCommandIds.get(guildId))) {
     return ctx.guildCommandIds.get(guildId);
   }
   if (hasAll(ctx.commandIds)) {
@@ -194,7 +204,7 @@ async function ensureCommandIds(ctx, guildId = null) {
     ctx.commandIds = { ...(ctx.commandIds || {}), ...ctx.store.getCommandIds() };
     return ctx.commandIds;
   }
-  if (guildId && ctx.store?.getGuildCommandIds && hasAll(ctx.store.getGuildCommandIds(guildId))) {
+  if (devGuildId && guildId === devGuildId && ctx.store?.getGuildCommandIds && hasAll(ctx.store.getGuildCommandIds(guildId))) {
     const storedG = ctx.store.getGuildCommandIds(guildId);
     ctx.guildCommandIds = ctx.guildCommandIds || new Map();
     ctx.guildCommandIds.set(guildId, storedG);
@@ -207,10 +217,6 @@ async function ensureCommandIds(ctx, guildId = null) {
   if (clientId && token) {
     try {
       const rest = ctx.rest || new REST({ version: '10' }).setToken(token);
-      const rawDev = ctx.devGuildId;
-      const devGuildId = typeof rawDev === 'string' && rawDev.trim() !== ''
-        ? rawDev.trim().replace(/^<@!?(\d+)>$/, '$1')
-        : null;
 
       if (devGuildId) {
         const fetched = await rest.get(Routes.applicationGuildCommands(clientId, devGuildId));
@@ -221,7 +227,7 @@ async function ensureCommandIds(ctx, guildId = null) {
           ctx.guildCommandIds.set(devGuildId, ids);
           if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
           if (ctx.store?.setGuildCommandIds) ctx.store.setGuildCommandIds(devGuildId, ids);
-          return ids;
+          if (hasAll(ids)) return ids;
         }
       } else {
         const fetched = await rest.get(Routes.applicationCommands(clientId));
@@ -229,11 +235,16 @@ async function ensureCommandIds(ctx, guildId = null) {
           const ids = Object.fromEntries(fetched.map((c) => [c.name, c.id]));
           ctx.commandIds = { ...(ctx.commandIds || {}), ...ids };
           if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
-          return ids;
+          if (hasAll(ids)) return ids;
         }
       }
+
+      // Falls GET immer noch unvollständig ist (z.B. /level_roles fehlt auf Discord),
+      // aktiv neu registrieren
+      await registerCommands(ctx, { retryDelays: [0] });
+      if (hasAll(ctx.commandIds)) return ctx.commandIds;
     } catch (err) {
-      ctx.logger?.warn?.(`[xp-level-bot] ensureCommandIds: Fetch fehlgeschlagen: ${err.message}`);
+      ctx.logger?.warn?.(`[xp-level-bot] ensureCommandIds: Fetch/Register fehlgeschlagen: ${err.message}`);
     }
   }
 
