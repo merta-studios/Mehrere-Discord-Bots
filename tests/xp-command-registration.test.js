@@ -1,11 +1,13 @@
 /**
- * Beweis, dass /level_roles bei Discord wirklich angelegt wird:
- * 1. Jeder Command wird gegen die Discord-API-Regeln validiert – ein einziges
- *    ungültiges Feld führt nämlich zu einem 400er für den GANZEN Batch, und
- *    dann fehlen neue Commands (z.B. /level_roles) dauerhaft.
- * 2. registerCommands() läuft hier mit einem gefälschten REST-Client: wir
- *    prüfen die gerufene Route und den exakten Payload-Body.
- * 3. Retry-Verhalten: bei Fehlschlag wird erneut versucht (mit kurzen Delays).
+ * Tests für die Slash-Command-Registrierung und den /help Command des XP-Bots:
+ * 1. Discord-API-Validierung aller 6 Commands (inkl. /level_roles)
+ * 2. Saubere globale Registrierung ohne Dev-Gilden-Verwechslung + Shadowing-Cleanup
+ * 3. Spezifische Dev-Gilden-Registrierung bei gesetzter XP_BOT_GUILD_ID
+ * 4. Whitespace-Toleranz bei Env-Variablen
+ * 5. Speicherung und Persistierung der Discord-Command-IDs (überlebt Bot-Restarts)
+ * 6. ensureCommandIds: Nachladen von Discord REST API bei leerem RAM
+ * 7. /help zeigt alle Commands anklickbar als </name:id> Mentions (keine reinen Text-Fallbacks)
+ * 8. Nachvollziehbares Logging mit Route, Guild und Command-IDs
  *
  * Ausführen mit: npm test
  */
@@ -14,7 +16,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { Routes } = require('discord.js');
 
-const { defineCommands, registerCommands } = require('../bots/xp-level-bot/src/commands');
+const { defineCommands, registerCommands, ensureCommandIds, commandMention, handleChatInput } = require('../bots/xp-level-bot/src/commands');
+const { createXpStore } = require('../bots/xp-level-bot/src/store');
 
 // Gültige Discord-Locale-Keys für *_localizations (Stand API v10)
 const VALID_LOCALES = new Set([
@@ -87,11 +90,13 @@ function validateCommand(json) {
 }
 
 function makeCtx(overrides = {}) {
+  const store = createXpStore({ env: () => '' });
   return {
     token: 'test-token',
     logger: { info() {}, warn() {}, error() {} },
     client: { user: { id: 'app1' }, guilds: { cache: new Map([['g1', { id: 'g1' }]]) } },
     devGuildId: null,
+    store,
     ...overrides,
   };
 }
@@ -104,12 +109,12 @@ test('alle 6 Command-JSONs sind Discord-API-valide (inkl. /level_roles)', () => 
   }
 });
 
-test('registerCommands PUT-t den kompletten Satz inkl. /level_roles global UND sofort in bekannte Gilden', async () => {
+test('registerCommands registriert global (inkl. /level_roles) und räumt alte Guild-Commands auf', async () => {
   const calls = [];
   const fakeRest = {
     put: async (route, { body }) => {
       calls.push({ route, body });
-      return (body || []).map((c, i) => ({ id: `${route}:${i}`, name: c.name }));
+      return (body || []).map((c, i) => ({ id: `id-${c.name}`, name: c.name }));
     },
   };
   const ctx = makeCtx();
@@ -118,29 +123,53 @@ test('registerCommands PUT-t den kompletten Satz inkl. /level_roles global UND s
   assert.equal(ok, true);
   assert.equal(ctx.commandsRegistered, true);
 
-  // Erster Call: globaler Put mit ALLEN Commands
+  // Erster Call: globaler PUT mit ALLEN Commands
   assert.equal(calls[0].route, Routes.applicationCommands('app1'));
   const names = calls[0].body.map((c) => c.name);
   assert.ok(names.includes('level_roles'), `/level_roles fehlt im Registrierungs-Payload! Enthalten: ${names.join(', ')}`);
   assert.deepEqual(names, ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'adminpanel']);
 
-  // Danach: gleiches vollständiges Set als Guild-Commands, damit neue Commands
-  // ohne Discords globale Cache-Wartezeit sofort sichtbar sind.
+  // Zweiter Call: alte Guild-Commands auf g1 geleert ({ body: [] }), damit kein Shadowing entsteht
   assert.equal(calls[1].route, Routes.applicationGuildCommands('app1', 'g1'));
-  assert.deepEqual(calls[1].body.map((c) => c.name), names);
-  assert.ok(ctx.guildCommandIds.get('g1').level_roles, 'Guild-spezifische /level_roles-ID wurde gespeichert');
+  assert.deepEqual(calls[1].body, []);
+
+  // IDs in memory und im Store gespeichert
+  assert.equal(ctx.commandIds.level_roles, 'id-level_roles');
+  assert.equal(ctx.store.getCommandId('level_roles'), 'id-level_roles');
 });
 
-test('registerCommands mit Dev-Gilde registriert dort (sofort sichtbar) inkl. /level_roles', async () => {
+test('registerCommands mit Dev-Gilde registriert gezielt dort inkl. /level_roles', async () => {
   const calls = [];
-  const fakeRest = { put: async (route, { body }) => { calls.push({ route, body }); return body.map((c) => ({ name: c.name })); } };
-  const ctx = makeCtx({ devGuildId: 'gDev' });
+  const fakeRest = {
+    put: async (route, { body }) => {
+      calls.push({ route, body });
+      return (body || []).map((c) => ({ id: `dev-id-${c.name}`, name: c.name }));
+    },
+  };
+  const ctx = makeCtx({ devGuildId: '123456789012345678' });
   const ok = await registerCommands(ctx, { restFactory: () => fakeRest, retryDelays: [0] });
 
   assert.equal(ok, true);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].route, Routes.applicationGuildCommands('app1', 'gDev'));
+  assert.equal(calls[0].route, Routes.applicationGuildCommands('app1', '123456789012345678'));
   assert.ok(calls[0].body.some((c) => c.name === 'level_roles'));
+  assert.equal(ctx.commandIds.level_roles, 'dev-id-level_roles');
+  assert.equal(ctx.guildCommandIds.get('123456789012345678').level_roles, 'dev-id-level_roles');
+});
+
+test('registerCommands ignoriert leere/Whitespace Dev-Gilde und registriert global', async () => {
+  const calls = [];
+  const fakeRest = {
+    put: async (route, { body }) => {
+      calls.push({ route, body });
+      return (body || []).map((c) => ({ id: `id-${c.name}`, name: c.name }));
+    },
+  };
+  const ctx = makeCtx({ devGuildId: '   ' });
+  const ok = await registerCommands(ctx, { restFactory: () => fakeRest, retryDelays: [0] });
+
+  assert.equal(ok, true);
+  assert.equal(calls[0].route, Routes.applicationCommands('app1'));
 });
 
 test('registerCommands wiederholt nach Fehlschlag und meldet Erfolg erst nach echtem PUT', async () => {
@@ -148,11 +177,14 @@ test('registerCommands wiederholt nach Fehlschlag und meldet Erfolg erst nach ec
   const fakeRest = {
     put: async () => {
       attempts++;
-      if (attempts < 3) { const e = new Error('rate limited'); e.rawError = { message: 'You are being rate limited.' }; throw e; }
-      return [{ name: 'level_roles' }];
+      if (attempts < 3) {
+        const e = new Error('rate limited');
+        e.rawError = { message: 'You are being rate limited.' };
+        throw e;
+      }
+      return [{ id: '101', name: 'setup' }, { id: '102', name: 'level_roles' }];
     },
   };
-  // leere Guild-Liste, damit nur die globalen PUTs gezählt werden
   const ctx = makeCtx({ client: { user: { id: 'app1' }, guilds: { cache: new Map() } } });
   const ok = await registerCommands(ctx, { restFactory: () => fakeRest, retryDelays: [0, 1, 1] });
 
@@ -162,7 +194,11 @@ test('registerCommands wiederholt nach Fehlschlag und meldet Erfolg erst nach ec
 });
 
 test('registerCommands setzt bei Dauerfehler commandsRegistered=false (Scheduler heilt weiter)', async () => {
-  const fakeRest = { put: async () => { throw new Error('500 Internal Server Error'); } };
+  const fakeRest = {
+    put: async () => {
+      throw new Error('500 Internal Server Error');
+    },
+  };
   const ctx = makeCtx();
   const ok = await registerCommands(ctx, { restFactory: () => fakeRest, retryDelays: [0, 1] });
 
@@ -170,35 +206,92 @@ test('registerCommands setzt bei Dauerfehler commandsRegistered=false (Scheduler
   assert.equal(ctx.commandsRegistered, false, 'false = Scheduler versucht alle 15 min erneut');
 });
 
-test('commandMention nutzt Guild-Command-IDs und fällt sonst sauber auf /name zurück', () => {
-  const { commandMention } = require('../bots/xp-level-bot/src/commands');
+test('ensureCommandIds lädt IDs von Discord REST GET nach wenn RAM und Store leer sind', async () => {
+  const fakeRest = {
+    get: async (route) => {
+      assert.equal(route, Routes.applicationCommands('app1'));
+      return [
+        { id: '1001', name: 'setup' },
+        { id: '1002', name: 'rank' },
+        { id: '1003', name: 'help' },
+        { id: '1004', name: 'admin_set_bot_profile' },
+        { id: '1005', name: 'level_roles' },
+        { id: '1006', name: 'adminpanel' },
+      ];
+    },
+  };
+  const ctx = makeCtx({ rest: fakeRest, commandIds: {} });
+  const ids = await ensureCommandIds(ctx);
+
+  assert.equal(ids.level_roles, '1005');
+  assert.equal(ctx.commandIds.level_roles, '1005');
+  assert.equal(ctx.store.getCommandId('level_roles'), '1005');
+});
+
+test('commandMention nutzt Memory, Store und Guild-IDs und formatiert </name:id>', () => {
+  const store = createXpStore({ env: () => '' });
+  store.setCommandIds({ setup: 'store-setup' });
+
   const ctx = {
+    store,
     commandIds: { help: 'global-help', level_roles: 'global-level' },
     guildCommandIds: new Map([['g1', { help: 'guild-help', level_roles: 'guild-level' }]]),
   };
+
   assert.equal(commandMention(ctx, 'level_roles', 'g1'), '</level_roles:guild-level>');
   assert.equal(commandMention(ctx, 'help', 'g2'), '</help:global-help>');
+  assert.equal(commandMention(ctx, 'setup', 'g2'), '</setup:store-setup>');
   assert.equal(commandMention(ctx, 'missing', 'g1'), '/missing');
 });
 
-test('/help antwortet ohne ReferenceError und enthält /level_roles', async () => {
-  const { handleChatInput } = require('../bots/xp-level-bot/src/commands');
+test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', async () => {
   let replyPayload = null;
+  const store = createXpStore({ env: () => '' });
+  store.setGuild({ guildId: 'g1', lang: 'de' });
+  store.setCommandIds({
+    setup: '2001',
+    rank: '2002',
+    help: '2003',
+    admin_set_bot_profile: '2004',
+    level_roles: '2005',
+  });
+
+  // Simulation Bot-Restart: ctx.commandIds ist anfangs leer, wird aus Store geladen
   const ctx = {
-    store: { getGuild: () => ({ lang: 'de' }) },
-    commandIds: { help: '1', setup: '2', rank: '3', admin_set_bot_profile: '4', level_roles: '5' },
-    guildCommandIds: new Map([['g1', { help: '11', setup: '12', rank: '13', admin_set_bot_profile: '14', level_roles: '15' }]]),
+    store,
+    token: 'test-token',
+    client: { user: { id: 'app1' } },
+    commandIds: {},
+    guildCommandIds: new Map(),
   };
+
   const interaction = {
     commandName: 'help',
     guildId: 'g1',
     locale: 'de',
     isChatInputCommand: () => true,
-    reply: async (payload) => { replyPayload = payload; return payload; },
+    reply: async (payload) => {
+      replyPayload = payload;
+      return payload;
+    },
   };
 
   await handleChatInput(ctx, interaction);
 
-  const text = JSON.stringify(replyPayload.components.map((c) => c.toJSON ? c.toJSON() : c));
-  assert.ok(text.includes('</level_roles:15>'), text);
+  const text = JSON.stringify(replyPayload.components.map((c) => (c.toJSON ? c.toJSON() : c)));
+  assert.ok(text.includes('</setup:2001>'), 'setup muss klickbar sein');
+  assert.ok(text.includes('</rank:2002>'), 'rank muss klickbar sein');
+  assert.ok(text.includes('</admin_set_bot_profile:2004>'), 'admin_set_bot_profile muss klickbar sein');
+  assert.ok(text.includes('</level_roles:2005>'), 'level_roles muss klickbar sein');
+  assert.ok(text.includes('</help:2003>'), 'help muss klickbar sein');
+  // Keine unklickbaren reinen Text-Befehle wie "**/level_roles**" ohne ID
+  assert.ok(!text.includes('**`/level_roles`**') && !text.includes('**/level_roles**\n'), 'darf kein Text-Fallback sein');
+});
+
+test('store persistiert commandIds über setCommandIds und getCommandIds', () => {
+  const store = createXpStore({ env: () => '' });
+  store.setCommandIds({ level_roles: '9999', setup: '8888' });
+  assert.equal(store.getCommandId('level_roles'), '9999');
+  assert.equal(store.getCommandId('setup'), '8888');
+  assert.deepEqual(store.getCommandIds(), { level_roles: '9999', setup: '8888' });
 });
