@@ -2,7 +2,7 @@
  * Tests für die Kernlogik des XP Level Bots (ohne Discord-Verbindung):
  * - Nickname-Format: nur Top 3 bekommen eine Medaille, neues Format [Lvl X 🥇]
  * - stripLvlTag versteht sowohl das alte als auch das neue Format
- * - Daily Decay nutzt 5,5% und zieht bei Level-Down den echten Restbetrag ab
+ * - Daily Decay nutzt 10% Basis und zieht bei Level-Down den echten Restbetrag ab
  * - Leaderboard-Titel lautet „Level Leaderboard“ (nicht „XP Leaderboard“)
  * - Rank-Fortschrittszeile: Prozent passt auch bei zweistelligen Zahlen in die Zeile
  *
@@ -29,7 +29,17 @@ const { sendJoinNotice } = require('../bots/xp-level-bot/src/admin-panel');
 const { buildModal, syncMemberLevelRoles } = require('../bots/xp-level-bot/src/level-roles');
 const { buildLevelUpEmbed } = require('../bots/xp-level-bot/src/embed-builder');
 const { refreshRankNicknames, maybeRefreshRankNicknames } = require('../bots/xp-level-bot/src/nicknames');
-const { isLeaderboardRefreshDue, noteLeaderboardRefresh, LEADERBOARD_MIN_REFRESH_MS } = require('../bots/xp-level-bot/src/scheduler');
+const {
+  isLeaderboardRefreshDue,
+  isHourlyRefreshDue,
+  noteLeaderboardRefresh,
+  noteHourlyRefresh,
+  syncMapsFromEntry,
+  LEADERBOARD_MIN_REFRESH_MS,
+  LEADERBOARD_HOURLY_MS,
+  _lastLeaderboardRefresh,
+  _lastHourlyRefresh,
+} = require('../bots/xp-level-bot/src/scheduler');
 
 // ---------------------------------------------------------------------------
 // Nickname-Format
@@ -64,7 +74,7 @@ test('stripLvlTag: entfernt neues und altes Tag-Format', () => {
 // Daily Decay
 // ---------------------------------------------------------------------------
 
-test('applyDailyDecay: nutzt 5,5% vom aktuellen Level-Bedarf', () => {
+test('applyDailyDecay: nutzt 10% Basis vom aktuellen Level-Bedarf', () => {
   const user = { level: 10, xp: 100 };
   const needed = xpNeeded(user.level);
   const expectedDecay = Math.ceil(needed * DAILY_DECAY_RATE);
@@ -472,6 +482,43 @@ test('isLeaderboardRefreshDue: erst nach 10 Minuten wieder fällig', () => {
   assert.equal(isLeaderboardRefreshDue('g1', t0 + LEADERBOARD_MIN_REFRESH_MS - 1), false, 'nach 9:59 Min noch nicht fällig');
   assert.equal(isLeaderboardRefreshDue('g1', t0 + LEADERBOARD_MIN_REFRESH_MS), true, 'nach 10 Min fällig');
   assert.equal(LEADERBOARD_MIN_REFRESH_MS, 10 * 60 * 1000);
+});
+
+test('Stunden-Timer bleibt unabhängig: ein Level-Up-Refresh verschiebt ihn NICHT', () => {
+  const guildId = 'hourly-independent-guild';
+  _lastLeaderboardRefresh.delete(guildId);
+  _lastHourlyRefresh.delete(guildId);
+  const hourlyAt = 2_000_000;
+  noteHourlyRefresh(guildId, hourlyAt);
+
+  // 54 Minuten später editiert ein Level-Up das Board.
+  noteLeaderboardRefresh(guildId, hourlyAt + 54 * 60 * 1000);
+  assert.equal(
+    isHourlyRefreshDue(guildId, hourlyAt + LEADERBOARD_HOURLY_MS),
+    true,
+    'der Stunden-Refresh muss trotzdem nach 55 Minuten fällig sein'
+  );
+});
+
+test('syncMapsFromEntry trennt persistierten allgemeinen und stündlichen Timestamp', () => {
+  const guildId = 'persisted-hourly-independent-guild';
+  _lastLeaderboardRefresh.delete(guildId);
+  _lastHourlyRefresh.delete(guildId);
+  syncMapsFromEntry({
+    guildId,
+    lastLeaderboardRefresh: 9_000_000, // z.B. gerade durch Level-Up
+    lastHourlyLeaderboardRefresh: 3_000_000,
+  });
+  assert.equal(_lastLeaderboardRefresh.get(guildId), 9_000_000);
+  assert.equal(_lastHourlyRefresh.get(guildId), 3_000_000);
+
+  // Alte Installationen hatten nur das kontaminierte allgemeine Feld. Das darf
+  // niemals mehr heimlich als echter Stunden-Zeitstempel übernommen werden.
+  const legacyGuildId = 'legacy-hourly-guild';
+  _lastLeaderboardRefresh.delete(legacyGuildId);
+  _lastHourlyRefresh.delete(legacyGuildId);
+  syncMapsFromEntry({ guildId: legacyGuildId, lastLeaderboardRefresh: 9_000_000 });
+  assert.equal(_lastHourlyRefresh.has(legacyGuildId), false);
 });
 
 test('lbDecayNotice: Hinweis ist kurz & in allen 10 Sprachen vorhanden', () => {

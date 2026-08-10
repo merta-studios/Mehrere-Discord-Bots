@@ -22,6 +22,8 @@
 const { shouldGrantVoiceXp } = require('./logic');
 const { refreshRankNicknames, maybeRefreshRankNicknames } = require('./nicknames');
 const { maybeRefreshLeaderboard } = require('./scheduler');
+const { syncLevelRolesForUser } = require('./level-roles');
+const { sendLevelAnnouncement } = require('./level-announcements');
 
 function createVoiceTracker({ client, store, logger, getGuildConfig }) {
   // guildId:userId -> voiceSession
@@ -251,9 +253,23 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
       if (!guild) return;
       const miniCtx = { client, store, logger };
       if (res.leveled) {
-        await announceLevelChange(guild, cfg, userId, res, lang, voiceChannel);
-        await refreshRankNicknames(miniCtx, guild, userId, lang).catch(()=>{});
-        await maybeRefreshLeaderboard(miniCtx, cfg, guild).catch(()=>{});
+        // Persistenz parallel starten; die sichtbare Ankündigung darf nicht auf
+        // Turso oder andere Discord-Nebenwirkungen warten.
+        const levelFlush = store.flush().catch((e) => logger?.warn?.('[xp-voice] Level-Flush fehlgeschlagen:', e.message));
+        await sendLevelAnnouncement({
+          ctx: miniCtx,
+          guild,
+          cfg,
+          userId,
+          res,
+          source: 'voice',
+        });
+        await Promise.allSettled([
+          refreshRankNicknames(miniCtx, guild, userId, lang),
+          syncLevelRolesForUser({ ctx: miniCtx, guild, userId, level: res.level }),
+          maybeRefreshLeaderboard(miniCtx, cfg, guild),
+          levelFlush,
+        ]);
       } else if (wasNewUser) {
         await refreshRankNicknames(miniCtx, guild, userId, lang).catch(()=>{});
       } else {
@@ -267,35 +283,6 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
     } catch(e){
       logger.warn('[xp-voice] grant failed:', e.message);
     }
-  }
-
-  async function announceLevelChange(guild, cfg, userId, res, lang, sourceChannel){
-    const { buildLevelUpEmbed, buildLevelDownEmbed } = require('./embed-builder');
-    const { componentsV2Payload } = require('./message-payload');
-    const isUp = res.leveledUp;
-    const container = isUp
-      ? buildLevelUpEmbed({ lang, userId, level: res.level, xp: res.xp })
-      : buildLevelDownEmbed({ lang, userId, level: res.level, xp: res.xp });
-
-    // 1. Haupt-Channel (zuverlässig)
-    try {
-      let target = null;
-      try { target = await guild.channels.fetch(cfg.mainChannelId).catch(()=>null); } catch {}
-      if (target && target.isTextBased()) {
-        await target.send(componentsV2Payload([container]));
-        logger?.info?.(`[xp-voice] Level-${isUp ? 'Up' : 'Down'} ${userId} → Lvl ${res.level} (mainChannel)`);
-        return;
-      }
-    } catch (e) {
-      logger?.warn?.(`[xp-voice] Level-Ankündigung mainChannel fail: ${e.message}`);
-    }
-    // 2. System-Channel fallback
-    try {
-      if (guild.systemChannel?.isTextBased()) {
-        await guild.systemChannel.send(componentsV2Payload([container])).catch(()=>{});
-        logger?.info?.(`[xp-voice] Level-${isUp ? 'Up' : 'Down'} ${userId} → Lvl ${res.level} (system fallback)`);
-      }
-    } catch {}
   }
 
   let interval = null;

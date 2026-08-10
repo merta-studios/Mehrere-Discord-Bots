@@ -1,0 +1,135 @@
+/**
+ * Zuverlässiges Routing für Level-Up-/Level-Down-Ankündigungen.
+ *
+ * Regeln:
+ * - Level-Up durch eine Textnachricht: zuerst als Reply auf genau diese Nachricht.
+ * - Level-Up aus Voice/Bonus/anderen Quellen sowie Level-Down: Haupt-Chat aus /setup.
+ * - Fällt das bevorzugte Ziel aus, werden sinnvolle Fallbacks versucht.
+ * - Falls Discord Components V2 für eine Nachricht ablehnt, wird am selben Ziel
+ *   noch eine normale Textnachricht versucht. So darf ein Darstellungsproblem
+ *   niemals die eigentliche Ankündigung verschlucken.
+ */
+
+const { t } = require('./languages');
+const { buildLevelUpEmbed, buildLevelDownEmbed } = require('./embed-builder');
+const { componentsV2Payload } = require('./message-payload');
+
+function isSendableTextChannel(channel) {
+  if (!channel || typeof channel.send !== 'function') return false;
+  if (typeof channel.isTextBased === 'function' && !channel.isTextBased()) return false;
+  return true;
+}
+
+function buildAnnouncement({ lang, userId, res }) {
+  const isLevelUp = Boolean(res?.leveledUp);
+  const container = isLevelUp
+    ? buildLevelUpEmbed({ lang, userId, level: res.level, xp: res.xp })
+    : buildLevelDownEmbed({ lang, userId, level: res.level, xp: res.xp });
+  const text = t(isLevelUp ? 'levelUp' : 'levelDown', lang, {
+    user: `<@${userId}>`,
+    level: res.level,
+    xp: res.xp,
+    // Der Übersetzungsschlüssel berechnet "needed" nicht selbst.
+    needed: require('./logic').xpNeeded(res.level),
+  });
+  return {
+    componentsPayload: componentsV2Payload([container]),
+    textPayload: { content: isLevelUp ? `## ${text}` : text },
+  };
+}
+
+/**
+ * Versucht Components V2 und danach Plain-Text am selben Ziel.
+ * `send` erhält jeweils das Payload und darf reply() oder channel.send() sein.
+ */
+async function sendWithTextFallback(send, payloads, errors, label) {
+  try {
+    await send(payloads.componentsPayload);
+    return true;
+  } catch (err) {
+    errors.push(`${label}/components: ${err?.message || err}`);
+  }
+  try {
+    await send(payloads.textPayload);
+    return true;
+  } catch (err) {
+    errors.push(`${label}/text: ${err?.message || err}`);
+    return false;
+  }
+}
+
+async function resolveMainChannel(guild, mainChannelId) {
+  if (!guild || !mainChannelId) return null;
+  const cached = guild.channels?.cache?.get?.(mainChannelId);
+  if (isSendableTextChannel(cached)) return cached;
+  try {
+    const fetched = await guild.channels?.fetch?.(mainChannelId);
+    return isSendableTextChannel(fetched) ? fetched : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @returns {Promise<{sent:boolean,destination:string|null,errors:string[]}>}
+ */
+async function sendLevelAnnouncement({ ctx, guild, cfg, userId, res, sourceMsg = null, source = 'other' }) {
+  const lang = cfg?.lang || 'de';
+  const errors = [];
+  const payloads = buildAnnouncement({ lang, userId, res });
+  const textTriggeredLevelUp = Boolean(res?.leveledUp) && source === 'text';
+
+  // 1) Ein Chat-Level-Up gehört als Antwort direkt unter die auslösende Nachricht.
+  if (textTriggeredLevelUp && sourceMsg && typeof sourceMsg.reply === 'function') {
+    if (await sendWithTextFallback((payload) => sourceMsg.reply(payload), payloads, errors, 'source-reply')) {
+      return { sent: true, destination: 'source-reply', errors };
+    }
+  }
+
+  // Falls Replys im Kanal verboten sind oder die Message-Referenz scheitert,
+  // wenigstens normal in denselben Textkanal schreiben.
+  if (textTriggeredLevelUp && isSendableTextChannel(sourceMsg?.channel)) {
+    if (await sendWithTextFallback((payload) => sourceMsg.channel.send(payload), payloads, errors, 'source-channel')) {
+      return { sent: true, destination: 'source-channel', errors };
+    }
+  }
+
+  // 2) Vorgesehenes Ziel für alle Nicht-Chat-Level-Ups und sämtliche Level-Downs,
+  // außerdem Fallback für einen fehlgeschlagenen Chat-Reply.
+  const main = await resolveMainChannel(guild, cfg?.mainChannelId);
+  if (main) {
+    if (await sendWithTextFallback((payload) => main.send(payload), payloads, errors, 'main-channel')) {
+      return { sent: true, destination: 'main-channel', errors };
+    }
+  } else {
+    errors.push(`main-channel: ${cfg?.mainChannelId || 'nicht konfiguriert'} nicht erreichbar`);
+  }
+
+  // 3) Systemkanal als serverweiter Notfall-Fallback.
+  if (isSendableTextChannel(guild?.systemChannel)) {
+    if (await sendWithTextFallback((payload) => guild.systemChannel.send(payload), payloads, errors, 'system-channel')) {
+      return { sent: true, destination: 'system-channel', errors };
+    }
+  }
+
+  // 4) Bei Voice/Bonus/Decay kann sourceMsg trotzdem eine Bot-Nachricht sein.
+  // Nur nutzen, wenn sie nicht bereits oben als Chat-Quelle versucht wurde.
+  if (!textTriggeredLevelUp && sourceMsg && typeof sourceMsg.reply === 'function') {
+    if (await sendWithTextFallback((payload) => sourceMsg.reply(payload), payloads, errors, 'source-fallback')) {
+      return { sent: true, destination: 'source-fallback', errors };
+    }
+  }
+
+  ctx?.logger?.error?.(
+    `[xp-level-bot] Level-Ankündigung endgültig fehlgeschlagen (${guild?.name || cfg?.guildId || '?'}, User ${userId}): ${errors.join(' | ')}`
+  );
+  return { sent: false, destination: null, errors };
+}
+
+module.exports = {
+  isSendableTextChannel,
+  buildAnnouncement,
+  sendWithTextFallback,
+  resolveMainChannel,
+  sendLevelAnnouncement,
+};

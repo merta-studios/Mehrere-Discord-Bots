@@ -11,10 +11,10 @@
  *  - Level-Rollen: /level_roles (Admin-Formular) erstellt/sortiert Belohnungsrollen,
  *    Sync bei Level Up/Down (mehrere Rollen, nie entfernen)
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
- *  - Bonus-Drops: Geplant & zeitgesteuert – 2–4 feste Termine pro Tag (06:00–00:30
+ *  - Bonus-Drops: Geplant & zeitgesteuert – 2–4 feste Termine pro Tag (06:00–23:59
  *    Ortszeit, mind. 1h Abstand, pro Server unterschiedlich & stabil) senden eine
  *    XP-Belohnung (20–40 XP) mit „Einsammeln“-Button; der erste Klick gewinnt,
- *    der Drop ist 1 Stunde gültig. Einsammeln setzt den Decay wieder auf 10%
+ *    der Drop ist 1 Stunde gültig und überlebt Restarts. Einsammeln setzt den Decay wieder auf 10%
  *  - Täglich 0 Uhr (TZ pro Sprache): 10% Decay; wer 24h keine XP verdient hat,
  *    bekommt +5 Prozentpunkte pro weiterem inaktivem Tag (10→15→20→25%…),
  *    Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
@@ -28,7 +28,7 @@
  * ============================================================================
  */
 
-const { GatewayIntentBits, ActivityType, Events, PermissionsBitField, MessageFlags, Routes } = require('discord.js');
+const { GatewayIntentBits, ActivityType, Events, MessageFlags, Routes } = require('discord.js');
 
 const { createXpStore } = require('./src/store');
 const { registerCommands } = require('./src/commands');
@@ -38,6 +38,7 @@ const { startScheduler } = require('./src/scheduler');
 const { createVoiceTracker } = require('./src/voice');
 const { syncLevelRolesForUser } = require('./src/level-roles');
 const { ensureNickname, refreshRankNicknames, maybeRefreshRankNicknames } = require('./src/nicknames');
+const { sendLevelAnnouncement } = require('./src/level-announcements');
 
 module.exports = {
   id: 'xp-level-bot',
@@ -226,12 +227,16 @@ module.exports = {
         user.lastXpGain = now;
         user.lastActivity = now; // Aktivitäts-Stempel für den Inaktivitäts-Decay
         store.setUser(user);
-        // Nicht jede Nachricht flushen – Dirty tracking reicht, Backup alle 5min + SIGTERM
-        // Bei Level-Up sofort flushen damit nichts verloren geht
-        if (res.leveled) await store.flush();
+        // Bei einem Levelwechsel sofort persistieren, aber die Discord-Ankündigung
+        // NIEMALS auf Turso warten lassen. Ein langsamer DB-Request war bisher in
+        // der Lage, die sichtbare Level-Up-Antwort minutenlang zu blockieren.
+        const levelFlush = res.leveled
+          ? store.flush().catch((e) => logger.warn('[xp-level-bot] Level-Flush fehlgeschlagen:', e.message))
+          : null;
 
         if (res.leveledUp || res.leveledDown) {
-          await handleLevelChange(ctx, msg, user, res, cfg, { source: 'text', preferSourceChannel: res.leveledUp });
+          await handleLevelChange(ctx, msg, user, res, cfg, { source: 'text' });
+          if (levelFlush) await levelFlush;
         } else if (isFirstEverXp) {
           // Erste XP überhaupt → Nickname-Tag [Lvl 1] sofort setzen
           try {
@@ -258,7 +263,7 @@ module.exports = {
     });
 
     async function handleLevelChange(ctx, sourceMsg, user, res, cfg, opts = {}) {
-      // Gilde robust holen: sourceMsg kann z.B. bei Bonus-Drops eine Message ohne vollen Guild-Cache sein
+      // sourceMsg kann bei Bonus-/Voice-XP fehlen oder nur partiell gecacht sein.
       let guild = sourceMsg?.guild || null;
       if (!guild) {
         try {
@@ -267,114 +272,48 @@ module.exports = {
       }
       if (!guild) {
         logger.warn(`[xp-level-bot] handleLevelChange: keine Gilde für ${cfg.guildId} gefunden`);
-        return;
+        return false;
       }
+
       const lang = cfg.lang || 'de';
-      const { buildLevelUpEmbed, buildLevelDownEmbed } = require('./embed-builder');
-      const { componentsV2Payload } = require('./message-payload');
+      const source = opts.source || 'other';
 
-      // Nickname ZUVERLÄSSIG aktualisieren
-      try {
-        await refreshRankNicknames(ctx, guild, user.userId, lang);
-      } catch (e) {
-        logger.warn('[xp-level-bot] nick refresh fail', e.message);
+      // WICHTIG: Die sichtbare Ankündigung kommt als ALLERERSTES. Nickname-,
+      // Rollen-, Leaderboard- und DB-Requests dürfen sie nicht mehr blockieren.
+      const announcement = await sendLevelAnnouncement({
+        ctx,
+        guild,
+        cfg,
+        userId: user.userId,
+        res,
+        sourceMsg,
+        source,
+      });
+      if (announcement.sent) {
+        logger.info(
+          `[xp-level-bot] Level-${res.leveledUp ? 'Up' : 'Down'} ${user.userId} → Lvl ${res.level} ` +
+          `in ${guild.name} (${announcement.destination}, Quelle ${source})`
+        );
       }
 
-      // Level-Rollen synchronisieren
-      try {
-        await syncLevelRolesForUser({ ctx, guild, userId: user.userId, level: res.level });
-      } catch (e) {
-        logger.warn('[xp-level-bot] level roles sync fail', e.message);
+      // Nachbereitung unabhängig voneinander ausführen. Ein fehlender Nickname
+      // oder eine nicht verwaltbare Rolle darf kein anderes Feature verhindern.
+      const jobs = [
+        refreshRankNicknames(ctx, guild, user.userId, lang),
+        syncLevelRolesForUser({ ctx, guild, userId: user.userId, level: res.level }),
+      ];
+      if (cfg.leaderboardChannelId) {
+        const { maybeRefreshLeaderboard } = require('./src/scheduler');
+        jobs.push(maybeRefreshLeaderboard(ctx, cfg, guild));
       }
 
-      // Leaderboard: stündlich + zusätzlich bei jedem Level-Up/Down (max alle 10 Min)
-      try {
-        const { maybeRefreshLeaderboard } = require('./scheduler');
-        if (cfg && cfg.leaderboardChannelId) await maybeRefreshLeaderboard(ctx, cfg, guild);
-      } catch (e) {
-        logger.warn('[xp-level-bot] leaderboard refresh fail', e.message);
-      }
-
-      const container = res.leveledUp
-        ? buildLevelUpEmbed({ lang, userId: user.userId, level: res.level, xp: res.xp })
-        : buildLevelDownEmbed({ lang, userId: user.userId, level: res.level, xp: res.xp });
-
-      const preferSourceChannel = opts.preferSourceChannel === true || opts.source === 'text';
-      const isLevelUp = Boolean(res.leveledUp);
-      const isLevelDown = Boolean(res.leveledDown);
-
-      // Level-Up via Text-Channel: im Channel der auslösenden Nachricht antworten
-      // Level-Up via andere Quelle (Bonus, Voice, etc.): immer in den Haupt-Chat
-      // Level-Down: IMMER in den Haupt-Chat (egal welche Quelle)
-      const shouldUseSourceChannel = isLevelUp && preferSourceChannel && !isLevelDown;
-
-      if (shouldUseSourceChannel && sourceMsg?.channel?.isTextBased()) {
-        try {
-          const botMember = guild.members.me;
-          const hasPerm = !botMember || !sourceMsg.channel.permissionsFor(botMember) || sourceMsg.channel.permissionsFor(botMember).has(PermissionsBitField.Flags.SendMessages);
-          if (hasPerm) {
-            // Bevorzugt als Reply, fallback als normaler Send
-            try {
-              if (typeof sourceMsg.reply === 'function') {
-                await sourceMsg.reply(componentsV2Payload([container]));
-              } else {
-                await sourceMsg.channel.send(componentsV2Payload([container]));
-              }
-              logger.info(`[xp-level-bot] Level-Up ${user.userId} → Lvl ${res.level} in ${guild.name} (sourceChannel ${sourceMsg.channel.id})`);
-              return;
-            } catch (e) {
-              // Fallback: direkter Channel-Send falls Reply scheitert
-              try {
-                await sourceMsg.channel.send(componentsV2Payload([container]));
-                logger.info(`[xp-level-bot] Level-Up ${user.userId} → Lvl ${res.level} in ${guild.name} (sourceChannel send fallback)`);
-                return;
-              } catch {}
-              throw e;
-            }
-          }
-        } catch (e) {
-          logger.warn(`[xp-level-bot] Level-Ankündigung sourceChannel fehlgeschlagen: ${e.message} – versuche Haupt-Chat`);
+      const settled = await Promise.allSettled(jobs);
+      for (const result of settled) {
+        if (result.status === 'rejected') {
+          logger.warn('[xp-level-bot] Levelwechsel-Nachbereitung fehlgeschlagen:', result.reason?.message || result.reason);
         }
       }
-
-      // Haupt-Chat (aus /setup) – für Level-Down immer, für Level-Up wenn nicht Text-Channel
-      try {
-        let ch = null;
-        try {
-          ch = await guild.channels.fetch(cfg.mainChannelId).catch(() => null);
-        } catch {}
-        if (ch && ch.isTextBased()) {
-          await ch.send(componentsV2Payload([container]));
-          logger.info(`[xp-level-bot] Level-${isLevelUp ? 'Up' : 'Down'} ${user.userId} → Lvl ${res.level} in ${guild.name} (mainChannel)`);
-          return;
-        }
-      } catch (e) {
-        logger.warn(`[xp-level-bot] Level-Ankündigung mainChannel fehlgeschlagen: ${e.message}`);
-      }
-
-      // 2. Fallback: System-Channel
-      try {
-        const sys = guild.systemChannel;
-        if (sys && sys.isTextBased()) {
-          await sys.send(componentsV2Payload([container]));
-          logger.info(`[xp-level-bot] Level-${isLevelUp ? 'Up' : 'Down'} ${user.userId} → Lvl ${res.level} in ${guild.name} (systemChannel fallback)`);
-          return;
-        }
-      } catch {}
-
-      // 3. Letzter Fallback: auf die auslösende Nachricht replyen (falls vorhanden und nicht schon versucht)
-      if (!shouldUseSourceChannel) {
-        try {
-          if (
-            sourceMsg?.channel?.isTextBased() &&
-            guild.members.me &&
-            sourceMsg.channel.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.SendMessages)
-          ) {
-            await sourceMsg.reply(componentsV2Payload([container])).catch(() => {});
-            logger.info(`[xp-level-bot] Level-${isLevelUp ? 'Up' : 'Down'} ${user.userId} → Lvl ${res.level} in ${guild.name} (reply fallback)`);
-          }
-        } catch {}
-      }
+      return announcement.sent;
     }
 
     // ---------------- Guild Member Remove: Daten löschen ----------------

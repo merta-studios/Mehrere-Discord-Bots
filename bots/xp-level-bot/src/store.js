@@ -24,6 +24,7 @@ function createXpStore({ logger, env } = {}) {
   const deletedGuilds = new Set();
   let db = null;
   let flushInProgress = false;
+  let flushRequested = false;
   let fallbackPath = path.join(__dirname, '..', '..', '..', 'data', 'xp-store.json');
   // alternative path inside xp-level-bot folder for fallback
   let localFallback = path.join(__dirname, '..', 'xp-data.json');
@@ -31,6 +32,9 @@ function createXpStore({ logger, env } = {}) {
   const envFn = typeof env === 'function' ? env : ((key, fb = '') => process.env[key] ?? fb);
   const tursoUrl = envFn('TURSO_DATABASE_URL', '') || envFn('XP_BOT_TURSO_URL', '') || envFn('XP_TURSO_DATABASE_URL', '') || '';
   const tursoToken = envFn('TURSO_AUTH_TOKEN', '') || envFn('XP_BOT_TURSO_AUTH_TOKEN', '') || envFn('XP_TURSO_AUTH_TOKEN', '') || '';
+  // Nur für isolierte Tests; im normalen Betrieb bleibt das zusätzliche
+  // File-Backup immer aktiv.
+  const disableFileBackup = envFn('XP_STORE_DISABLE_FILE_BACKUP', '') === 'true';
 
   async function init() {
     // Try Turso
@@ -65,10 +69,22 @@ function createXpStore({ logger, env } = {}) {
       last_daily_decay TEXT,
       level_role_template TEXT,
       level_role_levels TEXT,
-      level_role_ids TEXT
+      level_role_ids TEXT,
+      bonus_state TEXT,
+      last_leaderboard_refresh INTEGER,
+      last_hourly_leaderboard_refresh INTEGER
     );`);
-    // Migration für Bestands-Tabellen (ältere DBs ohne die Level-Rollen-Spalten)
-    for (const col of ['level_role_template TEXT', 'level_role_levels TEXT', 'level_role_ids TEXT', 'bonus_state TEXT', 'last_leaderboard_refresh INTEGER']) {
+    // Migration für Bestands-Tabellen. Allgemeiner und stündlicher
+    // Leaderboard-Zeitstempel sind absichtlich getrennt: Level-Ups dürfen den
+    // echten Stunden-Timer nicht nach hinten verschieben.
+    for (const col of [
+      'level_role_template TEXT',
+      'level_role_levels TEXT',
+      'level_role_ids TEXT',
+      'bonus_state TEXT',
+      'last_leaderboard_refresh INTEGER',
+      'last_hourly_leaderboard_refresh INTEGER',
+    ]) {
       try { await db.execute(`ALTER TABLE guild_configs ADD COLUMN ${col}`); } catch {}
     }
     await db.execute(`CREATE TABLE IF NOT EXISTS user_levels (
@@ -113,8 +129,11 @@ function createXpStore({ logger, env } = {}) {
         levelRoleLevels: parseJsonCol(row.level_role_levels, null),
         levelRoleIds: parseJsonCol(row.level_role_ids, null),
         bonusState: parseJsonCol(row.bonus_state, null),
-        lastLeaderboardRefresh: row.last_leaderboard_refresh || null,
-        lastLeaderboardUpdate: row.last_leaderboard_refresh || null,
+        lastLeaderboardRefresh: row.last_leaderboard_refresh ? Number(row.last_leaderboard_refresh) : null,
+        lastLeaderboardUpdate: row.last_leaderboard_refresh ? Number(row.last_leaderboard_refresh) : null,
+        lastHourlyLeaderboardRefresh: row.last_hourly_leaderboard_refresh
+          ? Number(row.last_hourly_leaderboard_refresh)
+          : null,
       });
     }
     const uRes = await db.execute('SELECT * FROM user_levels');
@@ -153,6 +172,7 @@ function createXpStore({ logger, env } = {}) {
   }
 
   function tryLoadFile() {
+    if (disableFileBackup) return;
     let data = null;
     for (const p of [localFallback, fallbackPath]) {
       try {
@@ -192,6 +212,7 @@ function createXpStore({ logger, env } = {}) {
   }
 
   function saveToFile() {
+    if (disableFileBackup) return;
     const obj = {
       guilds: Object.fromEntries([...guilds.entries()]),
       users: {},
@@ -336,30 +357,53 @@ function createXpStore({ logger, env } = {}) {
 
   // ----------------- Persistence -----------------
   async function flush({ force = false } = {}) {
-    if (flushInProgress) return;
+    if (flushInProgress) {
+      // Nicht einfach verwerfen: Stunden-Timestamps, Level und offene Bonus-
+      // Drops können genau während eines laufenden Turso-Batches geändert werden.
+      flushRequested = true;
+      return;
+    }
     if (!dirtyGuilds.size && !dirtyUsers.size && !deletedUsers.size && !deletedGuilds.size && !dirtyMetadata && !force) return;
     flushInProgress = true;
+    flushRequested = false;
     const start = Date.now();
+
+    // Snapshot VOR dem ersten await aus den Live-Sets entfernen. Änderungen,
+    // die während des DB-Requests passieren, werden dadurch neu eingetragen
+    // und am Ende in einem Folge-Flush verarbeitet statt versehentlich durch
+    // ein pauschales clear() verloren zu gehen.
+    const pendingGuilds = new Set(dirtyGuilds);
+    const pendingUsers = new Set(dirtyUsers);
+    const pendingDeletedUsers = new Set(deletedUsers);
+    const pendingDeletedGuilds = new Set(deletedGuilds);
+    const pendingMetadata = dirtyMetadata;
+    for (const key of pendingGuilds) dirtyGuilds.delete(key);
+    for (const key of pendingUsers) dirtyUsers.delete(key);
+    for (const key of pendingDeletedUsers) deletedUsers.delete(key);
+    for (const key of pendingDeletedGuilds) deletedGuilds.delete(key);
+    if (pendingMetadata) dirtyMetadata = false;
+
+    let flushSucceeded = false;
     try {
       if (db) {
         // Use transaction batch
         const statements = [];
         // deletions
-        for (const gid of deletedGuilds) {
+        for (const gid of pendingDeletedGuilds) {
           statements.push({ sql: 'DELETE FROM guild_configs WHERE guild_id = ?', args: [gid] });
           statements.push({ sql: 'DELETE FROM user_levels WHERE guild_id = ?', args: [gid] });
         }
-        for (const key of deletedUsers) {
+        for (const key of pendingDeletedUsers) {
           const [gid, uid] = key.split(':');
           statements.push({ sql: 'DELETE FROM user_levels WHERE guild_id = ? AND user_id = ?', args: [gid, uid] });
         }
         // upserts guilds
-        for (const gid of dirtyGuilds) {
+        for (const gid of pendingGuilds) {
           const g = guilds.get(gid);
           if (!g) continue;
           statements.push({
-            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids, bonus_state, last_leaderboard_refresh)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids, bonus_state, last_leaderboard_refresh, last_hourly_leaderboard_refresh)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id) DO UPDATE SET
                     leaderboard_channel_id=excluded.leaderboard_channel_id,
                     main_channel_id=excluded.main_channel_id,
@@ -370,7 +414,8 @@ function createXpStore({ logger, env } = {}) {
                     level_role_levels=excluded.level_role_levels,
                     level_role_ids=excluded.level_role_ids,
                     bonus_state=excluded.bonus_state,
-                    last_leaderboard_refresh=excluded.last_leaderboard_refresh`,
+                    last_leaderboard_refresh=excluded.last_leaderboard_refresh,
+                    last_hourly_leaderboard_refresh=excluded.last_hourly_leaderboard_refresh`,
             args: [
               g.guildId,
               g.leaderboardChannelId || '',
@@ -383,10 +428,11 @@ function createXpStore({ logger, env } = {}) {
               g.levelRoleIds ? JSON.stringify(g.levelRoleIds) : null,
               g.bonusState ? JSON.stringify(g.bonusState) : null,
               g.lastLeaderboardRefresh || g.lastLeaderboardUpdate || null,
+              g.lastHourlyLeaderboardRefresh || null,
             ]
           });
         }
-        for (const key of dirtyUsers) {
+        for (const key of pendingUsers) {
           const [gid, uid] = key.split(':');
           const m = users.get(gid);
           const u = m?.get(uid);
@@ -400,7 +446,7 @@ function createXpStore({ logger, env } = {}) {
             args: [u.guildId, u.userId, u.level, u.xp, u.lastXpGain || 0, u.inactiveDays || 0, u.lastActivity || 0]
           });
         }
-        if (dirtyMetadata) {
+        if (pendingMetadata) {
           statements.push({
             sql: `INSERT INTO bot_metadata (key, value) VALUES ('command_ids', ?)
                   ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
@@ -416,7 +462,6 @@ function createXpStore({ logger, env } = {}) {
                   ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
             args: [JSON.stringify(commandIdScope)],
           });
-          dirtyMetadata = false;
         }
         if (statements.length) {
           // batch execute in chunks of 50 to avoid too large
@@ -425,26 +470,52 @@ function createXpStore({ logger, env } = {}) {
             const batch = statements.slice(i, i+chunk);
             await db.batch(batch);
           }
-          logger?.info?.(`[xp-level-bot] Flush: ${statements.length} ops in ${Date.now()-start}ms (guilds:${dirtyGuilds.size} users:${dirtyUsers.size} delG:${deletedGuilds.size} delU:${deletedUsers.size})`);
+          logger?.info?.(
+            `[xp-level-bot] Flush: ${statements.length} ops in ${Date.now()-start}ms ` +
+            `(guilds:${pendingGuilds.size} users:${pendingUsers.size} ` +
+            `delG:${pendingDeletedGuilds.size} delU:${pendingDeletedUsers.size})`
+          );
         }
-        dirtyGuilds.clear();
-        dirtyUsers.clear();
-        deletedGuilds.clear();
-        deletedUsers.clear();
-        // also save to file as backup (parallel)
+        // Zusätzlich vollständige Datei-Sicherung. Währenddessen entstandene
+        // Dirty-Einträge bleiben für den folgenden DB-Flush im Live-Set.
         try { saveToFile(); } catch {}
       } else {
-        // no DB, just file backup
+        // Ohne DB ist saveToFile synchron und enthält bereits den aktuellsten RAM-Stand.
         saveToFile();
-        const flushedG = dirtyGuilds.size;
-        const flushedU = dirtyUsers.size;
-        dirtyGuilds.clear(); dirtyUsers.clear(); deletedGuilds.clear(); deletedUsers.clear(); dirtyMetadata = false;
-        logger?.info?.(`[xp-level-bot] File-Backup gesichert (guilds:${flushedG} users:${flushedU}) in ${Date.now()-start}ms`);
+        logger?.info?.(
+          `[xp-level-bot] File-Backup gesichert (guilds:${pendingGuilds.size} users:${pendingUsers.size}) ` +
+          `in ${Date.now()-start}ms`
+        );
       }
+      flushSucceeded = true;
     } catch (e) {
+      // Snapshot bei Fehler wieder einreihen, aber nur wenn der Datensatz im RAM
+      // noch denselben Zustandstyp hat (zwischenzeitliches Set/Delete gewinnt).
+      for (const gid of pendingGuilds) {
+        if (guilds.has(gid) && !deletedGuilds.has(gid)) dirtyGuilds.add(gid);
+      }
+      for (const gid of pendingDeletedGuilds) {
+        if (!guilds.has(gid)) deletedGuilds.add(gid);
+      }
+      for (const key of pendingUsers) {
+        const [gid, uid] = key.split(':');
+        if (users.get(gid)?.has(uid) && !deletedUsers.has(key)) dirtyUsers.add(key);
+      }
+      for (const key of pendingDeletedUsers) {
+        const [gid, uid] = key.split(':');
+        if (!users.get(gid)?.has(uid)) deletedUsers.add(key);
+      }
+      if (pendingMetadata) dirtyMetadata = true;
       logger?.error?.('[xp-level-bot] Flush fehlgeschlagen:', e.message);
     } finally {
       flushInProgress = false;
+      const needsFollowUp =
+        flushRequested || dirtyGuilds.size || dirtyUsers.size || deletedUsers.size || deletedGuilds.size || dirtyMetadata;
+      flushRequested = false;
+      // Bei Erfolg sofort die während des Batches entstandenen Änderungen
+      // nachziehen. Bei DB-Fehlern übernimmt der reguläre 5-Minuten-Retry, damit
+      // keine enge Fehler-/Request-Schleife entsteht.
+      if (flushSucceeded && needsFollowUp) queueMicrotask(() => void flush());
     }
   }
 

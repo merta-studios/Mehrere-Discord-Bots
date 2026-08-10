@@ -97,7 +97,7 @@ test('nextDecayInfo: wer auf Level 1 mit 0 XP steht, verliert nichts', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Bonus: XP-Höhe, geplanter Tagesplan (2–4 Slots, 1h Abstand, 06:00–00:30)
+// Bonus: XP-Höhe, geplanter Tagesplan (2–4 Slots, 1h Abstand, 06:00–23:59)
 // ---------------------------------------------------------------------------
 
 test('rollBonusXp: immer ganzzahlig zwischen 20 und 40 (inkl. Grenzen)', () => {
@@ -111,7 +111,7 @@ test('rollBonusXp: immer ganzzahlig zwischen 20 und 40 (inkl. Grenzen)', () => {
   }
 });
 
-test('planDailyBonusSlots: 2–4 Slots, sortiert, 1h Abstand, innerhalb 06:00–00:30', () => {
+test('planDailyBonusSlots: 2–4 Slots, sortiert, 1h Abstand, innerhalb 06:00–23:59', () => {
   for (let i = 0; i < 50; i++) {
     const gid = `g${i}`;
     const plan = planDailyBonusSlots(gid, '2026-08-10', seededRngForDay(gid, '2026-08-10'));
@@ -140,12 +140,13 @@ test('seededRngForDay: gleicher Seed ⇒ gleiche Zahlenfolge', () => {
   for (let i = 0; i < 10; i++) assert.equal(a(), b());
 });
 
-test('isSlotDue: fällig nur in der Toleranz, kein vorgezogener Drop', () => {
+test('isSlotDue: bis 60 Minuten Toleranz, aber niemals vorgezogen/über Mitternacht', () => {
   assert.equal(isSlotDue(450, 450), true); // exakt
-  assert.equal(isSlotDue(450, 453), true); // 3 min überzogen (innerhalb Toleranz 6)
+  assert.equal(isSlotDue(450, 453), true); // 3 min überzogen
+  assert.equal(isSlotDue(450, 510), true); // genau 60 min überzogen
   assert.equal(isSlotDue(450, 449), false); // noch nicht da
-  assert.equal(isSlotDue(450, 457), false); // mehr als 6 min zu spät → übersprungen
-  assert.equal(isSlotDue(1470, 30), true); // 00:30 (1470) passt auf Uhrzeit 00:30
+  assert.equal(isSlotDue(450, 511), false); // mehr als 60 min zu spät
+  assert.equal(isSlotDue(1439, 1), false); // 23:59 darf um 00:01 NICHT vorzeitig feuern
 });
 
 // ---------------------------------------------------------------------------
@@ -193,15 +194,17 @@ function makeBonusHarness({ rng = () => 0.1, lang = 'de' } = {}) {
   return { ctx, store, cfg, guild, channel, sentMessages, dropper };
 }
 
-/** Baut ein `Date`, dessen Berliner Uhrzeit (Minuten ab 0 Uhr) == `minute` ist. */
-function dateWithTzMinute(minute, tz = 'Europe/Berlin') {
-  const base = Date.UTC(2024, 0, 15, 0, 0, 0);
-  for (let k = 0; k < 60 * 48; k++) {
-    const d = new Date(base + k * 60000);
-    const t = tzParts(tz, d);
-    if (t.hour * 60 + t.minute === minute) return d;
+/** Baut ein `Date` für den aktuellen Berliner Tag und die gewünschte Minute. */
+function dateWithTzMinute(minute, tz = 'Europe/Berlin', dayKey = todayKey('de')) {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const base = Date.UTC(year, month - 1, day - 1, 0, 0, 0);
+  for (let k = 0; k < 60 * 72; k++) {
+    const date = new Date(base + k * 60000);
+    const parts = tzParts(tz, date);
+    const key = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+    if (key === dayKey && parts.hour * 60 + parts.minute === minute) return date;
   }
-  throw new Error(`Kein Date für Minute ${minute} in ${tz} gefunden`);
+  throw new Error(`Kein Date für ${dayKey}, Minute ${minute} in ${tz} gefunden`);
 }
 
 function payloadText(payload) {
@@ -348,4 +351,53 @@ test('Bonus-Drop: Drop verfällt nach 1 Stunde – Nachricht wird deaktiviert um
   });
   assert.equal(replies.length, 1);
   assert.equal(h.store.getUser('g1', 'late1'), null);
+});
+
+test('Bonus-Drop: nach Scheduler-Ausfall wird genau der jüngste verpasste Slot nachgeholt', async () => {
+  const h = makeBonusHarness();
+  const day = todayKey('de');
+  const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
+  const latest = plan[Math.min(1, plan.length - 1)];
+
+  // Erster Scheduler-Lauf des Tages erst beim zweiten Termin: kein dauerhaftes
+  // Verpassen, aber auch keine Flut aus mehreren alten Drops.
+  await h.dropper.checkScheduled(h.cfg, h.guild, dateWithTzMinute(latest));
+  assert.equal(h.sentMessages.length, 1);
+  const expectedHandled = plan.filter((slot) => slot <= latest);
+  assert.deepEqual(h.cfg.bonusState.firedSlots, expectedHandled);
+});
+
+test('Bonus-Drop: offener Einsammeln-Button funktioniert nach Bot-Neustart weiter', async () => {
+  const h = makeBonusHarness();
+  const day = todayKey('de');
+  const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
+  await h.dropper.checkScheduled(h.cfg, h.guild, dateWithTzMinute(plan[0]));
+  const dropMsg = h.sentMessages[0];
+  const dropId = h.cfg.bonusState.activeDrop.dropId;
+
+  // Neue Dropper-Instanz = leerer RAM wie nach Render-Restart. Nur Store und
+  // Discord-Nachricht bleiben erhalten.
+  const restarted = createBonusDropper({
+    ctx: h.ctx,
+    rng: () => 0.1,
+    onLevelChange: async () => {},
+    onXpOnly: async () => {},
+  });
+  assert.equal(restarted.drops.size, 0);
+
+  const updates = [];
+  await restarted.handleClaim({
+    customId: `${BONUS_CLAIM_PREFIX}${dropId}`,
+    user: { id: 'after-restart' },
+    guildId: 'g1',
+    guild: h.guild,
+    message: dropMsg,
+    update: async (payload) => updates.push(payload),
+    followUp: async () => {},
+    reply: async () => assert.fail('gültiger Drop darf nicht als verschwunden gelten'),
+  });
+
+  assert.equal(h.store.getUser('g1', 'after-restart').xp, 22);
+  assert.equal(updates.length, 1);
+  assert.equal(h.cfg.bonusState.activeDrop, null, 'persistierter offene Drop wurde abgeschlossen');
 });
