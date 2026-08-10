@@ -8,7 +8,7 @@
  *  alles steckt in den Komponenten selbst!
  *
  *  Funktionen:
- *  - /setup [language] [channel] – Liste einrichten (nur für Admins, 10 Sprachen)
+ *  - /setup [language] [channel] – Liste einrichten (Channel erforderlich) (nur für Admins, 10 Sprachen)
  *  - „Geburtstag eintragen“-Button mit Modal (Tag + Monat, Fuzzy-Erkennung
  *    für Monatsnamen in allen Sprachen, auch mit Tippfehlern)
  *  - Bestätigung mit 3 Buttons (Bestätigen / Bearbeiten / Abbrechen)

@@ -2,8 +2,8 @@
  * Bonus-Belohnungen – zufällige XP-Geschenke im Haupt-Chat.
  *
  * Auslösung (alles muss passen):
- * - Aktivitäts-Burst im Haupt-Chat: >=8 Nachrichten von >=2 Personen in 140s
- * - Würfel: nur mit 25% Chance pro Burst (nicht bei jedem Gespräch!)
+ * - Aktivitäts-Burst im Haupt-Chat: >=5 Nachrichten von >=2 Personen in 5 Minuten
+ * - Würfel: nur mit 35% Chance pro Burst (nicht bei jedem Gespräch!)
  * - Maximal 4 Drops pro Tag (Kalendertag in der Sprach-Zeitzone, persistiert)
  * - Mindestabstand zwischen zwei Drops: 1 Stunde 30 Minuten
  * - Es ist immer nur ein Drop pro Server gleichzeitig offen
@@ -105,7 +105,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random, e
     const daySt = dayState(cfg);
     if (!canDropBonus(daySt, now)) return;
 
-    // Nicht bei jedem Gespräch: 25% Chance
+    // Nicht bei jedem Gespräch: 35% Chance
     if (rng() >= BONUS_DROP_CHANCE) return;
 
     await sendDrop(msg, cfg, state, daySt).catch((e) =>

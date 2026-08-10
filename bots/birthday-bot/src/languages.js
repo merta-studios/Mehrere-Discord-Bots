@@ -1037,6 +1037,18 @@ const T = {
     zh: '设置生日列表（频道+语言）。',
     it: 'Configura la lista dei compleanni (canale + lingua).',
   },
+  helpSetLanguage: {
+    de: 'Ändert die Sprache der bestehenden Liste. Nur Admins und erst nach /setup.',
+    en: 'Changes the language of the existing list. Admins only, after /setup.',
+  },
+  helpSetChannel: {
+    de: 'Verschiebt die bestehende Liste in einen anderen Kanal. Nur Admins und erst nach /setup.',
+    en: 'Moves the existing list to another channel. Admins only, after /setup.',
+  },
+  helpSetBirthdayRole: {
+    de: 'Legt die Rolle fest, die Geburtstagskinder 24 Stunden erhalten. Nur Admins und erst nach /setup.',
+    en: 'Sets the role birthday users receive for 24 hours. Admins only, after /setup.',
+  },
   helpSetProfile: {
     de: 'Ändert das Profilbild des Bots auf diesem Server.',
     en: 'Changes the bot’s profile picture on this server.',

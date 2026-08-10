@@ -130,7 +130,7 @@ function buildListEmbed({ birthdays = [], events = [], lang = 'de', now = new Da
         .map((b) => {
           const days = daysUntilNext(b.day, b.month, tz, now);
           if (b.kind === 'event') {
-            return `${pad(b.day)}.${pad(b.month)} | 🚀 **${b.name}** – ${formatDaysUntil(days, lang)}`;
+            return `${pad(b.day)}.${pad(b.month)} | **${b.name}** – ${formatDaysUntil(days, lang)}`;
           }
           return `${pad(b.day)}.${pad(b.month)} | <@${b.userId}> – ${formatDaysUntil(days, lang)}`;
         });
@@ -191,7 +191,7 @@ function parseListEmbed(msg) {
       continue;
     }
     // Event-Zeilen: „05.12 | 🚀 **Name** – …“ (Name statt Nutzer-Erwähnung)
-    const ev = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*🚀\s*\*\*(.+?)\*\*(?:\s+[-–—]\s+.*)?$/);
+    const ev = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*(?:🚀\s*)?\*\*(.+?)\*\*(?:\s+[-–—]\s+.*)?$/);
     if (ev) {
       const name = ev[3].trim();
       if (!name) continue;

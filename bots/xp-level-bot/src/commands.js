@@ -99,9 +99,11 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
     try {
       if (ctx.devGuildId) {
         const res = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), {body: commands});
+        ctx.commandIds = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
         ctx.logger.info(`[xp-level-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert: ${registeredNames(res)}`);
       } else {
         const res = await rest.put(Routes.applicationCommands(clientId), {body: commands});
+        ctx.commandIds = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
         for (const guild of ctx.client.guilds.cache.values()) {
           await rest.put(Routes.applicationGuildCommands(clientId, guild.id), {body: []}).catch(()=>{});
         }
@@ -244,15 +246,15 @@ async function helpCmd(ctx, interaction){
       `# ${t('helpTitle', lang)}`,
       t('helpDesc', lang),
       '',
-      `**</setup:${interaction.commandId||'setup'}>**\n${t('helpSetup', lang)}`,
+      `**${commandMention(ctx, 'setup')}**\n${t('helpSetup', lang)}`,
       '',
-      `**</rank:${interaction.commandId||'rank'}>**\n${t('helpRank', lang)}`,
+      `**${commandMention(ctx, 'rank')}**\n${t('helpRank', lang)}`,
       '',
-      `**</admin_set_bot_profile:${interaction.commandId||'admin_set_bot_profile'}>**\n${t('helpSetProfile', lang)}`,
+      `**${commandMention(ctx, 'admin_set_bot_profile')}**\n${t('helpSetProfile', lang)}`,
       '',
-      `**</level_roles:${interaction.commandId||'level_roles'}>**\n${t('levelRolesHelp', lang)}`,
+      `**${commandMention(ctx, 'level_roles')}**\n${t('levelRolesHelp', lang)}`,
       '',
-      `**</help:${interaction.commandId||'help'}>**\n${t('helpHelp', lang)}`,
+      `**${commandMention(ctx, 'help')}**\n${t('helpHelp', lang)}`,
     ].join('\n'))
   );
   return interaction.reply(componentsV2Payload([container]));

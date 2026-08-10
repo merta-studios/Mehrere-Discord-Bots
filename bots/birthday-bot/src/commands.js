@@ -74,9 +74,10 @@ function defineCommands() {
       .addChannelOption((o) =>
         o
           .setName('channel')
-          .setDescription('Kanal für die Liste (optional, Standard: aktueller Kanal)')
+          .setDescription('Pflichtfeld: Kanal, in dem die Geburtstagsliste angezeigt wird')
           .setDescriptionLocalizations(pick('setupChannelDesc'))
           .addChannelTypes(ChannelType.GuildText)
+          .setRequired(true)
       )
       .addRoleOption((o) =>
         o
@@ -84,6 +85,27 @@ function defineCommands() {
           .setDescription('Geburtstagsrolle: bekommt das Geburtstagskind 24h (optional)')
           .setDescriptionLocalizations(pick('setupRoleDesc'))
       ),
+
+    new SlashCommandBuilder()
+      .setName('set_language')
+      .setDescription('Ändert die Sprache der bereits eingerichteten Geburtstagsliste')
+      .setDescriptionLocalizations(pick('helpSetLanguage'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addStringOption((o) => o.setName('language').setDescription('Neue Sprache').setDescriptionLocalizations(pick('setupLangDesc')).setRequired(true).addChoices(...languageChoices)),
+
+    new SlashCommandBuilder()
+      .setName('set_channel')
+      .setDescription('Verschiebt die bereits eingerichtete Geburtstagsliste in einen anderen Kanal')
+      .setDescriptionLocalizations(pick('helpSetChannel'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addChannelOption((o) => o.setName('channel').setDescription('Neuer Kanal für die Liste').setDescriptionLocalizations(pick('setupChannelDesc')).setRequired(true).addChannelTypes(ChannelType.GuildText)),
+
+    new SlashCommandBuilder()
+      .setName('set_birthday_role')
+      .setDescription('Ändert die Rolle, die Geburtstagskinder 24 Stunden erhalten')
+      .setDescriptionLocalizations(pick('helpSetBirthdayRole'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addRoleOption((o) => o.setName('birthday_role').setDescription('Neue Geburtstagsrolle').setDescriptionLocalizations(pick('setupRoleDesc')).setRequired(true)),
 
     new SlashCommandBuilder()
       .setName('admin_set_bot_profile')
@@ -152,10 +174,12 @@ async function registerCommands(ctx) {
 
   try {
     if (ctx.devGuildId) {
-      await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), { body: commands });
+      const registered = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), { body: commands });
+      ctx.commandIds = Object.fromEntries((registered || []).map((c) => [c.name, c.id]));
       ctx.logger.info(`[birthday-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert.`);
     } else {
-      await rest.put(Routes.applicationCommands(clientId), { body: commands });
+      const registered = await rest.put(Routes.applicationCommands(clientId), { body: commands });
+      ctx.commandIds = Object.fromEntries((registered || []).map((c) => [c.name, c.id]));
       // Alte Guild-Commands (z. B. aus der Dev-Phase) aufräumen.
       for (const guild of ctx.client.guilds.cache.values()) {
         await rest
@@ -177,6 +201,12 @@ async function handleChatInput(ctx, interaction) {
   switch (interaction.commandName) {
     case 'setup':
       return setupCmd(ctx, interaction);
+    case 'set_language':
+      return setLanguageCmd(ctx, interaction);
+    case 'set_channel':
+      return setChannelCmd(ctx, interaction);
+    case 'set_birthday_role':
+      return setBirthdayRoleCmd(ctx, interaction);
     case 'admin_set_bot_profile':
       return profileCmd(ctx, interaction);
     case 'admin_set_birthday':
@@ -218,7 +248,7 @@ async function setupCmd(ctx, interaction) {
     );
   }
 
-  const channel = interaction.options.getChannel('channel') || interaction.channel;
+  const channel = interaction.options.getChannel('channel');
   if (!channel || !channel.isTextBased() || channel.type !== ChannelType.GuildText) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: true })
@@ -295,6 +325,42 @@ async function setupCmd(ctx, interaction) {
     desc += `\n\n${t('setupFoundOld', lang)}\n${t('setupMigrated', lang, { count: birthdays.length })}`;
   }
   return interaction.editReply(componentsV2Payload([smallContainer(null, desc)]));
+}
+
+async function updateListConfig(ctx, interaction, changes) {
+  if (!interaction.inGuild()) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }));
+  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
+  const entry = ctx.store.get(interaction.guildId);
+  const lang = entry?.lang || langFromDiscord(interaction.locale);
+  if (!perms?.has(PermissionFlagsBits.Administrator)) return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+  if (!entry) return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoList', lang))], { ephemeral: true }));
+  const channel = changes.channel || await ctx.client.channels.fetch(entry.channelId).catch(() => null);
+  if (!channel || !channel.isTextBased() || channel.type !== ChannelType.GuildText) return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: true }));
+  const botPerms = channel.permissionsFor(ctx.client.user);
+  if (!botPerms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) return interaction.reply(componentsV2Payload([smallContainer(null, t('errBotPerms', lang, { channel: `<#${channel.id}>` }))], { ephemeral: true }));
+  const oldChannel = await ctx.client.channels.fetch(entry.channelId).catch(() => null);
+  const oldMsg = oldChannel?.messages ? await oldChannel.messages.fetch(entry.messageId).catch(() => null) : null;
+  const parsed = oldMsg ? parseListEmbed(oldMsg) : { birthdays: entry.birthdays || [], events: entry.events || [], birthdayRoleId: entry.birthdayRoleId || null };
+  const next = { ...entry, channelId: channel.id, lang: changes.lang || entry.lang, birthdays: parsed.birthdays, events: parsed.events || [], birthdayRoleId: changes.birthdayRoleId ?? parsed.birthdayRoleId ?? null };
+  const container = buildListEmbed({ birthdays: next.birthdays, events: next.events, lang: next.lang, birthdayRoleId: next.birthdayRoleId });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const msg = await channel.send(componentsV2Payload([container]));
+  if (oldMsg) await oldMsg.delete().catch(() => {});
+  next.messageId = msg.id;
+  next.lastRenderDay = todayKey(next.lang); next.lastBirthdayCheckDay = entry.lastBirthdayCheckDay;
+  ctx.store.set(next);
+  return interaction.editReply(componentsV2Payload([smallContainer(null, t('setupSuccess', next.lang, { channel: `<#${channel.id}>` }))]));
+}
+async function setLanguageCmd(ctx, interaction) { const lang = interaction.options.getString('language'); return updateListConfig(ctx, interaction, { lang }); }
+async function setChannelCmd(ctx, interaction) { const channel = interaction.options.getChannel('channel'); return updateListConfig(ctx, interaction, { channel }); }
+async function setBirthdayRoleCmd(ctx, interaction) {
+  const role = interaction.options.getRole('birthday_role');
+  if (!role || role.managed || role.id === interaction.guildId) return interaction.reply(componentsV2Payload([smallContainer(null, t('errRoleBad', 'de'))], { ephemeral: true }));
+  const me = interaction.guild?.members?.me;
+  if (me && (!me.permissions?.has(PermissionFlagsBits.ManageRoles) || (me.roles?.highest?.position ?? 0) <= (role.position ?? 0))) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errRoleBad', 'de'))], { ephemeral: true }));
+  }
+  return updateListConfig(ctx, interaction, { birthdayRoleId: role.id });
 }
 
 /**
@@ -447,6 +513,8 @@ async function adminSetCmd(ctx, interaction) {
   return interaction.showModal(buildAdminModal(modalLang, target.username));
 }
 
+function commandMention(ctx, name) { return ctx.commandIds?.[name] ? `</${name}:${ctx.commandIds[name]}>` : `/${name}`; }
+
 /** /help – Befehlsübersicht (ohne /adminpanel, da dieses nur für den Owner im DM bestimmt ist) */
 async function helpCmd(ctx, interaction) {
   const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
@@ -458,15 +526,21 @@ async function helpCmd(ctx, interaction) {
           `# ${t('helpTitle', lang)}`,
           t('helpDesc', lang),
           '',
-          `**</setup:${interaction.commandId || 'setup'}>**\n${t('helpSetup', lang)}`,
+          `**${commandMention(ctx, 'setup')}**\n${t('helpSetup', lang)}`,
           '',
-          `**</event:${interaction.commandId || 'event'}>**\n${t('helpEvent', lang)}`,
+          `**${commandMention(ctx, 'event')}**\n${t('helpEvent', lang)}`,
           '',
-          `**</admin_set_bot_profile:${interaction.commandId || 'admin_set_bot_profile'}>**\n${t('helpSetProfile', lang)}`,
+          `**${commandMention(ctx, 'set_language')}**\n${t('helpSetLanguage', lang)}`,
           '',
-          `**</admin_set_birthday:${interaction.commandId || 'admin_set_birthday'}>**\n${t('helpAdminSet', lang)}`,
+          `**${commandMention(ctx, 'set_channel')}**\n${t('helpSetChannel', lang)}`,
           '',
-          `**</help:${interaction.commandId || 'help'}>**\n${t('helpHelp', lang)}`,
+          `**${commandMention(ctx, 'set_birthday_role')}**\n${t('helpSetBirthdayRole', lang)}`,
+          '',
+          `**${commandMention(ctx, 'admin_set_bot_profile')}**\n${t('helpSetProfile', lang)}`,
+          '',
+          `**${commandMention(ctx, 'admin_set_birthday')}**\n${t('helpAdminSet', lang)}`,
+          '',
+          `**${commandMention(ctx, 'help')}**\n${t('helpHelp', lang)}`,
         ].join('\n')
       )
     );
