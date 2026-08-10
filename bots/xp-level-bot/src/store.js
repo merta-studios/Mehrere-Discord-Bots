@@ -7,9 +7,13 @@
 const fs = require('fs');
 const path = require('path');
 
-function createXpStore({ logger, env }) {
+function createXpStore({ logger, env } = {}) {
   const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, lang, leaderboardMessageId, lastDailyDecay}
   const users = new Map(); // guildId -> Map(userId -> {guildId,userId,level,xp,lastXpGain})
+  let commandIds = {}; // cmdName -> id
+  const guildCommandIds = new Map(); // guildId -> { [cmdName]: id }
+  let dirtyMetadata = false;
+
   const dirtyGuilds = new Set();
   const dirtyUsers = new Set(); // "guildId:userId"
   const deletedUsers = new Set(); // to track deletions for flush
@@ -20,8 +24,9 @@ function createXpStore({ logger, env }) {
   // alternative path inside xp-level-bot folder for fallback
   let localFallback = path.join(__dirname, '..', 'xp-data.json');
 
-  const tursoUrl = env('TURSO_DATABASE_URL', '') || env('XP_BOT_TURSO_URL', '') || env('XP_TURSO_DATABASE_URL', '') || '';
-  const tursoToken = env('TURSO_AUTH_TOKEN', '') || env('XP_BOT_TURSO_AUTH_TOKEN', '') || env('XP_TURSO_AUTH_TOKEN', '') || '';
+  const envFn = typeof env === 'function' ? env : ((key, fb = '') => process.env[key] ?? fb);
+  const tursoUrl = envFn('TURSO_DATABASE_URL', '') || envFn('XP_BOT_TURSO_URL', '') || envFn('XP_TURSO_DATABASE_URL', '') || '';
+  const tursoToken = envFn('TURSO_AUTH_TOKEN', '') || envFn('XP_BOT_TURSO_AUTH_TOKEN', '') || envFn('XP_TURSO_AUTH_TOKEN', '') || '';
 
   async function init() {
     // Try Turso
@@ -29,17 +34,17 @@ function createXpStore({ logger, env }) {
       try {
         const { createClient } = require('@libsql/client');
         db = createClient({ url: tursoUrl, authToken: tursoToken || undefined });
-        logger.info('[xp-level-bot] Verbinde zu Turso...');
+        logger?.info?.('[xp-level-bot] Verbinde zu Turso...');
         await ensureTables();
         await loadFromDb();
-        logger.info(`[xp-level-bot] Turso geladen: ${guilds.size} Gilden, ${[...users.values()].reduce((a,m)=>a+m.size,0)} Nutzer`);
+        logger?.info?.(`[xp-level-bot] Turso geladen: ${guilds.size} Gilden, ${[...users.values()].reduce((a,m)=>a+m.size,0)} Nutzer`);
         return;
       } catch (e) {
-        logger.error('[xp-level-bot] Turso Verbindung fehlgeschlagen, fallback auf RAM+File:', e.message);
+        logger?.error?.('[xp-level-bot] Turso Verbindung fehlgeschlagen, fallback auf RAM+File:', e.message);
         db = null;
       }
     } else {
-      logger.warn('[xp-level-bot] Keine TURSO_DATABASE_URL gesetzt – nutze reinen RAM + Datei-Fallback (Daten gehen bei Crash ohne Backup verloren, aber stündlich wird gesichert).');
+      logger?.warn?.('[xp-level-bot] Keine TURSO_DATABASE_URL gesetzt – nutze reinen RAM + Datei-Fallback (Daten gehen bei Crash ohne Backup verloren, aber stündlich wird gesichert).');
     }
     // Fallback file load
     tryLoadFile();
@@ -76,6 +81,10 @@ function createXpStore({ logger, env }) {
     for (const col of ['inactive_days INTEGER', 'last_activity INTEGER']) {
       try { await db.execute(`ALTER TABLE user_levels ADD COLUMN ${col}`); } catch {}
     }
+    await db.execute(`CREATE TABLE IF NOT EXISTS bot_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );`);
     // Index für schnelle leaderboard queries falls direkt DB genutzt wird
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_user_levels_guild ON user_levels(guild_id);`);
   }
@@ -116,6 +125,22 @@ function createXpStore({ logger, env }) {
         lastActivity: row.last_activity || 0,
       });
     }
+    try {
+      const metaRes = await db.execute("SELECT key, value FROM bot_metadata WHERE key IN ('command_ids', 'guild_command_ids')");
+      for (const row of metaRes.rows) {
+        if (row.key === 'command_ids') {
+          const parsed = parseJsonCol(row.value, {});
+          if (parsed && typeof parsed === 'object') commandIds = { ...parsed };
+        } else if (row.key === 'guild_command_ids') {
+          const parsed = parseJsonCol(row.value, {});
+          if (parsed && typeof parsed === 'object') {
+            for (const [gid, ids] of Object.entries(parsed)) guildCommandIds.set(gid, ids);
+          }
+        }
+      }
+    } catch (e) {
+      logger?.warn?.('[xp-level-bot] Laden der bot_metadata fehlgeschlagen:', e.message);
+    }
   }
 
   function tryLoadFile() {
@@ -124,7 +149,7 @@ function createXpStore({ logger, env }) {
       try {
         if (fs.existsSync(p)) {
           data = JSON.parse(fs.readFileSync(p, 'utf8'));
-          logger.info(`[xp-level-bot] Fallback-Datei geladen: ${p}`);
+          logger?.info?.(`[xp-level-bot] Fallback-Datei geladen: ${p}`);
           break;
         }
       } catch {}
@@ -141,13 +166,26 @@ function createXpStore({ logger, env }) {
           users.set(gid, m);
         }
       }
+      if (data.commandIds && typeof data.commandIds === 'object') {
+        commandIds = { ...data.commandIds };
+      }
+      if (data.guildCommandIds && typeof data.guildCommandIds === 'object') {
+        for (const [gid, ids] of Object.entries(data.guildCommandIds)) {
+          guildCommandIds.set(gid, ids);
+        }
+      }
     } catch (e) {
-      logger.warn('[xp-level-bot] Fallback-Datei korrupt:', e.message);
+      logger?.warn?.('[xp-level-bot] Fallback-Datei korrupt:', e.message);
     }
   }
 
   function saveToFile() {
-    const obj = { guilds: Object.fromEntries([...guilds.entries()]), users: {} };
+    const obj = {
+      guilds: Object.fromEntries([...guilds.entries()]),
+      users: {},
+      commandIds,
+      guildCommandIds: Object.fromEntries([...guildCommandIds.entries()]),
+    };
     for (const [gid, m] of users.entries()) obj.users[gid] = Object.fromEntries([...m.entries()]);
     const json = JSON.stringify(obj);
     for (const p of [localFallback, fallbackPath]) {
@@ -155,6 +193,31 @@ function createXpStore({ logger, env }) {
         fs.mkdirSync(path.dirname(p), { recursive: true });
         fs.writeFileSync(p, json);
       } catch {}
+    }
+  }
+
+  // ----------------- Command IDs API -----------------
+  function getCommandIds() {
+    return { ...commandIds };
+  }
+  function getCommandId(name) {
+    return commandIds[name] || null;
+  }
+  function setCommandIds(ids) {
+    if (ids && typeof ids === 'object') {
+      commandIds = { ...commandIds, ...ids };
+      dirtyMetadata = true;
+      try { saveToFile(); } catch {}
+    }
+  }
+  function getGuildCommandIds(guildId) {
+    return guildCommandIds.get(guildId) || null;
+  }
+  function setGuildCommandIds(guildId, ids) {
+    if (guildId && ids && typeof ids === 'object') {
+      guildCommandIds.set(guildId, { ...(guildCommandIds.get(guildId) || {}), ...ids });
+      dirtyMetadata = true;
+      try { saveToFile(); } catch {}
     }
   }
 
@@ -168,10 +231,9 @@ function createXpStore({ logger, env }) {
   function deleteGuild(guildId) {
     guilds.delete(guildId);
     users.delete(guildId);
+    guildCommandIds.delete(guildId);
     dirtyGuilds.delete(guildId);
     deletedGuilds.add(guildId);
-    // mark all users of guild as deleted? For flush we need to delete from DB where guild_id=?
-    // Instead we collect deletedUsers for that guild
   }
   function getAllGuilds() { return [...guilds.values()]; }
   function getGuildIds() { return [...guilds.keys()]; }
@@ -213,7 +275,6 @@ function createXpStore({ logger, env }) {
   }
   function getLeaderboard(guildId, limit = 15) {
     const list = getUsersForGuild(guildId);
-    const { xpNeeded } = require('./logic');
     list.sort((a,b) => {
       if (b.level !== a.level) return b.level - a.level;
       if (b.xp !== a.xp) return b.xp - a.xp;
@@ -236,7 +297,7 @@ function createXpStore({ logger, env }) {
   // ----------------- Persistence -----------------
   async function flush({ force = false } = {}) {
     if (flushInProgress) return;
-    if (!dirtyGuilds.size && !dirtyUsers.size && !deletedUsers.size && !deletedGuilds.size && !force) return;
+    if (!dirtyGuilds.size && !dirtyUsers.size && !deletedUsers.size && !deletedGuilds.size && !dirtyMetadata && !force) return;
     flushInProgress = true;
     const start = Date.now();
     try {
@@ -297,6 +358,19 @@ function createXpStore({ logger, env }) {
             args: [u.guildId, u.userId, u.level, u.xp, u.lastXpGain || 0, u.inactiveDays || 0, u.lastActivity || 0]
           });
         }
+        if (dirtyMetadata) {
+          statements.push({
+            sql: `INSERT INTO bot_metadata (key, value) VALUES ('command_ids', ?)
+                  ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+            args: [JSON.stringify(commandIds)],
+          });
+          statements.push({
+            sql: `INSERT INTO bot_metadata (key, value) VALUES ('guild_command_ids', ?)
+                  ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+            args: [JSON.stringify(Object.fromEntries([...guildCommandIds.entries()]))],
+          });
+          dirtyMetadata = false;
+        }
         if (statements.length) {
           // batch execute in chunks of 50 to avoid too large
           const chunk = 50;
@@ -304,7 +378,7 @@ function createXpStore({ logger, env }) {
             const batch = statements.slice(i, i+chunk);
             await db.batch(batch);
           }
-          logger.info(`[xp-level-bot] Flush: ${statements.length} ops in ${Date.now()-start}ms (guilds:${dirtyGuilds.size} users:${dirtyUsers.size} delG:${deletedGuilds.size} delU:${deletedUsers.size})`);
+          logger?.info?.(`[xp-level-bot] Flush: ${statements.length} ops in ${Date.now()-start}ms (guilds:${dirtyGuilds.size} users:${dirtyUsers.size} delG:${deletedGuilds.size} delU:${deletedUsers.size})`);
         }
         dirtyGuilds.clear();
         dirtyUsers.clear();
@@ -317,11 +391,11 @@ function createXpStore({ logger, env }) {
         saveToFile();
         const flushedG = dirtyGuilds.size;
         const flushedU = dirtyUsers.size;
-        dirtyGuilds.clear(); dirtyUsers.clear(); deletedGuilds.clear(); deletedUsers.clear();
-        logger.info(`[xp-level-bot] File-Backup gesichert (guilds:${flushedG} users:${flushedU}) in ${Date.now()-start}ms`);
+        dirtyGuilds.clear(); dirtyUsers.clear(); deletedGuilds.clear(); deletedUsers.clear(); dirtyMetadata = false;
+        logger?.info?.(`[xp-level-bot] File-Backup gesichert (guilds:${flushedG} users:${flushedU}) in ${Date.now()-start}ms`);
       }
     } catch (e) {
-      logger.error('[xp-level-bot] Flush fehlgeschlagen:', e.message);
+      logger?.error?.('[xp-level-bot] Flush fehlgeschlagen:', e.message);
     } finally {
       flushInProgress = false;
     }
@@ -359,6 +433,7 @@ function createXpStore({ logger, env }) {
     init,
     getGuild, setGuild, deleteGuild, getAllGuilds, getGuildIds,
     getUser, ensureUser, setUser, deleteUser, getUsersForGuild, getLeaderboard, getRank, getAllUsersCount,
+    getCommandIds, getCommandId, setCommandIds, getGuildCommandIds, setGuildCommandIds,
     flush,
     startBackupInterval, stopBackupInterval,
     findLeaderboardMessage,

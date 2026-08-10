@@ -1,5 +1,5 @@
 /**
- * Slash-Commands XP Bot – Definition & Handler
+ * Slash-Commands XP Bot – Definition, Registrierung & Handler
  * Commands: /setup, /rank, /help, /admin_set_bot_profile, /level_roles, /adminpanel
  */
 
@@ -83,114 +83,241 @@ function defineCommands() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Registriert die Slash-Commands bei Discord. Geschehene Fehler (Rate-Limit,
- * Discord-Hickup beim Hosting-Restart) wurden früher nur geloggt – neue
- * Commands (z.B. /level_roles) fehlten danach dauerhaft, obwohl sie im /help
- * auftauchten. Deshalb: mehrere Versuche mit Abstand + Erfolgs-Flag, das der
- * Scheduler nutzt, um es regelmäßig erneut zu versuchen, bis es klappt.
+ * Registriert die Slash-Commands bei Discord.
+ *
+ * Registrierungslogik:
+ * 1. Ist `devGuildId` konfiguriert (optional für Development), werden die Commands
+ *    in der Dev-Gilde via Routes.applicationGuildCommands registriert.
+ * 2. Im Produktivbetrieb (keine Dev-Gilde) werden die Commands GLOBAL via
+ *    Routes.applicationCommands registriert.
+ * 3. WICHTIG gegen Shadowing: Wenn Commands global registriert werden, räumen wir
+ *    alte/verwaiste Guild-Commands auf bestehenden Servern mit `{ body: [] }` auf.
+ *    Alte Guild-Commands (aus früheren Versionen oder versehentlicher Dev-Guild-Nutzung)
+ *    überschreiben/blockieren sonst globale Commands wie `/level_roles`.
+ * 4. Command-IDs werden in `ctx.commandIds` und persistent im `store` gespeichert.
+ * 5. Nachvollziehbares Logging mit Route, Guild-ID, Command-Namen und Discord-IDs.
  */
 async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
-  const commands = defineCommands().map(c=>c.toJSON());
-  const rest = restFactory ? restFactory(ctx.token) : new REST({version:'10'}).setToken(ctx.token);
-  const clientId = ctx.client.user.id;
-  const RETRY_DELAYS_MS = retryDelays || [0, 15_000, 60_000, 5 * 60_000];
+  const commands = defineCommands().map((c) => c.toJSON());
+  const rest = restFactory ? restFactory(ctx.token) : (ctx.rest || new REST({ version: '10' }).setToken(ctx.token));
+  const clientId = ctx.client?.user?.id;
+  if (!clientId) {
+    ctx.logger?.error?.('[xp-level-bot] Command-Registrierung abgebrochen: Kein Client-User / Client-ID vorhanden.');
+    ctx.commandsRegistered = false;
+    return false;
+  }
+
+  const rawDev = ctx.devGuildId;
+  const devGuildId = typeof rawDev === 'string' && rawDev.trim() !== ''
+    ? rawDev.trim().replace(/^<@!?(\d+)>$/, '$1')
+    : null;
+
+  const RETRY_DELAYS_MS = retryDelays || [0, 5_000, 15_000, 30_000];
+
   for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
     if (RETRY_DELAYS_MS[attempt]) await sleep(RETRY_DELAYS_MS[attempt]);
     try {
-      if (ctx.devGuildId) {
-        const res = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), {body: commands});
-        ctx.commandIds = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
-        ctx.guildCommandIds = ctx.guildCommandIds || new Map();
-        ctx.guildCommandIds.set(ctx.devGuildId, ctx.commandIds);
-        ctx.logger.info(`[xp-level-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert: ${registeredNames(res)}`);
-      } else {
-        // Global registrieren (für neue Server) UND zusätzlich sofort in jede
-        // bekannte Gilde schreiben. Discord kann globale Commands bis zu 1h
-        // cachen; genau dadurch blieb ein neuer Command wie /level_roles in
-        // bestehenden Servern scheinbar „für immer“ unsichtbar. Der Guild-PUT
-        // macht das Set sofort sichtbar und überschreibt alte Guild-Sets.
-        const res = await rest.put(Routes.applicationCommands(clientId), {body: commands});
-        ctx.commandIds = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
-        ctx.guildCommandIds = ctx.guildCommandIds || new Map();
+      if (devGuildId) {
+        const route = Routes.applicationGuildCommands(clientId, devGuildId);
+        const res = await rest.put(route, { body: commands });
+        const ids = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
 
-        let guildSyncOk = true;
-        for (const guild of ctx.client.guilds.cache.values()) {
+        ctx.commandIds = { ...(ctx.commandIds || {}), ...ids };
+        ctx.guildCommandIds = ctx.guildCommandIds || new Map();
+        ctx.guildCommandIds.set(devGuildId, ids);
+
+        if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
+        if (ctx.store?.setGuildCommandIds) ctx.store.setGuildCommandIds(devGuildId, ids);
+
+        const summary = (res || []).map((c) => `${c.name} (ID: ${c.id})`).join(', ');
+        ctx.logger?.info?.(
+          `[xp-level-bot] Slash-Commands in Dev-Gilde ${devGuildId} registriert (${(res || []).length} Commands, Route: ${route}): ${summary}`
+        );
+      } else {
+        const route = Routes.applicationCommands(clientId);
+        const res = await rest.put(route, { body: commands });
+        const ids = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
+
+        ctx.commandIds = ids;
+        if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
+
+        const summary = (res || []).map((c) => `${c.name} (ID: ${c.id})`).join(', ');
+        ctx.logger?.info?.(
+          `[xp-level-bot] Slash-Commands global registriert (${(res || []).length} Commands, Route: ${route}): ${summary}`
+        );
+
+        // Alte Guild-Commands aufräumen, damit keine veralteten Commands neue globale Commands (wie /level_roles) shadowen
+        const cachedGuilds = ctx.client?.guilds?.cache?.values() ? [...ctx.client.guilds.cache.values()] : [];
+        for (const guild of cachedGuilds) {
           try {
-            const guildRes = await rest.put(Routes.applicationGuildCommands(clientId, guild.id), {body: commands});
-            ctx.guildCommandIds.set(guild.id, Object.fromEntries((guildRes || []).map((c) => [c.name, c.id])));
-          } catch (err) {
-            guildSyncOk = false;
-            ctx.logger.warn(`[xp-level-bot] Guild-Command-Sync fehlgeschlagen (${guild.id}): ${err.message}`);
+            await rest.put(Routes.applicationGuildCommands(clientId, guild.id), { body: [] });
+          } catch (cleanErr) {
+            ctx.logger?.warn?.(
+              `[xp-level-bot] Alte Guild-Commands aufräumen für Gilde ${guild.id} übersprungen/fehlgeschlagen: ${cleanErr.message}`
+            );
           }
         }
-        ctx.logger.info(`[xp-level-bot] Commands global + in ${ctx.client.guilds.cache.size} Gilden registriert: ${registeredNames(res)}`);
-        if (!guildSyncOk) throw new Error('Mindestens eine Guild-Command-Registrierung ist fehlgeschlagen.');
       }
+
       ctx.commandsRegistered = true;
       return true;
-    } catch(err){
+    } catch (err) {
       const detail = err?.rawError ? JSON.stringify(err.rawError).slice(0, 500) : '';
-      ctx.logger.error(`[xp-level-bot] Command-Reg fehlgeschlagen (Versuch ${attempt + 1}/${RETRY_DELAYS_MS.length}): ${err.message} ${detail}`);
+      ctx.logger?.error?.(
+        `[xp-level-bot] Command-Registrierung fehlgeschlagen (Versuch ${attempt + 1}/${RETRY_DELAYS_MS.length}, Route: ${devGuildId ? 'guild ' + devGuildId : 'global'}): ${err.message} ${detail}`
+      );
     }
   }
-  ctx.commandsRegistered = false; // Scheduler versucht es weiter alle 15 Minuten
+
+  ctx.commandsRegistered = false; // Scheduler versucht es weiter
   return false;
 }
 
-/** Discord gibt die registrierten Commands zurück – Namen fürs Log (Beweis, dass z.B. /level_roles angelegt wurde). */
-function registeredNames(res) {
-  if (Array.isArray(res) && res.length) return res.map((c) => c.name).join(', ');
-  return 'unbekannt';
+/**
+ * Stellt sicher, dass die Command-IDs vor dem Rendern von /help geladen sind.
+ * Reihenfolge: Memory -> persistenter Store -> Discord REST GET Fallback.
+ */
+async function ensureCommandIds(ctx, guildId = null) {
+  const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles'];
+  const hasAll = (obj) => obj && typeof obj === 'object' && needed.every((name) => Boolean(obj[name]));
+
+  // 1. In-Memory Check
+  if (guildId && ctx.guildCommandIds instanceof Map && hasAll(ctx.guildCommandIds.get(guildId))) {
+    return ctx.guildCommandIds.get(guildId);
+  }
+  if (hasAll(ctx.commandIds)) {
+    return ctx.commandIds;
+  }
+
+  // 2. Store Check (übersteht Bot-Restarts sofort ohne REST-Aufruf)
+  if (ctx.store?.getCommandIds && hasAll(ctx.store.getCommandIds())) {
+    ctx.commandIds = { ...(ctx.commandIds || {}), ...ctx.store.getCommandIds() };
+    return ctx.commandIds;
+  }
+  if (guildId && ctx.store?.getGuildCommandIds && hasAll(ctx.store.getGuildCommandIds(guildId))) {
+    const storedG = ctx.store.getGuildCommandIds(guildId);
+    ctx.guildCommandIds = ctx.guildCommandIds || new Map();
+    ctx.guildCommandIds.set(guildId, storedG);
+    return storedG;
+  }
+
+  // 3. Fallback: Command-IDs direkt von der Discord REST API abrufen
+  const clientId = ctx.client?.user?.id;
+  const token = ctx.token;
+  if (clientId && token) {
+    try {
+      const rest = ctx.rest || new REST({ version: '10' }).setToken(token);
+      const rawDev = ctx.devGuildId;
+      const devGuildId = typeof rawDev === 'string' && rawDev.trim() !== ''
+        ? rawDev.trim().replace(/^<@!?(\d+)>$/, '$1')
+        : null;
+
+      if (devGuildId) {
+        const fetched = await rest.get(Routes.applicationGuildCommands(clientId, devGuildId));
+        if (Array.isArray(fetched) && fetched.length > 0) {
+          const ids = Object.fromEntries(fetched.map((c) => [c.name, c.id]));
+          ctx.commandIds = { ...(ctx.commandIds || {}), ...ids };
+          ctx.guildCommandIds = ctx.guildCommandIds || new Map();
+          ctx.guildCommandIds.set(devGuildId, ids);
+          if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
+          if (ctx.store?.setGuildCommandIds) ctx.store.setGuildCommandIds(devGuildId, ids);
+          return ids;
+        }
+      } else {
+        const fetched = await rest.get(Routes.applicationCommands(clientId));
+        if (Array.isArray(fetched) && fetched.length > 0) {
+          const ids = Object.fromEntries(fetched.map((c) => [c.name, c.id]));
+          ctx.commandIds = { ...(ctx.commandIds || {}), ...ids };
+          if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
+          return ids;
+        }
+      }
+    } catch (err) {
+      ctx.logger?.warn?.(`[xp-level-bot] ensureCommandIds: Fetch fehlgeschlagen: ${err.message}`);
+    }
+  }
+
+  return ctx.commandIds || {};
+}
+
+/**
+ * Erzeugt eine klickbare Command-Mention im Format </name:id>.
+ * Fallback auf /name nur dann, wenn wirklich keine ID auffindbar ist.
+ */
+function commandMention(ctx, name, guildId = null) {
+  const guildIds = guildId && ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(guildId) : null;
+  const storedGuildIds = guildId && ctx.store?.getGuildCommandIds ? ctx.store.getGuildCommandIds(guildId) : null;
+  const id =
+    guildIds?.[name] ||
+    storedGuildIds?.[name] ||
+    ctx.commandIds?.[name] ||
+    (ctx.store?.getCommandId ? ctx.store.getCommandId(name) : null);
+
+  return id ? `</${name}:${id}>` : `/${name}`;
 }
 
 async function handleChatInput(ctx, interaction) {
-  switch(interaction.commandName){
-    case 'setup': return setupCmd(ctx, interaction);
-    case 'rank': return rankCmd(ctx, interaction);
-    case 'help': return helpCmd(ctx, interaction);
-    case 'admin_set_bot_profile': return profileCmd(ctx, interaction);
-    case 'level_roles': return handleLevelRolesCommand(ctx, interaction);
-    case 'adminpanel': return openPanel(ctx, interaction);
-    default: return interaction.reply(componentsV2Payload([smallContainer(null,'Unbekannter Befehl.')],{ephemeral:true}));
+  switch (interaction.commandName) {
+    case 'setup':
+      return setupCmd(ctx, interaction);
+    case 'rank':
+      return rankCmd(ctx, interaction);
+    case 'help':
+      return helpCmd(ctx, interaction);
+    case 'admin_set_bot_profile':
+      return profileCmd(ctx, interaction);
+    case 'level_roles':
+      return handleLevelRolesCommand(ctx, interaction);
+    case 'adminpanel':
+      return openPanel(ctx, interaction);
+    default:
+      return interaction.reply(componentsV2Payload([smallContainer(null, 'Unbekannter Befehl.')], { ephemeral: true }));
   }
 }
 
-async function setupCmd(ctx, interaction){
-  if (!interaction.inGuild()) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly','en'))],{ephemeral:true}));
+async function setupCmd(ctx, interaction) {
+  if (!interaction.inGuild()) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }));
+  }
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   const langChoice = interaction.options.getString('language');
   const lang = langChoice || 'en';
-  if (!perms?.has(PermissionFlagsBits.Administrator)) return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))],{ephemeral:true}));
-  if (!LANGS[lang]) return interaction.reply(componentsV2Payload([smallContainer(null, t('setupLangBad', lang))],{ephemeral:true}));
+  if (!perms?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+  }
+  if (!LANGS[lang]) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('setupLangBad', lang))], { ephemeral: true }));
+  }
 
   const leader = interaction.options.getChannel('leaderboard');
   const main = interaction.options.getChannel('mainchat');
-  if (!leader || leader.type !== ChannelType.GuildText) return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))],{ephemeral:true}));
-  if (!main || main.type !== ChannelType.GuildText) return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))],{ephemeral:true}));
+  if (!leader || leader.type !== ChannelType.GuildText) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: true }));
+  }
+  if (!main || main.type !== ChannelType.GuildText) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: true }));
+  }
 
   for (const ch of [leader, main]) {
     const permsBot = ch.permissionsFor(ctx.client.user);
     if (!permsBot?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
-      return interaction.reply(componentsV2Payload([smallContainer(null, t('errBotPerms', lang, {channel:`<#${ch.id}>`}))],{ephemeral:true}));
+      return interaction.reply(componentsV2Payload([smallContainer(null, t('errBotPerms', lang, { channel: `<#${ch.id}>` }))], { ephemeral: true }));
     }
   }
 
-  await interaction.deferReply({flags: MessageFlags.Ephemeral});
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  // Check existing config – übernehmen? Migrating
   let existing = ctx.store.getGuild(interaction.guild.id);
   const alreadyUsers = existing ? ctx.store.getUsersForGuild(interaction.guild.id) : [];
 
-  // Try to find old leaderboard message to delete
   let oldMsg = null;
   if (existing && existing.leaderboardChannelId) {
     try {
-      const ch = await ctx.client.channels.fetch(existing.leaderboardChannelId).catch(()=>null);
+      const ch = await ctx.client.channels.fetch(existing.leaderboardChannelId).catch(() => null);
       if (ch && ch.isTextBased() && existing.leaderboardMessageId) {
-        oldMsg = await ch.messages.fetch(existing.leaderboardMessageId).catch(()=>null);
+        oldMsg = await ch.messages.fetch(existing.leaderboardMessageId).catch(() => null);
       }
     } catch {}
-    // also scan for marker if messageId unknown
     if (!oldMsg) {
       try {
         const found = await ctx.store.findLeaderboardMessage(interaction.guild, ctx.client);
@@ -198,18 +325,19 @@ async function setupCmd(ctx, interaction){
       } catch {}
     }
   }
-  if (oldMsg) await oldMsg.delete().catch(()=>{});
+  if (oldMsg) await oldMsg.delete().catch(() => {});
 
   const now = new Date();
   const entries = ctx.store.getLeaderboard(interaction.guild.id, 15);
   const container = buildLeaderboardEmbed({ lang, entries, now, guildName: interaction.guild.name });
-  const msg = await leader.send(componentsV2Payload([container])).catch(e=>{
-    ctx.logger.error('[xp-level-bot] Leaderboard send failed', e.message);
+  const msg = await leader.send(componentsV2Payload([container])).catch((e) => {
+    ctx.logger?.error?.('[xp-level-bot] Leaderboard send failed', e.message);
     return null;
   });
   if (!msg) return interaction.editReply(componentsV2Payload([smallContainer(null, t('errGeneric', lang))]));
 
   const cfg = {
+    ...(existing || {}),
     guildId: interaction.guild.id,
     leaderboardChannelId: leader.id,
     mainChannelId: main.id,
@@ -220,43 +348,40 @@ async function setupCmd(ctx, interaction){
   ctx.store.setGuild(cfg);
   await ctx.store.flush();
 
-  // Schedule immediate nick updates? Not needed
-
-  const desc = t('setupSuccess', lang, { leader:`<#${leader.id}>`, main:`<#${main.id}>`, lang: LANGS[lang].name });
+  const desc = t('setupSuccess', lang, { leader: `<#${leader.id}>`, main: `<#${main.id}>`, lang: LANGS[lang].name });
   let extra = '';
   if (existing) extra = `\n\n${t('setupFoundOld', lang)} (${alreadyUsers.length} Nutzer behalten ✨)`;
-  return interaction.editReply(componentsV2Payload([smallContainer(null, desc+extra)]));
+  return interaction.editReply(componentsV2Payload([smallContainer(null, desc + extra)]));
 }
 
-async function rankCmd(ctx, interaction){
+async function rankCmd(ctx, interaction) {
   const guildId = interaction.guildId;
-  if (!guildId) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly','en'))],{ephemeral:true}));
+  if (!guildId) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }));
   const cfg = ctx.store.getGuild(guildId);
   const lang = cfg?.lang || langFromDiscord(interaction.locale);
-  if (!cfg || !cfg.leaderboardChannelId) return interaction.reply(componentsV2Payload([smallContainer(null, t('rankNoSetup', lang))],{ephemeral:true}));
+  if (!cfg || !cfg.leaderboardChannelId) return interaction.reply(componentsV2Payload([smallContainer(null, t('rankNoSetup', lang))], { ephemeral: true }));
 
   const userId = interaction.user.id;
   let rankInfo = ctx.store.getRank(guildId, userId);
   if (!rankInfo) {
-    // User not yet in store -> create placeholder? Show rankNotFound with placeholder lvl1
     const u = ctx.store.getUser(guildId, userId);
     if (!u) {
-      // Show not found container
-      const r = buildRankEmbed({ lang, userId, rankInfo:null });
-      return interaction.reply(componentsV2Payload([r.container],{ephemeral:true}));
+      const r = buildRankEmbed({ lang, userId, rankInfo: null });
+      return interaction.reply(componentsV2Payload([r.container], { ephemeral: true }));
     }
     rankInfo = { rank: ctx.store.getUsersForGuild(guildId).length, total: ctx.store.getUsersForGuild(guildId).length, user: u };
-    // Actually need proper rank, but user exists
     const full = ctx.store.getRank(guildId, userId);
     if (full) rankInfo = full;
   }
   const avatarUrl = interaction.user.displayAvatarURL({ size: 256 });
   const { container } = buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now: new Date() });
-  // Öffentliche Nachricht – für alle sichtbar (nicht nur für den Command-Benutzer)
   return interaction.reply(componentsV2Payload([container]));
 }
 
-async function helpCmd(ctx, interaction){
+async function helpCmd(ctx, interaction) {
+  // Command-IDs sicherstellen, damit Mentions </name:id> immer klickbar sind
+  await ensureCommandIds(ctx, interaction.guildId);
+
   const lang = ctx.store.getGuild(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
   const container = new ContainerBuilder().addTextDisplayComponents(
     new TextDisplayBuilder().setContent([
@@ -277,31 +402,25 @@ async function helpCmd(ctx, interaction){
   return interaction.reply(componentsV2Payload([container]));
 }
 
-function commandMention(ctx, name, guildId) {
-  const guildIds = guildId && ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(guildId) : null;
-  const id = guildIds?.[name] || ctx.commandIds?.[name];
-  return id ? `</${name}:${id}>` : `/${name}`;
-}
-
-async function profileCmd(ctx, interaction){
-  if (!interaction.inGuild()) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly','en'))],{ephemeral:true}));
+async function profileCmd(ctx, interaction) {
+  if (!interaction.inGuild()) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }));
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   const lang = ctx.store.getGuild(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
-  if (!perms?.has(PermissionFlagsBits.Administrator)) return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))],{ephemeral:true}));
-  await interaction.deferReply({flags: MessageFlags.Ephemeral});
+  if (!perms?.has(PermissionFlagsBits.Administrator)) return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const choice = interaction.options.getString('image');
   const label = t(`profileChoice${choice[0].toUpperCase()}${choice.slice(1)}`, lang);
   try {
     if (choice === 'standard') {
-      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, '@me'), {body:{avatar:null}});
+      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, '@me'), { body: { avatar: null } });
     } else {
-      let url=null;
-      if (choice==='server'){
-        url = interaction.guild.iconURL({size:256, extension:'png', forceStatic:true});
-        if(!url) return interaction.editReply(componentsV2Payload([smallContainer(null, t('errServerNoIcon', lang))]));
-      } else if (choice==='owner'){
+      let url = null;
+      if (choice === 'server') {
+        url = interaction.guild.iconURL({ size: 256, extension: 'png', forceStatic: true });
+        if (!url) return interaction.editReply(componentsV2Payload([smallContainer(null, t('errServerNoIcon', lang))]));
+      } else if (choice === 'owner') {
         const owner = await interaction.guild.fetchOwner();
-        url = owner?.user?.displayAvatarURL({size:256, extension:'png', forceStatic:true}) || owner?.displayAvatarURL({size:256, extension:'png', forceStatic:true});
+        url = owner?.user?.displayAvatarURL({ size: 256, extension: 'png', forceStatic: true }) || owner?.displayAvatarURL({ size: 256, extension: 'png', forceStatic: true });
       }
       if (!url) throw new Error('Bild-URL konnte nicht ermittelt werden.');
       const res = await fetch(url);
@@ -309,21 +428,28 @@ async function profileCmd(ctx, interaction){
       const buffer = Buffer.from(await res.arrayBuffer());
       const ct = res.headers.get('content-type')?.split(';')[0] || 'image/png';
       const dataUri = `data:${ct};base64,${buffer.toString('base64')}`;
-      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, '@me'), {body:{avatar:dataUri}});
+      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, '@me'), { body: { avatar: dataUri } });
     }
-    return interaction.editReply(componentsV2Payload([smallContainer(null, t('profileSet', lang, {choice:label}))]));
-  } catch(err){
-    const msg = err?.code===RESTJSONErrorCodes.MissingPermissions || err?.status===403 ? t('errAvatarPerms', lang) : t('errAvatar', lang, {error: err.message});
+    return interaction.editReply(componentsV2Payload([smallContainer(null, t('profileSet', lang, { choice: label }))]));
+  } catch (err) {
+    const msg = err?.code === RESTJSONErrorCodes.MissingPermissions || err?.status === 403 ? t('errAvatarPerms', lang) : t('errAvatar', lang, { error: err.message });
     return interaction.editReply(componentsV2Payload([smallContainer(null, msg)]));
   }
 }
 
-function todayKeyForLang(lang){
+function todayKeyForLang(lang) {
   const { tzParts } = require('./logic');
   const { tzOf } = require('./languages');
-  const pad = n=>String(n).padStart(2,'0');
-  const t = tzParts(tzOf(lang));
-  return `${t.year}-${pad(t.month)}-${pad(t.day)}`;
+  const pad = (n) => String(n).padStart(2, '0');
+  const time = tzParts(tzOf(lang));
+  return `${time.year}-${pad(time.month)}-${pad(time.day)}`;
 }
 
-module.exports = { defineCommands, registerCommands, handleChatInput, pick, commandMention };
+module.exports = {
+  defineCommands,
+  registerCommands,
+  ensureCommandIds,
+  handleChatInput,
+  pick,
+  commandMention,
+};

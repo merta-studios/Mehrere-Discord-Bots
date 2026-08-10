@@ -11,7 +11,7 @@
  *  - Level-Rollen: /level_roles (Admin-Formular) erstellt/sortiert Belohnungsrollen,
  *    Sync bei Level Up/Down (mehrere Rollen, nie entfernen)
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
- *  - Bonus-Drops: Bei viel Haupt-Chat-Aktivität (>=5 Msg/>=2 Leute/5min) erscheint
+ *  - Bonus-Drops: Bei viel Haupt-Chat-Aktivität (>=8 Msg/>=2 Leute/140s) erscheint
  *    manchmal (35% Chance) eine XP-Belohnung (20–40 XP) mit „Einsammeln“-Button –
  *    der erste Klick gewinnt; max. 4/Tag, mind. 1h30 Abstand, verfällt nach 10min
  *  - Täglich 0 Uhr (TZ pro Sprache): 10% Decay; wer 24h keine XP verdient hat,
@@ -55,29 +55,40 @@ module.exports = {
     const { REST } = require('discord.js');
     const store = createXpStore({ logger, env });
     await store.init();
-    store.startBackupInterval(5*60*1000);
+    store.startBackupInterval(5 * 60 * 1000);
 
     // Graceful flush on termination (Render SIGTERM)
     const flushAndLog = async (sig) => {
       logger.info(`[xp-level-bot] ${sig} – flushe RAM -> Turso/File...`);
-      try { await store.flush({force:true}); logger.info('[xp-level-bot] Flush ok vor Shutdown'); } catch(e){ logger.error('[xp-level-bot] Flush fail', e.message); }
+      try {
+        await store.flush({ force: true });
+        logger.info('[xp-level-bot] Flush ok vor Shutdown');
+      } catch (e) {
+        logger.error('[xp-level-bot] Flush fail', e.message);
+      }
     };
-    process.on('SIGTERM', ()=> void flushAndLog('SIGTERM'));
-    process.on('SIGINT', ()=> void flushAndLog('SIGINT'));
+    process.on('SIGTERM', () => void flushAndLog('SIGTERM'));
+    process.on('SIGINT', () => void flushAndLog('SIGINT'));
+
+    const devGuildId = String(env('XP_BOT_GUILD_ID', '')).trim().replace(/^<@!?(\d+)>$/, '$1') || null;
 
     const ctx = {
       client,
       token,
       logger,
       env,
-      ownerId: String(env('XP_BOT_OWNER_ID','') || env('BIRTHDAY_BOT_OWNER_ID','') || '').trim().replace(/^<@!?(\d+)>$/,'$1'),
+      ownerId: String(env('XP_BOT_OWNER_ID', '') || env('BIRTHDAY_BOT_OWNER_ID', '') || '')
+        .trim()
+        .replace(/^<@!?(\d+)>$/, '$1'),
       // Wichtig: Der XP-Bot darf NICHT auf BIRTHDAY_BOT_GUILD_ID zurückfallen.
       // Sonst werden XP-Commands nur in dieser einen Birthday-Dev-Gilde
       // registriert; neue globale Commands wie /level_roles tauchen dann auf
       // den echten Servern nicht auf.
-      devGuildId: env('XP_BOT_GUILD_ID',''),
-      rest: new REST({version:'10'}).setToken(token),
+      devGuildId,
+      rest: new REST({ version: '10' }).setToken(token),
       store,
+      commandIds: store.getCommandIds ? store.getCommandIds() : {},
+      guildCommandIds: new Map(),
       panelSessions: new Map(),
     };
 
@@ -88,34 +99,41 @@ module.exports = {
     // Status: zeigt Anzahl der verwalteten Server
     const updatePresence = () => {
       const count = client.guilds.cache.size;
-      client.user.setPresence({
-        activities: [{ name: `Managing ${count} servers 🏆 | /help`, type: ActivityType.Playing }],
-        status: 'online',
-      }).catch(()=>{});
+      client.user
+        .setPresence({
+          activities: [{ name: `Managing ${count} servers 🏆 | /help`, type: ActivityType.Playing }],
+          status: 'online',
+        })
+        .catch(() => {});
     };
-
-    // Nickname-Helfer (Level-Tag + Medaillen-Refresh) liegen in ./src/nicknames
 
     client.once(Events.ClientReady, async () => {
       updatePresence();
-      // Registrierung hat intern mehrere Versuche mit Abstand (bei Fehlschlag
-      // versucht es der Scheduler weiter alle 15 min) – deshalb nicht blockierend.
-      void registerCommands(ctx);
+      // Command-Registrierung beim Start zuverlässig ausführen und awaiten
+      try {
+        await registerCommands(ctx);
+      } catch (err) {
+        logger.error('[xp-level-bot] Initial-Command-Registrierung fehlgeschlagen:', err.message);
+      }
+
       // Scan for existing leaderboards that are not in store (self-healing find)
-      for (const guild of client.guilds.cache.values()){
+      for (const guild of client.guilds.cache.values()) {
         if (store.getGuild(guild.id)) continue;
         try {
           const found = await store.findLeaderboardMessage(guild, client);
           if (found) {
-            // Auto-recover config? We don't know lang/main – can't. Just log.
-            logger.info(`[xp-level-bot] Leaderboard auf ${guild.name} gefunden aber kein Config – bitte /setup neu ausführen.`);
+            logger.info(
+              `[xp-level-bot] Leaderboard auf ${guild.name} gefunden aber kein Config – bitte /setup neu ausführen.`
+            );
           }
         } catch {}
       }
       schedulerStop = startScheduler({ ctx });
-      voiceTracker = createVoiceTracker({ client, store, logger, getGuildConfig: (gid)=> store.getGuild(gid) });
+      voiceTracker = createVoiceTracker({ client, store, logger, getGuildConfig: (gid) => store.getGuild(gid) });
       voiceTracker.start();
-      logger.info(`[xp-level-bot] Bereit auf ${client.guilds.cache.size} Servern – ${store.getAllUsersCount()} Nutzer im RAM`);
+      logger.info(
+        `[xp-level-bot] Bereit auf ${client.guilds.cache.size} Servern – ${store.getAllUsersCount()} Nutzer im RAM`
+      );
     });
 
     // ---------------- Bonus-Belohnungen (Zufalls-XP-Drops im Haupt-Chat) ----------------
@@ -124,7 +142,15 @@ module.exports = {
       ctx,
       // Level-Up/Down eines Bonus-Gewinners: gleiche Nachbereitung wie Chat-XP
       onLevelChange: async (guild, cfg, user, res, sourceMsg) => {
-        try { await handleLevelChange(ctx, sourceMsg && sourceMsg.guild ? sourceMsg : { guild, channel: null }, user, res, cfg); } catch {}
+        try {
+          await handleLevelChange(
+            ctx,
+            sourceMsg && sourceMsg.guild ? sourceMsg : { guild, channel: null },
+            user,
+            res,
+            cfg
+          );
+        } catch {}
       },
       onXpOnly: async (guild, cfg, user, userId) => {
         try {
@@ -138,10 +164,12 @@ module.exports = {
     ctx.bonusDropper = bonusDropper;
 
     // ---------------- Interactions ----------------
-    client.on('interactionCreate', (interaction)=>{ void handleInteraction(ctx, interaction); });
+    client.on('interactionCreate', (interaction) => {
+      void handleInteraction(ctx, interaction);
+    });
 
     // ---------------- Message XP ----------------
-    client.on('messageCreate', async (msg)=>{
+    client.on('messageCreate', async (msg) => {
       try {
         // Bots UND Webhooks bekommen nichts: kein XP, kein Level, kein Nickname, keine Boni
         if (msg.author?.bot) return;
@@ -162,9 +190,12 @@ module.exports = {
 
         // Medien (Bilder, Videos, Sprachnachrichten, Sticker) zählen als XP-Träger
         const hasMedia = Boolean(
-          (msg.attachments && msg.attachments.some((a) => /^(image|video|audio)\//i.test(a.contentType || a.content_type || '')))
-          || (msg.stickers && msg.stickers.size > 0)
-          || (msg.flags && msg.flags.has(MessageFlags.IsVoiceMessage))
+          (msg.attachments &&
+            msg.attachments.some((a) =>
+              /^(image|video|audio)\//i.test(a.contentType || a.content_type || '')
+            )) ||
+            (msg.stickers && msg.stickers.size > 0) ||
+            (msg.flags && msg.flags.has(MessageFlags.IsVoiceMessage))
         );
         if (!content.trim() && !hasMedia) return;
 
@@ -202,7 +233,9 @@ module.exports = {
           // Erste XP überhaupt → Nickname-Tag [Lvl 1] sofort setzen
           try {
             await refreshRankNicknames(ctx, msg.guild, msg.author.id, cfg.lang || 'de');
-          } catch(e){ logger.warn('[xp-level-bot] first-xp nick fail', e.message); }
+          } catch (e) {
+            logger.warn('[xp-level-bot] first-xp nick fail', e.message);
+          }
         } else {
           // XP-only-Gewinn: Bei gleichem Level können sich die Ränge trotzdem
           // verschieben (mehr XP überholt weniger XP). Wenn der Nutzer damit
@@ -212,88 +245,104 @@ module.exports = {
             if (rankInfo && rankInfo.rank <= 3) {
               await maybeRefreshRankNicknames(ctx, msg.guild, msg.author.id, cfg.lang);
             }
-          } catch(e){ logger.warn('[xp-level-bot] medal refresh fail', e.message); }
+          } catch (e) {
+            logger.warn('[xp-level-bot] medal refresh fail', e.message);
+          }
         }
-      } catch(e){
+      } catch (e) {
         logger.warn('[xp-level-bot] messageCreate Fehler:', e.message);
       }
     });
 
-    async function handleLevelChange(ctx, sourceMsg, user, res, cfg){
+    async function handleLevelChange(ctx, sourceMsg, user, res, cfg) {
       const guild = sourceMsg.guild;
       const lang = cfg.lang || 'de';
-      const { buildLevelUpEmbed, buildLevelDownEmbed } = require('./src/embed-builder');
-      const { componentsV2Payload } = require('./src/message-payload');
+      const { buildLevelUpEmbed, buildLevelDownEmbed } = require('./embed-builder');
+      const { componentsV2Payload } = require('./message-payload');
 
       // Nickname ZUVERLÄSSIG aktualisieren: Top 5 + betroffener Nutzer werden
       // geprüft, damit verrückte Plätze (z.B. neu Platz 2 statt 1) sofort die
       // richtige Medaille im Anzeigenamen bekommen
       try {
         await refreshRankNicknames(ctx, guild, user.userId, lang);
-      } catch(e){ logger.warn('[xp-level-bot] nick refresh fail', e.message); }
+      } catch (e) {
+        logger.warn('[xp-level-bot] nick refresh fail', e.message);
+      }
 
       // Level-Rollen synchronisieren: fehlende Rollen adden (mehrere möglich),
       // vorhandene werden bei Level-Down nie entfernt
       try {
         await syncLevelRolesForUser({ ctx, guild, userId: user.userId, level: res.level });
-      } catch(e){ logger.warn('[xp-level-bot] level roles sync fail', e.message); }
+      } catch (e) {
+        logger.warn('[xp-level-bot] level roles sync fail', e.message);
+      }
 
       // Leaderboard: stündlich + zusätzlich bei jedem Level-Up/Down,
       // aber frühestens alle 10 Minuten (Throttle im Scheduler)
       try {
-        const { maybeRefreshLeaderboard } = require('./src/scheduler');
+        const { maybeRefreshLeaderboard } = require('./scheduler');
         if (cfg && cfg.leaderboardChannelId) await maybeRefreshLeaderboard(ctx, cfg, guild);
-      } catch(e){ logger.warn('[xp-level-bot] leaderboard refresh fail', e.message); }
+      } catch (e) {
+        logger.warn('[xp-level-bot] leaderboard refresh fail', e.message);
+      }
 
       // Announcement: versuche erst bei der Nachricht zu replyen, sonst Haupt-Chat
-      const container = res.leveledUp ? buildLevelUpEmbed({lang, userId:user.userId, level:res.level, xp:res.xp})
-                                     : buildLevelDownEmbed({lang, userId:user.userId, level:res.level, xp:res.xp});
+      const container = res.leveledUp
+        ? buildLevelUpEmbed({ lang, userId: user.userId, level: res.level, xp: res.xp })
+        : buildLevelDownEmbed({ lang, userId: user.userId, level: res.level, xp: res.xp });
       let sent = false;
       try {
         // Versuche reply auf die auslösende Nachricht
-        if (sourceMsg.channel?.isTextBased() && sourceMsg.channel.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.SendMessages)){
-          await sourceMsg.reply(componentsV2Payload([container])).catch(()=>{});
+        if (
+          sourceMsg.channel?.isTextBased() &&
+          sourceMsg.channel.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.SendMessages)
+        ) {
+          await sourceMsg.reply(componentsV2Payload([container])).catch(() => {});
           sent = true;
         }
-      } catch{}
+      } catch {}
       if (!sent) {
         try {
-          let ch = await guild.channels.fetch(cfg.mainChannelId).catch(()=>null);
+          let ch = await guild.channels.fetch(cfg.mainChannelId).catch(() => null);
           if (!ch || !ch.isTextBased()) ch = guild.systemChannel;
-          if (ch && ch.isTextBased()) await ch.send(componentsV2Payload([container])).catch(()=>{});
-        } catch{}
+          if (ch && ch.isTextBased()) await ch.send(componentsV2Payload([container])).catch(() => {});
+        } catch {}
       }
     }
 
     // ---------------- Guild Member Remove: Daten löschen ----------------
-    client.on('guildMemberRemove', async (member)=>{
+    client.on('guildMemberRemove', async (member) => {
       try {
         const guildId = member.guild?.id;
         if (!guildId) return;
         const u = store.getUser(guildId, member.id);
         if (u) {
           store.deleteUser(guildId, member.id);
-          logger.info(`[xp-level-bot] Nutzer ${member.id} verließ ${member.guild.name} – XP Daten gelöscht (Lvl ${u.level})`);
+          logger.info(
+            `[xp-level-bot] Nutzer ${member.id} verließ ${member.guild.name} – XP Daten gelöscht (Lvl ${u.level})`
+          );
           // sofort flushen damit Löschung persistiert
           await store.flush();
         }
-      } catch(e){ logger.warn('[xp-level-bot] guildMemberRemove fail', e.message); }
+      } catch (e) {
+        logger.warn('[xp-level-bot] guildMemberRemove fail', e.message);
+      }
     });
 
     // ---------------- Guild Delete / Create ----------------
-    client.on('guildDelete', (guild)=>{
+    client.on('guildDelete', (guild) => {
       store.deleteGuild(guild.id);
       void store.flush();
       logger.info(`[xp-level-bot] Server ${guild.name} verlassen – Daten bereinigt`);
       updatePresence();
     });
-    client.on('guildCreate', (guild)=>{
+    client.on('guildCreate', (guild) => {
       void sendJoinNotice(ctx, guild);
       updatePresence();
     });
 
     // ---------------- Nickname bei Serverbeitritt (ab Level 1) ----------------
-    client.on('guildMemberAdd', async (member)=>{
+    client.on('guildMemberAdd', async (member) => {
       try {
         if (!member.guild) return;
         // Bots (und damit auch andere Bots) bekommen weder Rollen noch Nickname-Tags
@@ -303,19 +352,25 @@ module.exports = {
         const existing = store.getUser(member.guild.id, member.id);
         const level = existing ? existing.level : 1;
         // Level-Rollen beim Beitritt direkt vergeben (unabhängig vom /setup-Status)
-        await syncLevelRolesForUser({ ctx, guild: member.guild, userId: member.id, level }).catch(()=>{});
+        await syncLevelRolesForUser({ ctx, guild: member.guild, userId: member.id, level }).catch(() => {});
         if (!cfg.leaderboardChannelId) return; // kein XP-Setup -> Nickname erst nach /setup
-        await ensureNickname(ctx, member.guild, member.id, level, cfg.lang).catch(()=>{});
-      } catch(e){ logger.warn('[xp-level-bot] guildMemberAdd nick fail', e.message); }
+        await ensureNickname(ctx, member.guild, member.id, level, cfg.lang).catch(() => {});
+      } catch (e) {
+        logger.warn('[xp-level-bot] guildMemberAdd nick fail', e.message);
+      }
     });
 
     // ---------------- Graceful shutdown helpers for loader ----------------
     // Der globale loader ruft client.destroy() auf – wir hooken davor
     const originalDestroy = client.destroy.bind(client);
     client.destroy = () => {
-      try { if (schedulerStop) schedulerStop(); } catch{}
-      try { if (voiceTracker) voiceTracker.stop(); } catch{}
-      void store.flush({force:true}).catch(()=>{});
+      try {
+        if (schedulerStop) schedulerStop();
+      } catch {}
+      try {
+        if (voiceTracker) voiceTracker.stop();
+      } catch {}
+      void store.flush({ force: true }).catch(() => {});
       store.stopBackupInterval();
       return originalDestroy();
     };

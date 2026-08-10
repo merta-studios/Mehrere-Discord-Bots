@@ -130,7 +130,7 @@ function buildListEmbed({ birthdays = [], events = [], lang = 'de', now = new Da
         .map((b) => {
           const days = daysUntilNext(b.day, b.month, tz, now);
           if (b.kind === 'event') {
-            return `${pad(b.day)}.${pad(b.month)} | **${b.name}** – ${formatDaysUntil(days, lang)}`;
+            return `${pad(b.day)}.${pad(b.month)} | 🚀 **${b.name}** – ${formatDaysUntil(days, lang)}`;
           }
           return `${pad(b.day)}.${pad(b.month)} | <@${b.userId}> – ${formatDaysUntil(days, lang)}`;
         });

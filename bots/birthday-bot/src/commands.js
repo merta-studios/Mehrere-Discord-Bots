@@ -87,27 +87,6 @@ function defineCommands() {
       ),
 
     new SlashCommandBuilder()
-      .setName('set_language')
-      .setDescription('Ändert die Sprache der bereits eingerichteten Geburtstagsliste')
-      .setDescriptionLocalizations(pick('helpSetLanguage'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addStringOption((o) => o.setName('language').setDescription('Neue Sprache').setDescriptionLocalizations(pick('setupLangDesc')).setRequired(true).addChoices(...languageChoices)),
-
-    new SlashCommandBuilder()
-      .setName('set_channel')
-      .setDescription('Verschiebt die bereits eingerichtete Geburtstagsliste in einen anderen Kanal')
-      .setDescriptionLocalizations(pick('helpSetChannel'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addChannelOption((o) => o.setName('channel').setDescription('Neuer Kanal für die Liste').setDescriptionLocalizations(pick('setupChannelDesc')).setRequired(true).addChannelTypes(ChannelType.GuildText)),
-
-    new SlashCommandBuilder()
-      .setName('set_birthday_role')
-      .setDescription('Ändert die Rolle, die Geburtstagskinder 24 Stunden erhalten')
-      .setDescriptionLocalizations(pick('helpSetBirthdayRole'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addRoleOption((o) => o.setName('birthday_role').setDescription('Neue Geburtstagsrolle').setDescriptionLocalizations(pick('setupRoleDesc')).setRequired(true)),
-
-    new SlashCommandBuilder()
       .setName('admin_set_bot_profile')
       .setDescription('Ändert das Profilbild des Bots auf diesem Server')
       .setDescriptionLocalizations(pick('helpSetProfile'))
@@ -529,12 +508,6 @@ async function helpCmd(ctx, interaction) {
           `**${commandMention(ctx, 'setup')}**\n${t('helpSetup', lang)}`,
           '',
           `**${commandMention(ctx, 'event')}**\n${t('helpEvent', lang)}`,
-          '',
-          `**${commandMention(ctx, 'set_language')}**\n${t('helpSetLanguage', lang)}`,
-          '',
-          `**${commandMention(ctx, 'set_channel')}**\n${t('helpSetChannel', lang)}`,
-          '',
-          `**${commandMention(ctx, 'set_birthday_role')}**\n${t('helpSetBirthdayRole', lang)}`,
           '',
           `**${commandMention(ctx, 'admin_set_bot_profile')}**\n${t('helpSetProfile', lang)}`,
           '',
