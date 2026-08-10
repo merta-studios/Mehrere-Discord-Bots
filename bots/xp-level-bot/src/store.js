@@ -68,7 +68,7 @@ function createXpStore({ logger, env } = {}) {
       level_role_ids TEXT
     );`);
     // Migration für Bestands-Tabellen (ältere DBs ohne die Level-Rollen-Spalten)
-    for (const col of ['level_role_template TEXT', 'level_role_levels TEXT', 'level_role_ids TEXT', 'bonus_state TEXT']) {
+    for (const col of ['level_role_template TEXT', 'level_role_levels TEXT', 'level_role_ids TEXT', 'bonus_state TEXT', 'last_leaderboard_refresh INTEGER']) {
       try { await db.execute(`ALTER TABLE guild_configs ADD COLUMN ${col}`); } catch {}
     }
     await db.execute(`CREATE TABLE IF NOT EXISTS user_levels (
@@ -113,6 +113,8 @@ function createXpStore({ logger, env } = {}) {
         levelRoleLevels: parseJsonCol(row.level_role_levels, null),
         levelRoleIds: parseJsonCol(row.level_role_ids, null),
         bonusState: parseJsonCol(row.bonus_state, null),
+        lastLeaderboardRefresh: row.last_leaderboard_refresh || null,
+        lastLeaderboardUpdate: row.last_leaderboard_refresh || null,
       });
     }
     const uRes = await db.execute('SELECT * FROM user_levels');
@@ -356,8 +358,8 @@ function createXpStore({ logger, env } = {}) {
           const g = guilds.get(gid);
           if (!g) continue;
           statements.push({
-            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids, bonus_state)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids, bonus_state, last_leaderboard_refresh)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id) DO UPDATE SET
                     leaderboard_channel_id=excluded.leaderboard_channel_id,
                     main_channel_id=excluded.main_channel_id,
@@ -367,7 +369,8 @@ function createXpStore({ logger, env } = {}) {
                     level_role_template=excluded.level_role_template,
                     level_role_levels=excluded.level_role_levels,
                     level_role_ids=excluded.level_role_ids,
-                    bonus_state=excluded.bonus_state`,
+                    bonus_state=excluded.bonus_state,
+                    last_leaderboard_refresh=excluded.last_leaderboard_refresh`,
             args: [
               g.guildId,
               g.leaderboardChannelId || '',
@@ -379,6 +382,7 @@ function createXpStore({ logger, env } = {}) {
               g.levelRoleLevels ? JSON.stringify(g.levelRoleLevels) : null,
               g.levelRoleIds ? JSON.stringify(g.levelRoleIds) : null,
               g.bonusState ? JSON.stringify(g.bonusState) : null,
+              g.lastLeaderboardRefresh || g.lastLeaderboardUpdate || null,
             ]
           });
         }
