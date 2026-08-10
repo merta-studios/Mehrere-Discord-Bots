@@ -112,6 +112,15 @@ async function tickInner(ctx, counter){
         ctx.store.setGuild(entry);
       }
 
+      // Geplante Bonus-Belohnungen (2–4 Drops/Tag, zeitgesteuert) prüfen.
+      if (ctx.bonusDropper) {
+        try {
+          await ctx.bonusDropper.checkScheduled(entry, guild, now);
+        } catch (e) {
+          ctx.logger.warn(`[xp-level-bot] Bonus-Scheduler Fehler Gilde ${entry.guildId}:`, e.message);
+        }
+      }
+
       // Stündlich Leaderboard – zeitbasiert statt Tick-Zähler, damit es auch
       // nach Prozess-Pausen/Restarts zuverlässig (und sofort beim Start) kommt.
       // Bei dauerhaften Fehlern (z.B. Rechte weg) frühestens alle 10 min erneut.

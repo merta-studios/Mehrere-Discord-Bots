@@ -14,6 +14,10 @@ steckt in den Komponenten selbst.
   sie nach dem Tag wieder weg; die Rollen-ID steckt im Listen-Marker).
   Bestehende Listen werden gefunden: Einträge & Rolle bleiben beim Umstellen
   von Sprache/Kanal erhalten.
+- **/set_language [language]**, **/set_channel [channel]**, **/set_birthday_role [birthday_role]**
+  – **Nur für Admins, erst nach /setup:** ändern jeweils nur EINE Einstellung der
+  bestehenden Liste (Sprache / Kanal / Geburtstagsrolle). Werden sie vor /setup
+  benutzt, weist der Bot darauf hin, dass zuerst **/setup** ausgeführt werden muss.
 - **/event create | /event delete** – **Nur für Admins:** Server-Events in die
   Liste aufnehmen (Formular: Name, Tag, Monat – **jedes Datum erlaubt, keine
   7-Tage-Regel**, Bestätigungs-Container mit ✅/✏️/❌) oder per Auswahlmenü

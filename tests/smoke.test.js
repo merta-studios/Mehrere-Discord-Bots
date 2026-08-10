@@ -23,12 +23,22 @@ test('Bot-Module haben die erwartete Form', () => {
   assert.equal(typeof xp.create, 'function');
 });
 
-test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 6 Commands)', () => {
+test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 9 Commands)', () => {
   const { defineCommands } = require('../bots/birthday-bot/src/commands');
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 6);
+  assert.equal(cmds.length, 9);
   const names = cmds.map((c) => c.name).sort();
-  assert.deepEqual(names, ['admin_set_birthday', 'admin_set_bot_profile', 'adminpanel', 'event', 'help', 'setup']);
+  assert.deepEqual(names, [
+    'admin_set_birthday',
+    'admin_set_bot_profile',
+    'adminpanel',
+    'event',
+    'help',
+    'set_birthday_role',
+    'set_channel',
+    'set_language',
+    'setup',
+  ]);
   const event = cmds.find((c) => c.name === 'event');
   assert.deepEqual(event.options[0].choices.map((c) => c.value), ['create', 'delete']);
   const setupRole = cmds.find((c) => c.name === 'setup').options.find((o) => o.name === 'birthday_role');
@@ -38,6 +48,13 @@ test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 6 Commands)', () 
   assert.equal(setup.options.find((o) => o.name === 'language').choices.length, 10); // 10 Sprachen
   const profile = cmds.find((c) => c.name === 'admin_set_bot_profile');
   assert.deepEqual(profile.options[0].choices.map((c) => c.value), ['standard', 'server', 'owner']);
+
+  // Die neuen Einzel-Config-Befehle sind ausschließlich für Admins gedacht.
+  for (const name of ['set_language', 'set_channel', 'set_birthday_role']) {
+    const cmd = cmds.find((c) => c.name === name);
+    assert.ok(cmd, `Befehl /${name} existiert`);
+    assert.equal(cmd.default_member_permissions, '8', `/${name} ist nur für Admins (Bit 8)`);
+  }
 
   // Discord API Anforderung: erforderliche Optionen müssen vor optionalen Optionen stehen
   for (const cmd of cmds) {
