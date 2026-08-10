@@ -254,7 +254,7 @@ const T = {
   },
 
   // ------------------------------------------------------------
-  // Bonus-Belohnungen (Zufalls-XP-Drops im Haupt-Chat)
+  // Bonus-Belohnungen (geplante, zeitgesteuerte XP-Drops im Haupt-Chat)
   // ------------------------------------------------------------
   bonusTitle: {
     de: '🎁 Bonus-Belohnung!',
@@ -269,16 +269,16 @@ const T = {
     it: '🎁 Ricompensa bonus!',
   },
   bonusBody: {
-    de: 'Im Chat geht es gerade richtig rund – und schnell sein lohnt sich! ⚡ Klicke als Erster auf **Einsammeln** und schnapp dir die Belohnung: **{xp} XP** geschenkt!',
-    en: 'The chat is buzzing right now – and being fast pays off! ⚡ Be the first to hit **Claim** and grab the reward: **{xp} XP** for free!',
-    fr: 'Le chat est en feu en ce moment – et la rapidité paie ! ⚡ Sois le premier à cliquer sur **Récupérer** et empoche la récompense : **{xp} XP** offerts !',
-    es: '¡El chat está que arde ahora mismo – y ser rápido merece la pena! ⚡ Sé el primero en pulsar **Recoger** y llévate la recompensa: ¡**{xp} XP** gratis!',
-    pt: 'O chat está pegando fogo agora – e ser rápido vale a pena! ⚡ Seja o primeiro a clicar em **Coletar** e pegue a recompensa: **{xp} XP** de graça!',
-    ru: 'Чат сейчас кипит – и скорость вознаграждается! ⚡ Нажми **Забрать** первым и получи награду: **{xp} XP** даром!',
-    ja: 'チャットが今すごく盛り上がってる – 素早さが報われるよ！⚡ 最初に **受け取る** を押した人だけがもらえる報酬: **{xp} XP** プレゼント！',
-    ko: '지금 채팅이 아주 활발해요 – 빠른 사람이 이득! ⚡ 가장 먼저 **받기**를 눌러 보상을 가져가세요: **{xp} XP** 공짜!',
-    zh: '聊天现在非常火热——手快有奖励！⚡ 第一个点击 **领取** 的人将获得奖励：免费 **{xp} XP**！',
-    it: 'La chat è in fermento adesso – e la velocità paga! ⚡ Clicca per primo su **Riscuoti** e prendi la ricompensa: **{xp} XP** gratis!',
+    de: '⏰ Ein geplanter Bonus ist da! Für die nächste Stunde wartet eine Belohnung auf dich: Klicke auf **Einsammeln** und schnapp dir **{xp} XP**, solange es reicht!',
+    en: '⏰ A scheduled bonus is here! For the next hour a reward is waiting: hit **Claim** and grab **{xp} XP** while it lasts!',
+    fr: '⏰ Un bonus planifié est là ! Pendant la prochaine heure, une récompense t’attend : clique sur **Récupérer** et attrape les **{xp} XP** tant qu’il en reste !',
+    es: '⏰ ¡Hay un bonus programado! Durante la próxima hora te espera una recompensa: pulsa **Recoger** y llévate los **{xp} XP** ¡mientras dure!',
+    pt: '⏰ Um bônus programado chegou! Pela próxima hora há uma recompensa esperando: clique em **Coletar** e pegue os **{xp} XP** enquanto dá tempo!',
+    ru: '⏰ Запланированный бонус здесь! В течение следующего часа тебя ждёт награда: нажми **Забрать** и получи **{xp} XP**, пока не поздно!',
+    ja: '⏰ 予定されたボーナスだよ！ 次の1時間だけ報酬が待ってる – **受け取る**を押して **{xp} XP** をゲットしよう！',
+    ko: '⏰ 예정된 보너스가 도착했어요! 앞으로 1시간 동안 보상이 기다려요 – **받기**를 눌러 **{xp} XP**를 차지하세요!',
+    zh: '⏰ 定时奖励来了！接下来一小时内有一份奖励等着你：点击 **领取**，趁早拿到 **{xp} XP**！',
+    it: '⏰ È arrivato un bonus programmato! Per la prossima ora ti aspetta una ricompensa: clicca su **Riscuoti** e prendi i **{xp} XP** finché c’è tempo!',
   },
   bonusBtn: {
     de: '⚡ Einsammeln!',

@@ -451,45 +451,96 @@ function isVoiceEligible(memberVoiceState, channelMemberCount) {
 }
 
 // ---------------------------------------------------------------------------
-// Bonus-Belohnungen (zufällige XP-Geschenke im Haupt-Chat) – reine Logik
+// Bonus-Belohnungen – geplante, zeitgesteuerte XP-Geschenke im Haupt-Chat
 // ---------------------------------------------------------------------------
+//
+// Statt Aktivitäts-Bursts mit 35% Zufallsschwelle gibt es jetzt für jeden
+// Server 2–4 FEST GEPLANTE Drops pro Tag (Kalendertag in der Sprach-TZ):
+//  - Anzahl und Uhrzeiten werden deterministisch aus (Guild-ID + Tag) abgeleitet
+//    → stabil über Neustarts hinweg und für jeden Server anders
+//  - alle Termine liegen mindestens 1 Stunde auseinander
+//  - nur zwischen 06:00 und 00:30 Uhr Ortszeit (kein mitten in der Nacht)
+//  - ein Drop ist 1 Stunde lang einsammelbar (BONUS_CLAIM_MS) und verfällt dann
 
 const BONUS_XP_MIN = 20;
 const BONUS_XP_MAX = 40;
-const BONUS_MAX_PER_DAY = 4;
-const BONUS_MIN_SPACING_MS = 90 * 60 * 1000; // mind. 1h 30min zwischen zwei Drops
-const BONUS_WINDOW_MS = 140_000; // Aktivitäts-Fenster: 140 Sekunden
-const BONUS_MIN_MESSAGES = 8; // mind. so viele Nachrichten im Fenster
-const BONUS_MIN_USERS = 2; // von mind. so vielen verschiedenen Personen
-const BONUS_DROP_CHANCE = 0.35; // nicht bei jedem Gespräch: 35% Chance pro Burst
-const BONUS_ROLL_COOLDOWN_MS = 10 * 60 * 1000; // nach einer Wertung 10min Ruhe
-const BONUS_CLAIM_MS = 10 * 60 * 1000; // Drops verfallen nach 10 Minuten
+const BONUS_CLAIM_MS = 60 * 60 * 1000; // Belohnung ist 1 Stunde gültig
+// Geplante Termine (Minuten ab 0:00 Uhr Ortszeit): 06:00 bis 00:30 (nächster Tag)
+const BONUS_SLOT_MIN = 6 * 60; // 06:00
+const BONUS_SLOT_MAX = 24 * 60 + 30; // 00:30 = 1470
+const BONUS_SLOT_SPACING = 60; // mind. 1 Stunde Abstand
+const BONUS_COUNT_MIN = 2; // 2 bis 4 Drops pro Tag
+const BONUS_COUNT_MAX = 4;
+// Toleranz, ab der ein überfälliger Slot noch ausgelöst wird (Scheduler-Ticks,
+// kleine Verzögerungen). Verpasste Termine werden sonst übersprungen.
+const BONUS_SLOT_GRACE_MIN = 6;
 
 /** Zufällige Bonus-Höhe (20–40 XP, Ganzzahl). rng injizierbar für Tests. */
 function rollBonusXp(rng = Math.random) {
   return BONUS_XP_MIN + Math.floor(rng() * (BONUS_XP_MAX - BONUS_XP_MIN + 1));
 }
 
-/**
- * Erkennt einen Aktivitäts-Burst: mindestens `minMessages` Nachrichten von
- * mindestens `minUsers` verschiedenen Personen im Zeitfenster.
- * `entries`: [{uid, ts}] – veraltete Einträge werden intern ignoriert.
- */
-function detectBurst(entries, now = Date.now(), { windowMs = BONUS_WINDOW_MS, minMessages = BONUS_MIN_MESSAGES, minUsers = BONUS_MIN_USERS } = {}) {
-  const fresh = entries.filter((e) => e && typeof e.ts === 'number' && now - e.ts <= windowMs);
-  const users = new Set(fresh.map((e) => e.uid));
-  return fresh.length >= minMessages && users.size >= minUsers;
+/** FNV-1a Hash – für deterministische Seeds aus Guild-ID + Tag. */
+function hashString(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/** Deterministischer PRNG (mulberry32) – gleicher Seed ⇒ gleiche Zahlenfolge. */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 /**
- * Darf aktuell ein neuer Bonus-Drop kommen? (Tageslimit + Mindestabstand)
- * state: { dayKey, count, lastDropAt } (für den heutigen Tag)
+ * Deterministischer Zufallsgenerator für einen Server + Kalendertag.
+ * Damit haben alle Server an einem Tag unterschiedliche, aber stabile Termine.
  */
-function canDropBonus(state, now = Date.now()) {
-  if (!state) return true;
-  if ((state.count || 0) >= BONUS_MAX_PER_DAY) return false;
-  if (state.lastDropAt && now - state.lastDropAt < BONUS_MIN_SPACING_MS) return false;
-  return true;
+function seededRngForDay(guildId, dayKey) {
+  return mulberry32(hashString(`${String(guildId)}:${dayKey}`));
+}
+
+/**
+ * Plant die Bonus-Termine eines Servers für einen Tag.
+ * Gibt ein aufsteigend sortiertes Array von "Minuten ab 0 Uhr Ortszeit" zurück
+ * (z. B. 450 = 07:30, 1470 = 00:30 des Folgetags). Alle Termine liegen
+ * mindestens BONUS_SLOT_SPACING Minuten auseinander und innerhalb des
+ * Tagesfensters [BONUS_SLOT_MIN, BONUS_SLOT_MAX].
+ * `rng` injizierbar für Tests (Standard: Math.random).
+ */
+function planDailyBonusSlots(guildId, dayKey, rng = Math.random) {
+  const count = BONUS_COUNT_MIN + Math.floor(rng() * (BONUS_COUNT_MAX - BONUS_COUNT_MIN + 1));
+  const L = BONUS_SLOT_MIN;
+  const R = BONUS_SLOT_MAX;
+  const d = BONUS_SLOT_SPACING;
+  const effR = R - (count - 1) * d;
+  const pts = [];
+  for (let i = 0; i < count; i++) pts.push(L + rng() * (effR - L));
+  pts.sort((a, b) => a - b);
+  return pts.map((p, i) => Math.round(p + i * d));
+}
+
+/** Aktuelle Uhrzeit als "Minuten ab 0 Uhr" in der Zeitzone der Sprache. */
+function currentMinuteOfDay(lang, now = new Date()) {
+  const t = tzParts(tzOf(lang), now);
+  return t.hour * 60 + t.minute;
+}
+
+/** Prüft, ob ein geplanter Slot gerade (oder in der Toleranz) fällig ist. */
+function isSlotDue(slot, minuteOfDay, graceMin = BONUS_SLOT_GRACE_MIN) {
+  const clock = slot % 1440; // 1470 → 00:30, 1440 → 00:00
+  const diff = (minuteOfDay - clock + 1440) % 1440;
+  return diff >= 0 && diff <= graceMin;
 }
 
 module.exports = {
@@ -506,18 +557,21 @@ module.exports = {
   nextDecayInfo,
   DAY_MS,
   rollBonusXp,
-  detectBurst,
-  canDropBonus,
   BONUS_XP_MIN,
   BONUS_XP_MAX,
-  BONUS_MAX_PER_DAY,
-  BONUS_MIN_SPACING_MS,
-  BONUS_WINDOW_MS,
-  BONUS_MIN_MESSAGES,
-  BONUS_MIN_USERS,
-  BONUS_DROP_CHANCE,
-  BONUS_ROLL_COOLDOWN_MS,
   BONUS_CLAIM_MS,
+  BONUS_SLOT_MIN,
+  BONUS_SLOT_MAX,
+  BONUS_SLOT_SPACING,
+  BONUS_COUNT_MIN,
+  BONUS_COUNT_MAX,
+  BONUS_SLOT_GRACE_MIN,
+  hashString,
+  mulberry32,
+  seededRngForDay,
+  planDailyBonusSlots,
+  currentMinuteOfDay,
+  isSlotDue,
   countValidWords,
   xpForWords,
   calculateXpForMessage,

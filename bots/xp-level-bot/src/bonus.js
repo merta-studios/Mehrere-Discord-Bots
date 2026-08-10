@@ -1,27 +1,30 @@
 /**
- * Bonus-Belohnungen – zufällige XP-Geschenke im Haupt-Chat.
+ * Bonus-Belohnungen – geplante XP-Geschenke im Haupt-Chat.
  *
- * Auslösung (alles muss passen):
- * - Aktivitäts-Burst im Haupt-Chat: >=5 Nachrichten von >=2 Personen in 5 Minuten
- * - Würfel: nur mit 35% Chance pro Burst (nicht bei jedem Gespräch!)
- * - Maximal 4 Drops pro Tag (Kalendertag in der Sprach-Zeitzone, persistiert)
- * - Mindestabstand zwischen zwei Drops: 1 Stunde 30 Minuten
- * - Es ist immer nur ein Drop pro Server gleichzeitig offen
+ * Statt Aktivitäts-Bursts (mit 35% Zufallsschwelle) gibt es jetzt für jeden
+ * Server 2–4 FEST GEPLANTE Drops pro Kalendertag (in der Sprach-Zeitzone):
+ * - Anzahl + Uhrzeiten werden deterministisch aus (Guild-ID + Tag) abgeleitet
+ *   → über Neustarts stabil, und für jeden Server unterschiedlich
+ * - alle Termine liegen mindestens 1 Stunde auseinander
+ * - nur zwischen 06:00 und 00:30 Uhr Ortszeit (kein mitten in der Nacht)
+ * - ein Drop ist 1 Stunde lang einsammelbar (BONUS_CLAIM_MS) und verfällt dann
  *
- * Der Drop ist ein Container mit „Einsammeln“-Button: Der ERSTE Klick gewinnt
- * die (vorher ausgewürfelte) XP-Zahl. Danach bleibt der Button an der
- * Nachricht, wird aber deaktiviert, und im Text steht mit Ping, wer schneller
- * war. Ungenutzte Drops verfallen nach 10 Minuten.
+ * Ausgelöst wird das über `checkScheduled(cfg, guild, now)`, das der Scheduler
+ * minütlich pro Gilde aufruft. Der Drop ist ein Container mit „Einsammeln“-
+ * Button: Der ERSTE Klick gewinnt die (vorher ausgewürfelte) XP-Zahl. Danach
+ * wird der Button deaktiviert und im Text steht mit Ping, wer schneller war.
+ * Ungenutzte Drops verfallen nach 1 Stunde. Wer einsammelt, gilt als aktiv –
+ * sein täglicher XP-Schwund (Decay) fällt damit zurück auf die Basis von 10%.
  */
 
 const {
   rollBonusXp,
-  detectBurst,
-  canDropBonus,
-  applyXpGain,
   todayKey,
-  BONUS_DROP_CHANCE,
-  BONUS_ROLL_COOLDOWN_MS,
+  seededRngForDay,
+  planDailyBonusSlots,
+  currentMinuteOfDay,
+  isSlotDue,
+  applyXpGain,
   BONUS_CLAIM_MS,
 } = require('./logic');
 const { t } = require('./languages');
@@ -34,7 +37,6 @@ const {
 const { componentsV2Payload } = require('./message-payload');
 
 const BONUS_CLAIM_PREFIX = 'xp_bonus_claim_';
-const EVALUATE_MIN_MS = 3_000; // Burst-Auswertung frühestens alle 3s pro Gilde
 
 function randomDropId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -45,9 +47,10 @@ function randomDropId() {
  * @param {Function} opts.onLevelChange Callback (guild, cfg, user, res, sourceMsg)
  *        für Level-Up/Down-Nebenwirkungen (Nickname, Rollen, Leaderboard, Ansage)
  * @param {Function} opts.onXpOnly optionaler Callback für XP-Gewinn ohne Level-Change
+ * @param {Function} opts.rng injizierbar für Tests (XP-Würfel)
  */
-function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random, evaluateMinMs = EVALUATE_MIN_MS }) {
-  // guildId -> { window: [{uid, ts}], lastEvaluateAt, lastRollAt, activeDrop }
+function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random }) {
+  // guildId -> { activeDrop }
   const states = new Map();
   // dropId -> drop (für den Claim-Button, damit der Klick den Drop findet)
   const drops = new Map();
@@ -55,18 +58,17 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random, e
   function stateFor(guildId) {
     let s = states.get(guildId);
     if (!s) {
-      s = { window: [], lastEvaluateAt: 0, lastRollAt: 0, activeDrop: null };
+      s = { activeDrop: null };
       states.set(guildId, s);
     }
     return s;
   }
 
-  /** Persistierter Tages-Zähler (überlebt Restarts), zurückgesetzt bei Tageswechsel. */
-  function dayState(cfg) {
-    const dayKey = todayKey(cfg.lang || 'de');
+  /** Persistierter Tages-Zustand (überlebt Restarts), bei Tageswechsel neu. */
+  function dayState(cfg, dayKey) {
     let st = cfg.bonusState;
     if (!st || st.dayKey !== dayKey) {
-      st = { dayKey, count: 0, lastDropAt: st?.lastDropAt || 0 };
+      st = { dayKey, firedSlots: [] };
       cfg.bonusState = st;
       ctx.store.setGuild(cfg);
     }
@@ -74,58 +76,50 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random, e
   }
 
   /**
-   * Wird bei jeder Nachricht im Haupt-Chat aufgerufen (Bots/Webhooks filtert
-   * der Aufrufer schon raus). Zählt Fenster, erkennt Bursts, würfelt.
+   * Vom Scheduler minütlich pro Gilde aufgerufen. Findet den fälligsten,
+   * noch nicht gesendeten Slot des Tages und sendet den Drop in den Haupt-Chat.
    */
-  async function onMessage(msg, cfg) {
-    if (!cfg || !cfg.mainChannelId || msg.channel.id !== cfg.mainChannelId) return;
-    // Ohne aktives XP-System (kein Leaderboard = pausiert) gibt es keine Boni
-    if (!cfg.leaderboardChannelId) return;
-
-    const now = Date.now();
-    const state = stateFor(msg.guild.id);
-    state.window.push({ uid: msg.author.id, ts: now });
-
-    // Auswertung drosseln (sonst rechnen wir bei jedem Burst je Nachricht)
-    if (now - state.lastEvaluateAt < evaluateMinMs) return;
-    state.lastEvaluateAt = now;
-
-    if (!detectBurst(state.window, now)) return;
-
-    // Nach einer Burst-Wertung (egal ob Treffer oder nicht) 10 min Ruhe –
-    // sonst würde ein langes Gespräch Dutzende Würfe hintereinander auslösen
-    if (now - state.lastRollAt < BONUS_ROLL_COOLDOWN_MS) return;
-    state.lastRollAt = now;
-    state.window = []; // Fenster zurücksetzen: nächster Burst muss sich neu aufbauen
+  async function checkScheduled(cfg, guild, now = new Date()) {
+    if (!cfg || !cfg.guildId || !cfg.mainChannelId || !cfg.leaderboardChannelId) return;
+    const lang = cfg.lang || 'de';
+    const dayKey = todayKey(lang);
+    const daySt = dayState(cfg, dayKey);
 
     // Nur ein offener Drop pro Server gleichzeitig
+    const state = stateFor(cfg.guildId);
     if (state.activeDrop) return;
 
-    // Tageslimit (4) + Mindestabstand (1h30) – persistiert im Guild-Config
-    const daySt = dayState(cfg);
-    if (!canDropBonus(daySt, now)) return;
+    // Deterministischer Plan für diesen Server + Tag
+    const plan = planDailyBonusSlots(cfg.guildId, dayKey, seededRngForDay(cfg.guildId, dayKey));
+    const minuteOfDay = currentMinuteOfDay(lang, now);
 
-    // Nicht bei jedem Gespräch: 35% Chance
-    if (rng() >= BONUS_DROP_CHANCE) return;
+    // Fälligster, noch nicht gesendeter Slot (innerhalb der Toleranz)
+    const due = plan
+      .filter((s) => !daySt.firedSlots.includes(s) && isSlotDue(s, minuteOfDay))
+      .sort((a, b) => a - b)[0];
+    if (due === undefined) return;
 
-    await sendDrop(msg, cfg, state, daySt).catch((e) =>
+    await sendDrop(cfg, guild, daySt, due).catch((e) =>
       ctx.logger.warn('[xp-level-bot] Bonus-Drop fehlgeschlagen:', e.message)
     );
   }
 
-  async function sendDrop(msg, cfg, state, daySt) {
+  async function sendDrop(cfg, guild, daySt, slot) {
     const lang = cfg.lang || 'de';
-    // XP-Zahl ZUERST würfeln, dann in die Nachricht schreiben
+    const channel = await ctx.client.channels.fetch(cfg.mainChannelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return;
+
+    // XP-Zahl würfeln, dann in die Nachricht schreiben
     const xp = rollBonusXp(rng);
     const dropId = randomDropId();
     const container = buildBonusDropEmbed({ lang, xp, dropId });
-    const sent = await msg.channel.send(componentsV2Payload([container])).catch(() => null);
-    if (!sent) return; // ohne Nachricht keinen Zähler erhöhen
+    const sent = await channel.send(componentsV2Payload([container])).catch(() => null);
+    if (!sent) return; // ohne Nachricht keinen Slot als gesendet markieren
 
     const drop = {
       dropId,
-      guildId: msg.guild.id,
-      channelId: msg.channel.id,
+      guildId: cfg.guildId,
+      channelId: cfg.mainChannelId,
       messageId: sent.id,
       xp,
       lang,
@@ -134,20 +128,20 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random, e
       message: sent,
       expiryTimer: null,
     };
+    // 1 Stunde Gültigkeit – danach verfällt der Drop unwiderruflich
     drop.expiryTimer = setTimeout(() => void expireDrop(dropId).catch(() => {}), BONUS_CLAIM_MS);
     if (drop.expiryTimer.unref) drop.expiryTimer.unref();
 
-    state.activeDrop = drop;
+    stateFor(cfg.guildId).activeDrop = drop;
     drops.set(dropId, drop);
 
-    // Tageszähler + Abstand persistieren (überlebt Restarts)
-    daySt.count = (daySt.count || 0) + 1;
-    daySt.lastDropAt = Date.now();
+    // Slot als gesendet markieren (persistiert, überlebt Neustarts)
+    daySt.firedSlots.push(slot);
     cfg.bonusState = daySt;
     ctx.store.setGuild(cfg);
     void ctx.store.flush().catch(() => {});
 
-    ctx.logger.info(`[xp-level-bot] Bonus-Drop in ${msg.guild.name}: ${xp} XP (Tag ${daySt.count}/4)`);
+    ctx.logger.info(`[xp-level-bot] Bonus-Drop in ${guild.name}: ${xp} XP um ${slot} Min (Tag ${daySt.dayKey})`);
   }
 
   /** Drop ohne Gewinner verfallen lassen: Nachricht umbauen, Button deaktivieren. */
@@ -161,7 +155,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random, e
       const msg = drop.message || (await fetchDropMessage(drop));
       if (msg) await msg.edit(componentsV2Payload([buildBonusExpiredEmbed({ lang: drop.lang, xp: drop.xp, dropId })]));
     } catch {}
-    ctx.logger.info(`[xp-level-bot] Bonus-Drop ${dropId} verfallen (niemand war schnell genug)`);
+    ctx.logger.info(`[xp-level-bot] Bonus-Drop ${dropId} verfallen (1 Stunde abgelaufen)`);
   }
 
   async function fetchDropMessage(drop) {
@@ -185,8 +179,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random, e
     const dropId = interaction.customId.slice(BONUS_CLAIM_PREFIX.length);
     const drop = drops.get(dropId);
 
-    // Drop unbekannt (Bot-Neustart) oder schon weg → der Dropslot & die
-    // Nachricht passen nicht mehr zusammen → ehrlich antworten.
+    // Drop unbekannt (Bot-Neustart) oder schon weg / abgelaufen
     if (!drop || drop.claimedBy) {
       const lang = ctx.store.getGuild(interaction.guildId)?.lang || 'en';
       return interaction.reply(
@@ -201,12 +194,14 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random, e
     const cfg = ctx.store.getGuild(drop.guildId);
     const lang = drop.lang || cfg?.lang || 'en';
 
-    // XP gutschreiben (zählt als Aktivität gegen den Inaktivitäts-Streak)
+    // XP gutschreiben (zählt als Aktivität gegen den Inaktivitäts-Decay:
+    // der tägliche XP-Schwund des Einsammlers fällt zurück auf 10%)
     const user = ctx.store.ensureUser(drop.guildId, interaction.user.id);
     const res = applyXpGain(user, drop.xp);
     user.level = res.level;
     user.xp = res.xp;
     user.lastActivity = Date.now();
+    user.inactiveDays = 0; // Decay-Satz wieder auf die Basis (10%)
     ctx.store.setUser(user);
     if (res.leveled) await ctx.store.flush().catch(() => {});
 
@@ -240,7 +235,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random, e
     }
   }
 
-  return { onMessage, handleClaim, expireDrop, states, drops };
+  return { checkScheduled, handleClaim, expireDrop, states, drops };
 }
 
 module.exports = { createBonusDropper, BONUS_CLAIM_PREFIX };

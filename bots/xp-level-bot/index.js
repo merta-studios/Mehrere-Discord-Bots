@@ -11,9 +11,10 @@
  *  - Level-Rollen: /level_roles (Admin-Formular) erstellt/sortiert Belohnungsrollen,
  *    Sync bei Level Up/Down (mehrere Rollen, nie entfernen)
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
- *  - Bonus-Drops: Bei viel Haupt-Chat-Aktivität (>=8 Msg/>=2 Leute/140s) erscheint
- *    manchmal (35% Chance) eine XP-Belohnung (20–40 XP) mit „Einsammeln“-Button –
- *    der erste Klick gewinnt; max. 4/Tag, mind. 1h30 Abstand, verfällt nach 10min
+ *  - Bonus-Drops: Geplant & zeitgesteuert – 2–4 feste Termine pro Tag (06:00–00:30
+ *    Ortszeit, mind. 1h Abstand, pro Server unterschiedlich & stabil) senden eine
+ *    XP-Belohnung (20–40 XP) mit „Einsammeln“-Button; der erste Klick gewinnt,
+ *    der Drop ist 1 Stunde gültig. Einsammeln setzt den Decay wieder auf 10%
  *  - Täglich 0 Uhr (TZ pro Sprache): 10% Decay; wer 24h keine XP verdient hat,
  *    bekommt +5 Prozentpunkte pro weiterem inaktivem Tag (10→15→20→25%…),
  *    Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
@@ -183,10 +184,8 @@ module.exports = {
         // nicht eingerichtet (oder nur Level-Rollen ohne /setup): kein XP, kein Bonus
         if (!cfg || !cfg.leaderboardChannelId) return;
 
-        // Bonus-System beobachtet den Haupt-Chat (vergibt selbst kein XP ohne Button-Klick)
-        if (cfg.mainChannelId && msg.channel.id === cfg.mainChannelId) {
-          void bonusDropper.onMessage(msg, cfg);
-        }
+        // Bonus-System läuft zeitgesteuert (geplante Drops, siehe Scheduler) –
+        // es hängt nicht mehr an Nachrichten-Aktivität im Haupt-Chat.
 
         const content = msg.content || '';
 
