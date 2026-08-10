@@ -123,10 +123,11 @@ function isWithinHours(createdTimestamp, hours = 24) {
 const EVENT_NAME_MAX = 45;
 
 /**
- * Event-Name aufräumen: Der Name reist als `🚀 **Name**`-Zeile in der
+ * Event-Name aufräumen: Der Name reist als `**Name**`-Zeile in der
  * Listen-Nachricht (unsere „Datenbank“) und im täglichen Event-Post mit.
  * Rausfliegen daher: Zeilenumbrüche, `*` (würde das Bold-Parsing brechen),
- * `|` (Zeilen-Trenner), unsichtbare Zeichen und `@` (keine Pings in Namen).
+ * `|` (Zeilen-Trenner), unsichtbare Zeichen, `@` (keine Pings) und das alte
+ * Raketen-Emoji 🚀 (früher als Marker vor Events, jetzt entfernt).
  * Rückgabe: bereinigter Name (1–45 Zeichen) oder null, wenn nichts übrig bleibt.
  */
 function sanitizeEventName(raw) {
@@ -135,6 +136,7 @@ function sanitizeEventName(raw) {
     .replace(/[​‌‍﻿]/g, '') // Zero-Width-Zeichen entfernen
     .replace(/[\r\n\t]+/g, ' ') // Zeilenumbrüche würden das Listen-Parsing brechen
     .replace(/[*|@`~]/g, '') // Format-/Zeilen-Brecher & Pings entfernen
+    .replace(/🚀/g, '') // altes Event-Marker-Emoji entfernen
     .replace(/\s+/g, ' ')
     .trim();
   if (!name) return null;

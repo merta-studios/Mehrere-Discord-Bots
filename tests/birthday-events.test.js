@@ -186,7 +186,9 @@ test('Container-Roundtrip: Events & Geburtstage mischen sich in derselben Liste'
       lang,
     });
     const text = textOf(container.toJSON());
-    assert.ok(text.includes('🚀 **Sommerfest**'), `${lang}: Event mit Name statt Erwähnung`);
+    // Raketen-Emoji wurde entfernt – Events stehen jetzt nur fett, ohne 🚀
+    assert.ok(text.includes('**Sommerfest**'), `${lang}: Event mit Name statt Erwähnung`);
+    assert.ok(!text.includes('🚀 **Sommerfest**'), `${lang}: kein Raketen-Emoji mehr in der Liste`);
     const parsed = parseListEmbed({ components: [container.toJSON()] });
     assert.equal(parsed.birthdays.length, 1, `${lang}: Geburtstag bleibt`);
     assert.equal(parsed.events.length, 2, `${lang}: beide Events lesbar`);
@@ -232,9 +234,10 @@ test('/event create öffnet Formular, Bestätigen sortiert das Event in die List
   assert.equal(h.entry.events.length, 1, 'Event eingetragen');
   assert.equal(h.entry.events[0].name, 'Spieleabend');
   assert.equal(h.entry.events[0].day, in2.day);
-  // und in der gerenderten Listen-Nachricht sichtbar
+  // und in der gerenderten Listen-Nachricht sichtbar (ohne Rakete)
   const listText = textOf(h.channel.listMsg);
-  assert.ok(listText.includes('🚀 **Spieleabend**'), 'Event steht in der Listen-Nachricht');
+  assert.ok(listText.includes('**Spieleabend**'), 'Event steht in der Listen-Nachricht');
+  assert.ok(!listText.includes('🚀 **Spieleabend**'), 'kein Raketen-Emoji mehr');
 });
 
 test('/event limit: maximal 5 Events gleichzeitig', async () => {

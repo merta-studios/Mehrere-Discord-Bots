@@ -34,7 +34,7 @@ const {
   formatDaysUntil,
   formatToday,
 } = require('./languages');
-const { monthOrder, pad, tzParts, daysUntilNext } = require('./logic');
+const { pad, tzParts, daysUntilNext } = require('./logic');
 
 const COLORS = {
   list: null, confirm: null, success: null, error: null, congrats: null, help: null, panel: null,
@@ -81,22 +81,23 @@ function extractAllText(obj) {
  * - Titel „🎂 Geburtstage“ oben beim Datumstext
  * - Trennlinie (Divider) zwischen Header und Monaten
  * - Monate als formatierte Abschnitte mit lokalisiertem Countdown hinter jeder Erwähnung
- *   (Events stehen mit 🚀 und ihrem Namen statt einer Nutzer-Erwähnung in derselben Liste)
+ *   (Events stehen mit ihrem Namen statt einer Nutzer-Erwähnung in derselben Liste –
+ *   OHNE Raketen-Emoji, das wurde entfernt)
+ * - Sortierung nach Tagen bis zum nächsten Geburtstag (daysUntilNext), nicht nur nach Monat:
+ *   Heute = „Heute“, danach chronologisch, vergangene Geburtstage rutschen ganz nach unten
+ *   und sind bereit fürs nächste Jahr. Events werden nach Ablauf gelöscht (siehe store).
  * - Trennlinie vor dem Button
  * - „Geburtstag eintragen“-Button direkt im Container
  * - Kein farbiger Rand, kein sichtbarer Footer, kein störender Timestamp
- * - Unsichtbarer Marker für die Wiedererkennung (inkl. optionaler Geburtstagsrolle:
- *   `bday::v1::<lang>` oder `bday::v1::<lang>:<roleId>`)
+ * - Unsichtbarer Marker für die Wiedererkennung (inkl. optionaler Geburtstagsrolle)
  */
 function buildListEmbed({ birthdays = [], events = [], lang = 'de', now = new Date(), birthdayRoleId = null }) {
   const tz = tzOf(lang);
-  const cur = tzParts(tz, now);
   const months = LANGS[lang].months;
 
   const container = new ContainerBuilder();
 
   // Header: Titel + Datumstext zusammen oben, plus unsichtbarer Sprach-Marker
-  // (die optionale Geburtstagsrollen-ID reist im selben Marker mit)
   const marker = birthdayRoleId ? `${LIST_MARKER}${lang}:${birthdayRoleId}` : `${LIST_MARKER}${lang}`;
   const headerLines = [
     `# ${t('listTitle', lang)}`,
@@ -110,35 +111,66 @@ function buildListEmbed({ birthdays = [], events = [], lang = 'de', now = new Da
 
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
 
-  // Geburtstage + Events gemeinsam nach Monaten sortiert (aktueller Monat zuerst)
-  const entries = [
+  // Geburtstage + Events gemeinsam nach Tagen bis zum nächsten Vorkommen sortiert
+  // → „Heute“ (0 Tage) ganz oben, vergangene Geburtstage (z.B. 364 Tage) ganz unten
+  const rawEntries = [
     ...birthdays.map((b) => ({ kind: 'user', userId: b.userId, day: b.day, month: b.month })),
     ...events.map((e) => ({ kind: 'event', name: e.name, day: e.day, month: e.month })),
   ];
-  const activeMonths = monthOrder(cur.month).filter((mo) => entries.some((e) => e.month === mo));
 
-  if (!activeMonths.length) {
+  if (!rawEntries.length) {
     container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent(`🎈 ${t('listEmpty', lang)}`)
     );
   } else {
-    for (let i = 0; i < activeMonths.length; i++) {
-      const mo = activeMonths[i];
-      const lines = entries
-        .filter((b) => b.month === mo)
-        .sort((a, b) => a.day - b.day)
-        .map((b) => {
-          const days = daysUntilNext(b.day, b.month, tz, now);
-          if (b.kind === 'event') {
-            return `${pad(b.day)}.${pad(b.month)} | 🚀 **${b.name}** – ${formatDaysUntil(days, lang)}`;
-          }
-          return `${pad(b.day)}.${pad(b.month)} | <@${b.userId}> – ${formatDaysUntil(days, lang)}`;
-        });
+    const enriched = rawEntries
+      .map((e) => ({
+        ...e,
+        days: daysUntilNext(e.day, e.month, tz, now),
+      }))
+      .sort((a, b) => {
+        if (a.days !== b.days) return a.days - b.days;
+        // Tie-Breaker: Monat, dann Tag, dann Name/User
+        if (a.month !== b.month) return a.month - b.month;
+        if (a.day !== b.day) return a.day - b.day;
+        if (a.kind !== b.kind) return a.kind === 'user' ? -1 : 1;
+        return 0;
+      });
 
-      const monthText = `### ${months[mo - 1]}\n${lines.join('\n')}`;
+    // Gruppiere nach Monat in der sortierten Reihenfolge.
+    // Erlaubt, dass derselbe Monat zweimal vorkommt (z.B. August oben für kommende,
+    // August unten für bereits vergangene Geburtstage) – so rutschen vergangene
+    // wirklich ganz nach unten.
+    const sections = [];
+    let currentMonth = null;
+    let currentLines = [];
+
+    for (const e of enriched) {
+      if (e.month !== currentMonth) {
+        if (currentLines.length) {
+          sections.push({ month: currentMonth, lines: currentLines });
+        }
+        currentMonth = e.month;
+        currentLines = [];
+      }
+      const daysText = formatDaysUntil(e.days, lang);
+      if (e.kind === 'event') {
+        // Raketen-Emoji entfernt – Events wie normale Einträge, nur fett
+        currentLines.push(`${pad(e.day)}.${pad(e.month)} | **${e.name}** – ${daysText}`);
+      } else {
+        currentLines.push(`${pad(e.day)}.${pad(e.month)} | <@${e.userId}> – ${daysText}`);
+      }
+    }
+    if (currentLines.length) {
+      sections.push({ month: currentMonth, lines: currentLines });
+    }
+
+    for (let i = 0; i < sections.length; i++) {
+      const sec = sections[i];
+      const monthName = months[sec.month - 1] || `Month ${sec.month}`;
+      const monthText = `### ${monthName}\n${sec.lines.join('\n')}`;
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(monthText));
-
-      if (i < activeMonths.length - 1) {
+      if (i < sections.length - 1) {
         container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
       }
     }
@@ -178,10 +210,8 @@ function parseListEmbed(msg) {
   const events = [];
   const seen = new Set();
   for (const line of text.split('\n')) {
-    // Der Countdown ist absichtlich außerhalb der gespeicherten Daten: Beim
-    // nächsten Rendern wird er anhand des aktuellen Tages neu berechnet.
-    // Alte Listen ohne Countdown bleiben ebenfalls lesbar.
-    const m = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*<@!?(\d+)>(?:\s+[-–—]\s+.*)?$/);
+    // Geburtstage: „14.08 | <@123> – Heute / in X Tagen“
+    const m = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*<@!?(\d+)>(?:\s+[–—-]\s+.*)?$/);
     if (m) {
       const key = `${m[3]}:${m[2]}:${m[1]}`;
       if (!seen.has(key)) {
@@ -190,10 +220,12 @@ function parseListEmbed(msg) {
       }
       continue;
     }
-    // Event-Zeilen: „05.12 | 🚀 **Name** – …“ (Name statt Nutzer-Erwähnung)
-    const ev = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*(?:🚀\s*)?\*\*(.+?)\*\*(?:\s+[-–—]\s+.*)?$/);
+    // Event-Zeilen: „05.12 | **Name** – …“ (optional altes 🚀 noch tolerieren für Migration)
+    const ev = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*(?:🚀\s*)?\*\*(.+?)\*\*(?:\s+[–—-]\s+.*)?$/);
     if (ev) {
-      const name = ev[3].trim();
+      let name = ev[3].trim();
+      // Altes Raketen-Emoji aus dem Namen entfernen, falls noch in alten Listen vorhanden
+      name = name.replace(/🚀/g, '').trim();
       if (!name) continue;
       const key = `event:${name.toLowerCase()}:${ev[2]}:${ev[1]}`;
       if (!seen.has(key)) {
@@ -291,7 +323,7 @@ function buildDeleteConfirmationEmbed({ lang, target }) {
 
   return new ContainerBuilder()
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`# ${t('deleteConfirmTitle', lang)}\\n\\n${desc}`)
+      new TextDisplayBuilder().setContent(`# ${t('deleteConfirmTitle', lang)}\n\n${desc}`)
     )
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
     .addActionRowComponents(confirmationRow(lang));
