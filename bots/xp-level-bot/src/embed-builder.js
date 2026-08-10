@@ -112,7 +112,7 @@ function buildRankEmbed({ lang, userId, rankInfo, avatarUrl, now=new Date() }) {
   const filled = Math.round((percent/100)*BAR_SEGMENTS);
   const bar = '⬛'.repeat(filled) + '⬜'.repeat(BAR_SEGMENTS-filled);
   const remaining = Math.max(0, needed - xp);
-  // Wie viele XP gehen heute Nacht um 0 Uhr verloren? (10%, bei Inaktivität mehr)
+  // Wie viele XP gehen heute Nacht um 0 Uhr verloren? (5%, bei Inaktivität mehr)
   const decayInfo = nextDecayInfo(rankInfo.user, now.getTime());
   const body = t('rankBody', lang, {
     user: `<@${userId}>`,
