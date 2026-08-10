@@ -256,30 +256,36 @@ module.exports = {
     });
 
     async function handleLevelChange(ctx, sourceMsg, user, res, cfg) {
-      const guild = sourceMsg.guild;
+      // Gilde robust holen: sourceMsg kann z.B. bei Bonus-Drops eine Message ohne vollen Guild-Cache sein
+      let guild = sourceMsg?.guild || null;
+      if (!guild) {
+        try {
+          guild = ctx.client.guilds.cache.get(cfg.guildId) || (await ctx.client.guilds.fetch(cfg.guildId).catch(() => null));
+        } catch {}
+      }
+      if (!guild) {
+        logger.warn(`[xp-level-bot] handleLevelChange: keine Gilde für ${cfg.guildId} gefunden`);
+        return;
+      }
       const lang = cfg.lang || 'de';
       const { buildLevelUpEmbed, buildLevelDownEmbed } = require('./embed-builder');
       const { componentsV2Payload } = require('./message-payload');
 
-      // Nickname ZUVERLÄSSIG aktualisieren: Top 5 + betroffener Nutzer werden
-      // geprüft, damit verrückte Plätze (z.B. neu Platz 2 statt 1) sofort die
-      // richtige Medaille im Anzeigenamen bekommen
+      // Nickname ZUVERLÄSSIG aktualisieren
       try {
         await refreshRankNicknames(ctx, guild, user.userId, lang);
       } catch (e) {
         logger.warn('[xp-level-bot] nick refresh fail', e.message);
       }
 
-      // Level-Rollen synchronisieren: fehlende Rollen adden (mehrere möglich),
-      // vorhandene werden bei Level-Down nie entfernt
+      // Level-Rollen synchronisieren
       try {
         await syncLevelRolesForUser({ ctx, guild, userId: user.userId, level: res.level });
       } catch (e) {
         logger.warn('[xp-level-bot] level roles sync fail', e.message);
       }
 
-      // Leaderboard: stündlich + zusätzlich bei jedem Level-Up/Down,
-      // aber frühestens alle 10 Minuten (Throttle im Scheduler)
+      // Leaderboard: stündlich + zusätzlich bei jedem Level-Up/Down (max alle 10 Min)
       try {
         const { maybeRefreshLeaderboard } = require('./scheduler');
         if (cfg && cfg.leaderboardChannelId) await maybeRefreshLeaderboard(ctx, cfg, guild);
@@ -287,28 +293,47 @@ module.exports = {
         logger.warn('[xp-level-bot] leaderboard refresh fail', e.message);
       }
 
-      // Announcement: versuche erst bei der Nachricht zu replyen, sonst Haupt-Chat
+      // Announcement: IMMER in den Haupt-Chat (zuverlässig), nicht nur als Reply im Random-Channel
       const container = res.leveledUp
         ? buildLevelUpEmbed({ lang, userId: user.userId, level: res.level, xp: res.xp })
         : buildLevelDownEmbed({ lang, userId: user.userId, level: res.level, xp: res.xp });
-      let sent = false;
+
+      // 1. Haupt-Channel (aus /setup)
       try {
-        // Versuche reply auf die auslösende Nachricht
+        let ch = null;
+        try {
+          ch = await guild.channels.fetch(cfg.mainChannelId).catch(() => null);
+        } catch {}
+        if (ch && ch.isTextBased()) {
+          await ch.send(componentsV2Payload([container]));
+          logger.info(`[xp-level-bot] Level-${res.leveledUp ? 'Up' : 'Down'} ${user.userId} → Lvl ${res.level} in ${guild.name} (mainChannel)`);
+          return;
+        }
+      } catch (e) {
+        logger.warn(`[xp-level-bot] Level-Ankündigung mainChannel fehlgeschlagen: ${e.message}`);
+      }
+
+      // 2. Fallback: System-Channel
+      try {
+        const sys = guild.systemChannel;
+        if (sys && sys.isTextBased()) {
+          await sys.send(componentsV2Payload([container]));
+          logger.info(`[xp-level-bot] Level-${res.leveledUp ? 'Up' : 'Down'} ${user.userId} → Lvl ${res.level} in ${guild.name} (systemChannel fallback)`);
+          return;
+        }
+      } catch {}
+
+      // 3. Letzter Fallback: auf die auslösende Nachricht replyen (falls vorhanden)
+      try {
         if (
-          sourceMsg.channel?.isTextBased() &&
+          sourceMsg?.channel?.isTextBased() &&
+          guild.members.me &&
           sourceMsg.channel.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.SendMessages)
         ) {
           await sourceMsg.reply(componentsV2Payload([container])).catch(() => {});
-          sent = true;
+          logger.info(`[xp-level-bot] Level-${res.leveledUp ? 'Up' : 'Down'} ${user.userId} → Lvl ${res.level} in ${guild.name} (reply fallback)`);
         }
       } catch {}
-      if (!sent) {
-        try {
-          let ch = await guild.channels.fetch(cfg.mainChannelId).catch(() => null);
-          if (!ch || !ch.isTextBased()) ch = guild.systemChannel;
-          if (ch && ch.isTextBased()) await ch.send(componentsV2Payload([container])).catch(() => {});
-        } catch {}
-      }
     }
 
     // ---------------- Guild Member Remove: Daten löschen ----------------

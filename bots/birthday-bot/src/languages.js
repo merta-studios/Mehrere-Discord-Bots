@@ -205,6 +205,18 @@ const T = {
     zh: '{count}天后',
     it: 'tra {count} giorni',
   },
+  birthdayToday: {
+    de: 'Heute',
+    en: 'Today',
+    fr: "Aujourd'hui",
+    es: 'Hoy',
+    pt: 'Hoje',
+    ru: 'Сегодня',
+    ja: '今日',
+    ko: '오늘',
+    zh: '今天',
+    it: 'Oggi',
+  },
   listEmpty: {
     de: 'Noch niemand eingetragen. Klicke unten auf den Button und sei die/der Erste! 🎈',
     en: 'Nobody has entered a birthday yet. Click the button below and be the first! 🎈',
@@ -1474,9 +1486,11 @@ function formatBirthday(day, month, lang) {
  * Formatiert den Countdown hinter einer Geburtstags-Erwähnung.
  * Für die meisten Sprachen reicht die Unterscheidung 1/mehrere; Russisch
  * benötigt zusätzlich die Formen für 2–4 und 5–20 (inkl. der Zehnerregeln).
+ * 0 Tage = Heute.
  */
 function formatDaysUntil(days, lang) {
   const count = Math.max(0, Math.round(Number(days) || 0));
+  if (count === 0) return t('birthdayToday', lang);
   let category = count === 1 ? 'one' : 'other';
 
   if (lang === 'ru') {
