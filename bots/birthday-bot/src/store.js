@@ -8,6 +8,10 @@
  * er Channels nach dem Marker „bday::v1::…“ oder dem Button „bday_add“
  * durchsucht.
  *
+ * Mitgereist in der Liste:
+ * - Events als „🚀 **Name**“-Zeilen (mit in die Monate einsortiert)
+ * - die optionale Geburtstagsrollen-ID im Marker (bday::v1::<lang>:<roleId>)
+ *
  * Beim stündlichen Refresh wird die Nachricht NEU AUSGELESEN, Nutzer, die
  * den Server verlassen haben, werden entfernt, und der Container wird
  * frisch gebaut (aktueller Monat zuerst).
@@ -19,14 +23,20 @@ const {
   buildListEmbed,
   parseListEmbed,
   buildCongratsEmbed,
+  buildEventCongratsEmbed,
+  encodeEventName,
   LIST_MARKER,
 } = require('./embed-builder');
 const { tzParts, todayKey, pad } = require('./logic');
 const { tzOf } = require('./languages');
 const { componentsV2Payload } = require('./message-payload');
 
+const BIRTHDAY_ROLE_DURATION_MS = 24 * 60 * 60 * 1000; // Geburtstagsrolle: 24 Stunden
+
 function createStore({ client, logger }) {
   const registry = new Map(); // guildId -> entry
+  // Laufende 24h-Timer für vergebene Geburtstagsrollen: "guildId:userId" -> Timeout
+  const roleTimers = new Map();
 
   /**
    * Durchsucht alle sichtbaren Textchannels einer Gilde nach der
@@ -78,11 +88,13 @@ function createStore({ client, logger }) {
             messageId: found.message.id,
             lang: parsed.lang,
             birthdays: parsed.birthdays,
+            events: parsed.events || [],
+            birthdayRoleId: parsed.birthdayRoleId || null,
             lastRenderDay: null,
             lastBirthdayCheckDay: null,
           });
           logger.info(
-            `[birthday-bot] Liste auf „${guild.name}“ gefunden (${parsed.birthdays.length} Geburtstage, Sprache ${parsed.lang}).`
+            `[birthday-bot] Liste auf „${guild.name}“ gefunden (${parsed.birthdays.length} Geburtstage, ${(parsed.events || []).length} Events, Sprache ${parsed.lang}).`
           );
         }
       } catch {
@@ -102,9 +114,9 @@ function createStore({ client, logger }) {
    * `apply(birthdays)` ist optional: Damit können Änderungen (z. B. ein
    * neuer Eintrag) direkt auf den frisch ausgelesenen Stand angewendet
    * werden, bevor neu gebaut wird – sonst würden sie vom alten
-   * Stand überschrieben.
+   * Stand überschrieben. `applyEvents(events)` macht dasselbe für Events.
    */
-  async function refresh(entry, apply) {
+  async function refresh(entry, apply, applyEvents) {
     const guild = client.guilds.cache.get(entry.guildId);
     if (!guild) return null;
 
@@ -115,28 +127,44 @@ function createStore({ client, logger }) {
 
     let lang = entry.lang;
     let birthdays = entry.birthdays;
+    let events = entry.events || [];
 
     if (msg) {
       const parsed = parseListEmbed(msg);
       if (parsed) {
         lang = parsed.lang;
         birthdays = parsed.birthdays;
+        events = parsed.events || [];
+        if (parsed.birthdayRoleId !== undefined) entry.birthdayRoleId = parsed.birthdayRoleId;
       }
     }
 
     if (typeof apply === 'function') birthdays = apply(birthdays);
+    if (typeof applyEvents === 'function') events = applyEvents(events);
 
     birthdays = await filterMembers(guild, birthdays);
-  // Deduplizieren nach userId + Tag + Monat
-  const seen = new Set();
-  birthdays = birthdays.filter((b) => {
-    const key = `${b.userId}:${b.month}:${b.day}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    // Deduplizieren: Nutzer nach userId+Tag+Monat, Events nach Name+Tag+Monat
+    const seen = new Set();
+    birthdays = birthdays.filter((b) => {
+      const key = `${b.userId}:${b.month}:${b.day}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const seenEvents = new Set();
+    events = events.filter((e) => {
+      const key = `${String(e.name).toLowerCase()}:${e.month}:${e.day}`;
+      if (seenEvents.has(key)) return false;
+      seenEvents.add(key);
+      return true;
+    });
 
-    const container = buildListEmbed({ birthdays, lang });
+    const container = buildListEmbed({
+      birthdays,
+      events,
+      lang,
+      birthdayRoleId: entry.birthdayRoleId || null,
+    });
 
     if (msg) {
       await msg.edit(componentsV2Payload([container], { embeds: [] })).catch(() => {});
@@ -148,6 +176,7 @@ function createStore({ client, logger }) {
 
     entry.lang = lang;
     entry.birthdays = birthdays;
+    entry.events = events;
     entry.lastRenderDay = todayKey(lang);
     return msg;
   }
@@ -172,10 +201,90 @@ function createStore({ client, logger }) {
   }
 
   /**
-   * Täglicher Check um 0 Uhr: Wer hat heute Geburtstag?
-   * Pro Geburtstagskind wird genau EIN Gruß-Container gesendet – Doppel-
+   * Vergibt die Geburtstagsrolle (falls konfiguriert) für 24 Stunden an ein
+   * Geburtstagskind. Der Abbaupfad ist doppelt abgesichert: ein 24h-Timer
+   * (flüchtig) plus das stündliche cleanupBirthdayRoles (überlebt Restarts,
+   * weil es anhand der Liste prüft, ob der heutige Tag noch der Geburtstag ist).
+   */
+  async function assignBirthdayRole(guild, member, entry) {
+    const roleId = entry.birthdayRoleId;
+    if (!roleId || !member) return;
+    try {
+      const role = guild.roles?.cache?.get(roleId) || (await guild.roles?.fetch(roleId).catch(() => null));
+      if (!role) return; // Rolle wurde gelöscht
+      if (member.roles?.cache?.has(roleId)) {
+        scheduleRoleRemoval(guild, member.id, roleId); // Timer trotzdem frisch stellen
+        return;
+      }
+      await member.roles.add(roleId, 'Geburtstagsrolle: 24 Stunden zum Geburtstag');
+      logger.info(`[birthday-bot] Geburtstagsrolle an ${member.id} auf ${guild.name} vergeben (24h)`);
+      scheduleRoleRemoval(guild, member.id, roleId);
+    } catch (err) {
+      logger.warn(`[birthday-bot] Geburtstagsrolle konnte nicht vergeben werden (fehlen Rechte „Rollen verwalten“?):`, err.message);
+    }
+  }
+
+  function scheduleRoleRemoval(guild, userId, roleId, ms = BIRTHDAY_ROLE_DURATION_MS) {
+    const key = `${guild.id}:${userId}`;
+    const old = roleTimers.get(key);
+    if (old) clearTimeout(old);
+    const timer = setTimeout(() => {
+      roleTimers.delete(key);
+      void (async () => {
+        try {
+          const member = await guild.members.fetch(userId).catch(() => null);
+          if (member?.roles?.cache?.has(roleId)) {
+            await member.roles.remove(roleId, 'Geburtstagsrolle: 24 Stunden vorbei').catch(() => {});
+            logger.info(`[birthday-bot] Geburtstagsrolle von ${userId} nach 24h entfernt`);
+          }
+        } catch {}
+      })();
+    }, ms);
+    if (timer.unref) timer.unref();
+    roleTimers.set(key, timer);
+  }
+
+  /**
+   * Stündliche Absicherung: Jeder, der die Geburtstagsrolle trägt, deren
+   * Geburtstag aber NICHT heute ist, verliert sie wieder (self-healing,
+   * auch nach Bot-Neustarts).
+   */
+  async function cleanupBirthdayRoles(entry) {
+    const roleId = entry.birthdayRoleId;
+    if (!roleId) return;
+    const guild = client.guilds.cache.get(entry.guildId);
+    if (!guild) return;
+    const t = tzParts(tzOf(entry.lang));
+    const todays = new Set(
+      (entry.birthdays || [])
+        .filter((b) => b.month === t.month && b.day === t.day)
+        .map((b) => String(b.userId))
+    );
+    let members;
+    try {
+      members = await guild.members.fetch();
+    } catch {
+      return;
+    }
+    const role = guild.roles?.cache?.get(roleId) || (await guild.roles?.fetch(roleId).catch(() => null));
+    if (!role) return; // Rolle gelöscht → nichts zu tun
+    for (const member of members.values()) {
+      if (!member.roles?.cache?.has(roleId)) continue;
+      if (todays.has(String(member.id))) continue; // hat heute Geburtstag → Rolle bleibt
+      await member.roles.remove(roleId, 'Geburtstag vorbei – Rolle zurückgenommen').catch(() => {});
+      logger.info(`[birthday-bot] Geburtstagsrolle von ${member.id} (${guild.name}) entfernt (Geburtstag vorbei)`);
+      const key = `${guild.id}:${member.id}`;
+      if (roleTimers.has(key)) { clearTimeout(roleTimers.get(key)); roleTimers.delete(key); }
+    }
+  }
+
+  /**
+   * Täglicher Check um 0 Uhr: Wer hat heute Geburtstag? Welches Event ist heute?
+   * Pro Geburtstagskind/Event wird genau EIN Container gesendet – Doppel-
    * sendungen werden über den Marker verhindert (der Bot schaut nach,
    * ob der Gruß für heute schon existiert).
+   * Events landen danach NICHT wieder in der Liste wie Geburtstage, sondern
+   * werden dort gelöscht.
    */
   async function birthdayCheck(entry) {
     const guild = client.guilds.cache.get(entry.guildId);
@@ -188,21 +297,28 @@ function createStore({ client, logger }) {
     const t = tzParts(tz);
     const dateKey = `${t.year}-${pad(t.month)}-${pad(t.day)}`;
 
-    const todays = entry.birthdays.filter((b) => b.month === t.month && b.day === t.day);
-    if (!todays.length) return;
+    const todays = (entry.birthdays || []).filter((b) => b.month === t.month && b.day === t.day);
+    const todaysEvents = (entry.events || []).filter((e) => e.month === t.month && e.day === t.day);
+    if (!todays.length && !todaysEvents.length) return;
 
-    // Bereits gesendete Grüße finden (nur die letzten 50 Nachrichten).
+    // Bereits gesendete Grüße/Event-Posts finden (nur die letzten 50 Nachrichten).
     const recent = await channel.messages.fetch({ limit: 50 }).catch(() => []);
     const recentArr = recent instanceof Map ? [...recent.values()] : [...recent];
-
-    for (const b of todays) {
-      const marker = `bday-congrats:${dateKey}:${b.userId}`;
-      const alreadySent = recentArr.some((m) =>
+    const wasSent = (marker) =>
+      recentArr.some((m) =>
         JSON.stringify(m.components || []).includes(marker) ||
         JSON.stringify(m.embeds || []).includes(marker) ||
         (m.content || '').includes(marker)
       );
-      if (alreadySent) continue;
+
+    for (const b of todays) {
+      const marker = `bday-congrats:${dateKey}:${b.userId}`;
+      if (wasSent(marker)) {
+        // Gruß schon da (z.B. nach Restart) – Rolle aber sicherheitshalber setzen
+        const member = await guild.members.fetch(b.userId).catch(() => null);
+        if (member && entry.birthdayRoleId) await assignBirthdayRole(guild, member, entry);
+        continue;
+      }
 
       const member = await guild.members.fetch(b.userId).catch(() => null);
       if (!member) continue;
@@ -211,6 +327,29 @@ function createStore({ client, logger }) {
       await channel.send(componentsV2Payload([container])).catch((err) => {
         logger.warn(`[birthday-bot] Gruß für ${b.userId} konnte nicht gesendet werden:`, err.message);
       });
+      // Geburtstagsrolle für 24 Stunden vergeben (falls beim /setup gewählt)
+      if (entry.birthdayRoleId) await assignBirthdayRole(guild, member, entry);
+    }
+
+    // Events: ähnliche 0-Uhr-Nachricht (eigener Titel/Text/Button), danach
+    // aus der Liste ENTFERNEN (Events rotieren nicht wie Geburtstage).
+    let fired = 0;
+    for (const ev of todaysEvents) {
+      const marker = `bday-event:${dateKey}:${encodeEventName(ev.name)}`;
+      if (!wasSent(marker)) {
+        const { container } = buildEventCongratsEmbed({ name: ev.name, lang: entry.lang, dateKey });
+        await channel.send(componentsV2Payload([container])).catch((err) => {
+          logger.warn(`[birthday-bot] Event-Post „${ev.name}“ konnte nicht gesendet werden:`, err.message);
+        });
+        fired++;
+        logger.info(`[birthday-bot] Event „${ev.name}“ auf ${guild.name} gefeuert`);
+      }
+    }
+    if (todaysEvents.length) {
+      // Fällige Events aus der Liste löschen (nicht ans Listen-Ende rotieren)
+      await refresh(entry, null, (events) =>
+        events.filter((e) => !(e.month === t.month && e.day === t.day))
+      );
     }
   }
 
@@ -223,6 +362,10 @@ function createStore({ client, logger }) {
     scanGuilds,
     refresh,
     birthdayCheck,
+    assignBirthdayRole,
+    cleanupBirthdayRoles,
+    BIRTHDAY_ROLE_DURATION_MS,
+    _roleTimers: roleTimers,
   };
 }
 

@@ -68,6 +68,7 @@ module.exports = {
       store: createStore({ client, logger }),
       pending: new Map(), // userId -> {day, month, input, fuzzy, lang}
       pendingAdmin: new Map(), // userId -> {targetId, guildId}
+      pendingEvent: new Map(), // userId -> {day, month, name, lang, guildId}
       panelSessions: new Map(), // userId -> {page, guildId, leaving, inviteUrl}
     };
 

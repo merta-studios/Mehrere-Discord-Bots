@@ -95,6 +95,8 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
       // Prüfe ob user noch in Channel ist
       const member = await guild.members.fetch(sess.userId).catch(()=>null);
       if (!member || member.voice.channelId !== sess.channelId) { sessions.delete(k); continue; }
+      // Bots bekommen keinerlei XP (auch kein Voice-XP)
+      if (member.user?.bot) { sessions.delete(k); continue; }
 
       const vs = member.voice;
       const muted = vs.selfMute || vs.serverMute || vs.selfDeaf || vs.serverDeaf || vs.suppress;
@@ -149,11 +151,13 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
     try {
       const cfg = getGuildConfig(guildId);
       if (!cfg || !cfg.leaderboardChannelId) return;
+      const wasNewUser = !store.getUser(guildId, userId);
       const user = store.ensureUser(guildId, userId);
       const { applyXpGain, xpNeeded } = require('./logic');
       const res = applyXpGain(user, 25);
       user.level = res.level;
       user.xp = res.xp;
+      user.lastActivity = Date.now(); // Voice-XP zählt als Aktivität für den Decay
       store.setUser(user);
 
       const lang = cfg.lang || 'de';
@@ -169,6 +173,9 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
         await refreshRankNicknames(miniCtx, guild, userId, lang).catch(()=>{});
         // Leaderboard bei Level-Up aktualisieren (max. alle 10 Minuten)
         await maybeRefreshLeaderboard(miniCtx, cfg, guild).catch(()=>{});
+      } else if (wasNewUser) {
+        // Allererste XP überhaupt (per Voice): auch dann sofort den [Lvl 1]-Tag setzen
+        await refreshRankNicknames(miniCtx, guild, userId, lang).catch(()=>{});
       } else {
         // XP-only-Gewinn: Top-3-Ränge können sich verschieben -> Medaillen prüfen
         try {

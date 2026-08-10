@@ -23,6 +23,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  StringSelectMenuBuilder,
 } = require('discord.js');
 
 const {
@@ -80,12 +81,14 @@ function extractAllText(obj) {
  * - Titel „🎂 Geburtstage“ oben beim Datumstext
  * - Trennlinie (Divider) zwischen Header und Monaten
  * - Monate als formatierte Abschnitte mit lokalisiertem Countdown hinter jeder Erwähnung
+ *   (Events stehen mit 🚀 und ihrem Namen statt einer Nutzer-Erwähnung in derselben Liste)
  * - Trennlinie vor dem Button
  * - „Geburtstag eintragen“-Button direkt im Container
  * - Kein farbiger Rand, kein sichtbarer Footer, kein störender Timestamp
- * - Unsichtbarer Marker für die Wiedererkennung
+ * - Unsichtbarer Marker für die Wiedererkennung (inkl. optionaler Geburtstagsrolle:
+ *   `bday::v1::<lang>` oder `bday::v1::<lang>:<roleId>`)
  */
-function buildListEmbed({ birthdays = [], lang = 'de', now = new Date() }) {
+function buildListEmbed({ birthdays = [], events = [], lang = 'de', now = new Date(), birthdayRoleId = null }) {
   const tz = tzOf(lang);
   const cur = tzParts(tz, now);
   const months = LANGS[lang].months;
@@ -93,11 +96,13 @@ function buildListEmbed({ birthdays = [], lang = 'de', now = new Date() }) {
   const container = new ContainerBuilder();
 
   // Header: Titel + Datumstext zusammen oben, plus unsichtbarer Sprach-Marker
+  // (die optionale Geburtstagsrollen-ID reist im selben Marker mit)
+  const marker = birthdayRoleId ? `${LIST_MARKER}${lang}:${birthdayRoleId}` : `${LIST_MARKER}${lang}`;
   const headerLines = [
     `# ${t('listTitle', lang)}`,
     `## 📅 ${formatToday(lang, now)}`,
     t('listTagline', lang),
-    `\u200B${LIST_MARKER}${lang}\u200B`,
+    `\u200B${marker}\u200B`,
   ];
   container.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(headerLines.join('\n'))
@@ -105,10 +110,12 @@ function buildListEmbed({ birthdays = [], lang = 'de', now = new Date() }) {
 
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
 
-  // Geburtstage nach Monaten sortiert (aktueller Monat zuerst)
-  const activeMonths = monthOrder(cur.month).filter((mo) =>
-    birthdays.some((b) => b.month === mo)
-  );
+  // Geburtstage + Events gemeinsam nach Monaten sortiert (aktueller Monat zuerst)
+  const entries = [
+    ...birthdays.map((b) => ({ kind: 'user', userId: b.userId, day: b.day, month: b.month })),
+    ...events.map((e) => ({ kind: 'event', name: e.name, day: e.day, month: e.month })),
+  ];
+  const activeMonths = monthOrder(cur.month).filter((mo) => entries.some((e) => e.month === mo));
 
   if (!activeMonths.length) {
     container.addTextDisplayComponents(
@@ -117,11 +124,14 @@ function buildListEmbed({ birthdays = [], lang = 'de', now = new Date() }) {
   } else {
     for (let i = 0; i < activeMonths.length; i++) {
       const mo = activeMonths[i];
-      const lines = birthdays
+      const lines = entries
         .filter((b) => b.month === mo)
         .sort((a, b) => a.day - b.day)
         .map((b) => {
           const days = daysUntilNext(b.day, b.month, tz, now);
+          if (b.kind === 'event') {
+            return `${pad(b.day)}.${pad(b.month)} | 🚀 **${b.name}** – ${formatDaysUntil(days, lang)}`;
+          }
           return `${pad(b.day)}.${pad(b.month)} | <@${b.userId}> – ${formatDaysUntil(days, lang)}`;
         });
 
@@ -151,17 +161,21 @@ function listActionRow(lang) {
 }
 
 /**
- * Liest Sprache + Geburtstage aus einer Listen-Nachricht (Container oder Embed) zurück.
- * Rückgabe: { lang, birthdays: [{userId, day, month}] } oder null.
+ * Liest Sprache + Geburtstage + Events + Geburtstagsrolle aus einer
+ * Listen-Nachricht (Container oder Embed) zurück.
+ * Rückgabe: { lang, birthdays: [{userId, day, month}], events: [{name, day, month}],
+ *             birthdayRoleId } oder null.
  */
 function parseListEmbed(msg) {
   if (!msg) return null;
   const text = extractAllText(msg);
 
-  const marker = text.match(/bday::v1::([a-z]{2,5})/i);
+  const marker = text.match(/bday::v1::([a-z]{2,5})(?::(\d+))?/i);
   const lang = marker ? marker[1].toLowerCase() : 'en';
+  const birthdayRoleId = marker && marker[2] ? marker[2] : null;
 
   const birthdays = [];
+  const events = [];
   const seen = new Set();
   for (const line of text.split('\n')) {
     // Der Countdown ist absichtlich außerhalb der gespeicherten Daten: Beim
@@ -174,10 +188,22 @@ function parseListEmbed(msg) {
         seen.add(key);
         birthdays.push({ day: Number(m[1]), month: Number(m[2]), userId: m[3] });
       }
+      continue;
+    }
+    // Event-Zeilen: „05.12 | 🚀 **Name** – …“ (Name statt Nutzer-Erwähnung)
+    const ev = line.match(/^(\d{1,2})\.(\d{1,2})\s*\|\s*🚀\s*\*\*(.+?)\*\*(?:\s+[-–—]\s+.*)?$/);
+    if (ev) {
+      const name = ev[3].trim();
+      if (!name) continue;
+      const key = `event:${name.toLowerCase()}:${ev[2]}:${ev[1]}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        events.push({ event: true, name, day: Number(ev[1]), month: Number(ev[2]) });
+      }
     }
   }
 
-  return { lang, birthdays };
+  return { lang, birthdays, events, birthdayRoleId };
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +345,146 @@ function buildCongratsEmbed({ member, lang, dateKey, wishes = [] }) {
 }
 
 // ---------------------------------------------------------------------------
+// Events (/event) – Formular, Bestätigung, 0-Uhr-Nachricht, Lösch-Auswahl
+// ---------------------------------------------------------------------------
+
+/**
+ * Kodiert einen Event-Namen kompakt & separator-sicher (nur [0-9a-f]),
+ * damit er in Custom-IDs, Markern und Select-Values mitreisen kann.
+ */
+function encodeEventName(name) {
+  return Buffer.from(String(name ?? ''), 'utf8').toString('hex');
+}
+function decodeEventName(hex) {
+  try {
+    if (!/^[0-9a-f]*$/i.test(String(hex))) return null;
+    const s = Buffer.from(String(hex), 'hex').toString('utf8');
+    return s || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Modal für /event create: Name + Tag + Monat (kein Jahr, jedes Datum erlaubt). */
+function buildEventModal(lang, prefill = {}) {
+  const nameInput = new TextInputBuilder()
+    .setCustomId('name')
+    .setLabel(t('eventNameLabel', lang).slice(0, 45))
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMinLength(1)
+    .setMaxLength(45)
+    .setPlaceholder(t('eventNamePlaceholder', lang).slice(0, 100));
+  if (prefill.name) nameInput.setValue(String(prefill.name).slice(0, 45));
+
+  const dayInput = new TextInputBuilder()
+    .setCustomId('day')
+    .setLabel(t('modalDayLabel', lang).slice(0, 45))
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(2)
+    .setPlaceholder(t('modalDayPlaceholder', lang).slice(0, 100));
+  if (prefill.day) dayInput.setValue(String(prefill.day));
+
+  const monthInput = new TextInputBuilder()
+    .setCustomId('month')
+    .setLabel(t('modalMonthLabel', lang).slice(0, 45))
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(24)
+    .setPlaceholder(t('modalMonthPlaceholder', lang).slice(0, 100));
+  if (prefill.month) monthInput.setValue(String(prefill.month));
+
+  return new ModalBuilder()
+    .setCustomId('bday_event_modal')
+    .setTitle(t('eventModalTitle', lang).slice(0, 45))
+    .addComponents(
+      new ActionRowBuilder().addComponents(nameInput),
+      new ActionRowBuilder().addComponents(dayInput),
+      new ActionRowBuilder().addComponents(monthInput)
+    );
+}
+
+/** Bestätigungs-Container für ein neues Event (gleiche 3 Buttons wie beim Geburtstag). */
+function buildEventConfirmationEmbed({ name, day, month, lang }) {
+  const date = formatBirthday(day, month, lang);
+  const desc = t('eventConfirmBody', lang, { name: `**${name}**`, date });
+
+  return new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`# ${t('confirmTitle', lang)}\n\n${desc}`)
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addActionRowComponents(eventConfirmationRow(lang));
+}
+
+function eventConfirmationRow(lang) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('bday_event_yes').setStyle(ButtonStyle.Success).setLabel(t('btnConfirm', lang)),
+    new ButtonBuilder().setCustomId('bday_event_edit').setStyle(ButtonStyle.Secondary).setLabel(t('btnEdit', lang)),
+    new ButtonBuilder().setCustomId('bday_event_no').setStyle(ButtonStyle.Secondary).setLabel(t('btnCancel', lang))
+  );
+}
+
+/**
+ * Die tägliche Event-Nachricht um 0 Uhr – wie der Geburtstags-Gruß, aber mit
+ * Event-Titel, „Interessenten“-Abschnitt und „Interessant! 😂“-Button.
+ */
+function buildEventCongratsEmbed({ name, lang, dateKey, interested = [] }) {
+  const container = new ContainerBuilder();
+
+  const hex = encodeEventName(name);
+  const header = `# ${t('eventCongratsTitle', lang)}\n\n${t('eventCongratsBody', lang, { name: `**${name}**` })}\n\u200Bbday-event:${dateKey}:${hex}\u200B`;
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(header));
+
+  if (interested.length > 0) {
+    const maxShown = 12;
+    let text = `### ${t('eventInterestedField', lang, { count: interested.length })}\n`;
+    text += interested.slice(0, maxShown).map((u) => `<@${u}>`).join('\n');
+    if (interested.length > maxShown) {
+      text += `\n${t('congratsMore', lang, { count: interested.length - maxShown })}`;
+    }
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
+  }
+
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('bday_event_interest')
+        .setStyle(ButtonStyle.Success)
+        .setLabel(t('btnEventInterested', lang))
+    )
+  );
+
+  return { container, embed: container };
+}
+
+/** Ephemeres Lösch-Menü für /event delete: Auswahl aller eingetragenen Events. */
+function buildEventDeleteEmbed({ lang, events }) {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId('bday_event_delete')
+    .setPlaceholder(t('eventSelectPlaceholder', lang).slice(0, 150))
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+      events.slice(0, 25).map((e) => ({
+        label: e.name.slice(0, 100) || `${e.day}.${e.month}`,
+        value: `${e.day}.${e.month}.${encodeEventName(e.name)}`.slice(0, 100),
+        description: `📅 ${pad(e.day)}.${pad(e.month)}`,
+      }))
+    );
+
+  return new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`# ${t('eventDeleteTitle', lang)}`)
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addActionRowComponents(new ActionRowBuilder().addComponents(select));
+}
+
+// ---------------------------------------------------------------------------
 // Kleinere Helfer (Container ohne Farbrand)
 // ---------------------------------------------------------------------------
 
@@ -349,6 +515,13 @@ module.exports = {
   confirmationRow,
   buildSevenDayErrorEmbed,
   buildCongratsEmbed,
+  encodeEventName,
+  decodeEventName,
+  buildEventModal,
+  buildEventConfirmationEmbed,
+  buildEventCongratsEmbed,
+  buildEventDeleteEmbed,
+  eventConfirmationRow,
   smallContainer,
   smallEmbed,
 };

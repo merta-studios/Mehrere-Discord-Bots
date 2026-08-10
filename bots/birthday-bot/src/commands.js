@@ -77,6 +77,12 @@ function defineCommands() {
           .setDescription('Kanal für die Liste (optional, Standard: aktueller Kanal)')
           .setDescriptionLocalizations(pick('setupChannelDesc'))
           .addChannelTypes(ChannelType.GuildText)
+      )
+      .addRoleOption((o) =>
+        o
+          .setName('birthday_role')
+          .setDescription('Geburtstagsrolle: bekommt das Geburtstagskind 24h (optional)')
+          .setDescriptionLocalizations(pick('setupRoleDesc'))
       ),
 
     new SlashCommandBuilder()
@@ -104,6 +110,23 @@ function defineCommands() {
           .setDescription('Der Nutzer, dessen Geburtstag gesetzt wird')
           .setDescriptionLocalizations(pick('adminSetUserDesc'))
           .setRequired(true)
+      ),
+
+    new SlashCommandBuilder()
+      .setName('event')
+      .setDescription('Erstellt oder löscht ein Event (nur Admins)')
+      .setDescriptionLocalizations(pick('helpEvent'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addStringOption((o) =>
+        o
+          .setName('action')
+          .setDescription('Was soll passieren? create oder delete')
+          .setDescriptionLocalizations(pick('eventActionDesc'))
+          .setRequired(true)
+          .addChoices(
+            { name: 'create', value: 'create' },
+            { name: 'delete', value: 'delete' }
+          )
       ),
 
     new SlashCommandBuilder()
@@ -158,6 +181,8 @@ async function handleChatInput(ctx, interaction) {
       return profileCmd(ctx, interaction);
     case 'admin_set_birthday':
       return adminSetCmd(ctx, interaction);
+    case 'event':
+      return eventCmd(ctx, interaction);
     case 'help':
       return helpCmd(ctx, interaction);
     case 'adminpanel':
@@ -213,18 +238,42 @@ async function setupCmd(ctx, interaction) {
   // Acknowledge before network requests so Discord never shows a failed interaction.
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  // Bestehende Liste suchen → Einträge übernehmen (Migration, Sprache neu).
+  // Optionale Geburtstagsrolle: bekommt das Geburtstagskind für 24 Stunden.
+  // Wird sie weggelassen, bleibt eine zuvor gewählte Rolle erhalten.
+  const role = interaction.options.getRole?.('birthday_role') || null;
+  if (role) {
+    if (role.managed || role.id === interaction.guild.id) {
+      return interaction.editReply(componentsV2Payload([smallContainer(null, t('errRoleBad', lang))]));
+    }
+    const me = interaction.guild.members?.me;
+    if (me) {
+      const canManage = me.permissions?.has(PermissionFlagsBits.ManageRoles);
+      const above = (me.roles?.highest?.position ?? 0) > (role.position ?? 0);
+      if (!canManage || !above) {
+        return interaction.editReply(componentsV2Payload([smallContainer(null, t('errRoleBad', lang))]));
+      }
+    }
+  }
+
+  // Bestehende Liste suchen → Einträge + Events + Rolle übernehmen (Migration, Sprache neu).
   let birthdays = [];
+  let events = [];
+  let oldRoleId = null;
   let migrated = false;
   const existing = await ctx.store.findListMessage(interaction.guild);
   if (existing) {
     const parsed = parseListEmbed(existing.message);
-    if (parsed) birthdays = parsed.birthdays;
+    if (parsed) {
+      birthdays = parsed.birthdays;
+      events = parsed.events || [];
+      oldRoleId = parsed.birthdayRoleId || null;
+    }
     migrated = true;
     await existing.message.delete().catch(() => {});
   }
+  const birthdayRoleId = role ? role.id : oldRoleId;
 
-  const container = buildListEmbed({ birthdays, lang });
+  const container = buildListEmbed({ birthdays, events, lang, birthdayRoleId });
   const msg = await channel.send(componentsV2Payload([container]));
 
   const today = todayKey(lang);
@@ -234,15 +283,65 @@ async function setupCmd(ctx, interaction) {
     messageId: msg.id,
     lang,
     birthdays,
+    events,
+    birthdayRoleId,
     lastRenderDay: today,
     lastBirthdayCheckDay: today,
   });
 
   let desc = t('setupSuccess', lang, { channel: `<#${channel.id}>` });
+  if (birthdayRoleId) desc += `\n\n${t('setupRoleSet', lang, { role: `<@&${birthdayRoleId}>` })}`;
   if (migrated) {
     desc += `\n\n${t('setupFoundOld', lang)}\n${t('setupMigrated', lang, { count: birthdays.length })}`;
   }
   return interaction.editReply(componentsV2Payload([smallContainer(null, desc)]));
+}
+
+/**
+ * /event [action: create|delete] – nur für Admins.
+ * create öffnet das Formular (Name + Tag + Monat, jedes Datum erlaubt),
+ * delete öffnet ein Auswahlmenü der eingetragenen Events.
+ */
+async function eventCmd(ctx, interaction) {
+  if (!interaction.inGuild()) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
+    );
+  }
+  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
+  const entry = ctx.store.get(interaction.guildId);
+  const lang = entry?.lang || langFromDiscord(interaction.locale);
+  if (!perms?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true })
+    );
+  }
+  if (!entry) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errNoList', lang))], { ephemeral: true })
+    );
+  }
+
+  const action = interaction.options.getString('action');
+  if (action === 'create') {
+    const { buildEventModal } = require('./embed-builder');
+    return interaction.showModal(buildEventModal(entry.lang));
+  }
+  if (action === 'delete') {
+    const events = entry.events || [];
+    if (!events.length) {
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, t('eventNoEvents', lang))], { ephemeral: true })
+      );
+    }
+    const { buildEventDeleteEmbed } = require('./embed-builder');
+    return interaction.reply(
+      componentsV2Payload([buildEventDeleteEmbed({ lang, events })], { ephemeral: true })
+    );
+  }
+  return interaction.reply(
+    componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: true })
+  );
 }
 
 /** /admin_set_bot_profile [image: standard | server | owner] */
@@ -360,6 +459,8 @@ async function helpCmd(ctx, interaction) {
           t('helpDesc', lang),
           '',
           `**</setup:${interaction.commandId || 'setup'}>**\n${t('helpSetup', lang)}`,
+          '',
+          `**</event:${interaction.commandId || 'event'}>**\n${t('helpEvent', lang)}`,
           '',
           `**</admin_set_bot_profile:${interaction.commandId || 'admin_set_bot_profile'}>**\n${t('helpSetProfile', lang)}`,
           '',

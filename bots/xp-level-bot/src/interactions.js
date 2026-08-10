@@ -4,6 +4,7 @@ const { smallContainer } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
 const { MODAL_ID, handleLevelRolesModalSubmit } = require('./level-roles');
+const { BONUS_CLAIM_PREFIX } = require('./bonus');
 
 async function handleInteraction(ctx, interaction){
   try {
@@ -13,6 +14,10 @@ async function handleInteraction(ctx, interaction){
     }
     if (interaction.isButton()){
       if (interaction.customId.startsWith(PANEL_PREFIX)) return await handlePanelButton(ctx, interaction);
+      // „Einsammeln“-Button der Bonus-Belohnung (wer zuerst klickt, gewinnt)
+      if (interaction.customId.startsWith(BONUS_CLAIM_PREFIX) && ctx.bonusDropper){
+        return await ctx.bonusDropper.handleClaim(interaction);
+      }
     }
     if (interaction.isStringSelectMenu()){
       if (interaction.customId.startsWith(PANEL_PREFIX)) return await handlePanelSelect(ctx, interaction);
