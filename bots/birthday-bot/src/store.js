@@ -33,6 +33,54 @@ const { componentsV2Payload } = require('./message-payload');
 
 const BIRTHDAY_ROLE_DURATION_MS = 24 * 60 * 60 * 1000; // Geburtstagsrolle: 24 Stunden
 
+// Emojis für Geburtstags-Glückwünsche – in zufälliger Reihenfolge als Reaktionen
+const BIRTHDAY_REACTION_EMOJIS = ['🎉', '🎂', '🎊', '🎁', '🎈', '🥳'];
+
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/**
+ * Extrahiert alle Emojis aus einem Text (z. B. Event-Namen).
+ * Behält Reihenfolge der ersten Vorkommen, dedupliziert, behält Variation Selectors.
+ * Unterstützt: Extended_Pictographic mit Modifiers, ZWJ-Sequenzen, Flags.
+ */
+function extractEmojisFromText(text) {
+  if (!text || typeof text !== 'string') return [];
+  // Kombiniert pictographic + modifiers + ZWJ + Flags
+  const regex = /(?:\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|\uFE0F|\uFE0E)?(?:\u200D\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|\uFE0F|\uFE0E)?)*|\p{Regional_Indicator}{2})/gu;
+  let matches = [];
+  try {
+    matches = [...text.matchAll(regex)].map((m) => m[0]);
+  } catch {
+    // Fallback für sehr alte Node-Versionen ohne Unicode Properties
+    try {
+      matches = [...text.matchAll(/\p{Emoji}/gu)].map((m) => m[0]);
+    } catch {
+      return [];
+    }
+  }
+  // Deduplizieren (Discord erlaubt nur eine Reaktion pro Emoji pro Message)
+  return [...new Set(matches)];
+}
+
+async function addReactionsInRandomOrder(message, emojis) {
+  if (!message || !Array.isArray(emojis) || emojis.length === 0) return;
+  const shuffled = shuffleArray(emojis);
+  for (const emoji of shuffled) {
+    try {
+      await message.react(emoji);
+    } catch {
+      // Keine Rechte / Unknown Emoji / Rate-Limit – nicht kritisch
+    }
+  }
+}
+
 function createStore({ client, logger }) {
   const registry = new Map(); // guildId -> entry
   // Laufende 24h-Timer für vergebene Geburtstagsrollen: "guildId:userId" -> Timeout
@@ -324,9 +372,17 @@ function createStore({ client, logger }) {
       if (!member) continue;
 
       const { container } = buildCongratsEmbed({ member, lang: entry.lang, dateKey });
-      await channel.send(componentsV2Payload([container])).catch((err) => {
+      let sent = null;
+      try {
+        sent = await channel.send(componentsV2Payload([container]));
+      } catch (err) {
         logger.warn(`[birthday-bot] Gruß für ${b.userId} konnte nicht gesendet werden:`, err.message);
-      });
+        sent = null;
+      }
+      if (sent) {
+        // Mit 🎉🎂🎊🎁🎈🥳 in zufälliger Reihenfolge reagieren
+        await addReactionsInRandomOrder(sent, BIRTHDAY_REACTION_EMOJIS).catch(() => {});
+      }
       // Geburtstagsrolle für 24 Stunden vergeben (falls beim /setup gewählt)
       if (entry.birthdayRoleId) await assignBirthdayRole(guild, member, entry);
     }
@@ -338,9 +394,20 @@ function createStore({ client, logger }) {
       const marker = `bday-event:${dateKey}:${encodeEventName(ev.name)}`;
       if (!wasSent(marker)) {
         const { container } = buildEventCongratsEmbed({ name: ev.name, lang: entry.lang, dateKey });
-        await channel.send(componentsV2Payload([container])).catch((err) => {
+        let sent = null;
+        try {
+          sent = await channel.send(componentsV2Payload([container]));
+        } catch (err) {
           logger.warn(`[birthday-bot] Event-Post „${ev.name}“ konnte nicht gesendet werden:`, err.message);
-        });
+          sent = null;
+        }
+        if (sent) {
+          // Mit den Emojis aus dem Event-Namen reagieren (zufällige Reihenfolge), sonst nichts
+          const emojis = extractEmojisFromText(ev.name);
+          if (emojis.length) {
+            await addReactionsInRandomOrder(sent, emojis).catch(() => {});
+          }
+        }
         fired++;
         logger.info(`[birthday-bot] Event „${ev.name}“ auf ${guild.name} gefeuert`);
       }
@@ -366,6 +433,10 @@ function createStore({ client, logger }) {
     cleanupBirthdayRoles,
     BIRTHDAY_ROLE_DURATION_MS,
     _roleTimers: roleTimers,
+    // Exposed for testing
+    _extractEmojis: extractEmojisFromText,
+    _shuffle: shuffleArray,
+    _BIRTHDAY_REACTION_EMOJIS: BIRTHDAY_REACTION_EMOJIS,
   };
 }
 

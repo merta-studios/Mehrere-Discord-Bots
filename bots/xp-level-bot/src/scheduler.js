@@ -12,6 +12,11 @@
  *   Aktualisierung länger als 10 Minuten her ist (Throttle)
  * - Selbstheilung: schlägt die Command-Registrierung beim Start fehl, wird sie regelmäßig erneut versucht
  * - 5min: Backup flush
+ * - NEU (Zuverlässigkeits-Fix): Stündliche Aktualisierung ist jetzt deutlich zuverlässiger:
+ *   * persisted Timestamp (entry.lastLeaderboardRefresh) überlebt Restarts
+ *   * schneller Retry (2 min) statt 10 min bei fehlgeschlagener stündlicher Aktualisierung
+ *   * doppelter Startup-Refresh (5s + 15s) + sofortige hourlyDue-Erkennung nach Restart
+ *   * Fallback-Kanalsuche wenn die gespeicherte Channel-ID nicht fetchbar ist
  */
 
 const { todayKey } = require('./logic');
@@ -23,6 +28,7 @@ const { refreshRankNicknames } = require('./nicknames');
 const MINUTE_MS = 60_000;
 const LEADERBOARD_MIN_REFRESH_MS = 10 * 60 * 1000;
 const LEADERBOARD_HOURLY_MS = 55 * 60 * 1000; // stündlich (mit Toleranz)
+const LEADERBOARD_HOURLY_RETRY_MS = 2 * 60 * 1000; // schneller Retry bei Fehler (2 min statt 10)
 const COMMAND_RETRY_EVERY_TICKS = 15; // alle 15 min erneut versuchen
 
 // Wann wurde das Leaderboard pro Gilde zuletzt (erfolgreich) aktualisiert (für 10min Throttle)?
@@ -51,12 +57,39 @@ function noteHourlyRefresh(guildId, now = Date.now()) {
   lastLeaderboardRefresh.set(guildId, now); // stündlich gilt auch als allgemeines Refresh für Throttle
 }
 
+/**
+ * Synchronisiert die In-Memory-Maps mit persistierten Timestamps aus dem Store.
+ * Damit überlebt ein Restart den Hourly-Timer – gleichzeitig bleibt für Tests
+ * alles kompatibel (falls kein persisted Feld vorhanden ist, bleibt Map bei 0).
+ */
+function syncMapsFromEntry(entry) {
+  if (!entry || !entry.guildId) return;
+  const persisted = entry.lastLeaderboardRefresh || entry.lastLeaderboardUpdate || 0;
+  if (persisted) {
+    const curHourly = lastHourlyRefresh.get(entry.guildId) || 0;
+    const curGeneral = lastLeaderboardRefresh.get(entry.guildId) || 0;
+    // Nur übernehmen wenn Map noch leer oder persisted neuer ist
+    if (!curHourly || persisted > curHourly) lastHourlyRefresh.set(entry.guildId, persisted);
+    if (!curGeneral || persisted > curGeneral) lastLeaderboardRefresh.set(entry.guildId, persisted);
+  }
+}
+
 function startScheduler({ ctx }){
+  // Pendente Timestamps aus dem Store in die Maps laden (überlebt Restarts)
+  try {
+    for (const entry of ctx.store.getAllGuilds()) syncMapsFromEntry(entry);
+  } catch {}
   let counter = 0;
   const timer = setInterval(()=>{ counter+=1; void tick(ctx, counter).catch(()=>{}); }, MINUTE_MS);
   timer.unref?.();
-  // initial tick after 10s for faster first leaderboard
-  setTimeout(()=> void tick(ctx, 0).catch(()=>{}), 10_000);
+  // Doppelter Startup-Refresh für maximale Zuverlässigkeit nach Neustart:
+  // 1. nach 5s (schnell, aber Cache ist bereits bereit)
+  // 2. nach 15s (zweiter Versuch falls der erste noch an fehlender Cache/Channel scheiterte)
+  setTimeout(()=> {
+    try { for (const e of ctx.store.getAllGuilds()) syncMapsFromEntry(e); } catch {}
+    void tick(ctx, 0).catch(()=>{});
+  }, 5_000);
+  setTimeout(()=> void tick(ctx, 0).catch(()=>{}), 15_000);
   return ()=> clearInterval(timer);
 }
 
@@ -104,6 +137,8 @@ async function tickInner(ctx, counter){
   }
 
   for (const entry of ctx.store.getAllGuilds()){
+    // In-Memory-Maps mit persistiertem Stand abgleichen (falls entry gerade aktualisiert wurde)
+    syncMapsFromEntry(entry);
     const { guild, gone } = await resolveGuild(ctx, entry.guildId);
     if (gone){ ctx.store.deleteGuild(entry.guildId); continue; }
     if (!guild){ ctx.logger.warn(`[xp-level-bot] Gilde ${entry.guildId} aktuell nicht erreichbar – überspringe Tick (Config bleibt)`); continue; }
@@ -124,10 +159,13 @@ async function tickInner(ctx, counter){
       }
 
       // Stündlich Leaderboard – UNABHÄNGIG von Level-Up-Refreshes
-      const lastHourly = lastHourlyRefresh.get(entry.guildId) || 0;
+      // hourlyDue basiert auf persistiertem Timestamp, damit Restarts kein Delay verursachen
+      const persistedHourly = entry.lastLeaderboardRefresh || entry.lastLeaderboardUpdate || 0;
+      const lastHourly = lastHourlyRefresh.get(entry.guildId) || persistedHourly || 0;
       const lastAttempt = lastLeaderboardAttempt.get(entry.guildId) || 0;
       const hourlyDue = (nowMs - lastHourly) >= LEADERBOARD_HOURLY_MS;
-      const attemptReady = (nowMs - lastAttempt) >= LEADERBOARD_MIN_REFRESH_MS;
+      // Für stündlich: schneller Retry (2 min) damit nach einem Fehler nicht 10 min gewartet wird
+      const attemptReady = (nowMs - lastAttempt) >= LEADERBOARD_HOURLY_RETRY_MS;
 
       if (counter === 0 || (hourlyDue && attemptReady)) {
         lastLeaderboardAttempt.set(entry.guildId, nowMs);
@@ -195,7 +233,20 @@ async function refreshLeaderboard(ctx, entry, guild, now, opts = {}){
   // Wenn aufgerufen ohne opts (alte Aufrufe), behandle als hourly, damit nichts kaputt geht
   const treatAsHourly = opts.isHourly === true || (Object.keys(opts).length === 0);
   try {
-    const channel = await ctx.client.channels.fetch(entry.leaderboardChannelId).catch(()=>null);
+    // Kanal robust holen: erst per ID, bei Fehler Fallback über Marker-Suche (z.B. wenn Channel-ID veraltet)
+    let channel = await ctx.client.channels.fetch(entry.leaderboardChannelId).catch(()=>null);
+    if (!channel || !channel.isTextBased()) {
+      // Fallback: versuche, die Leaderboard-Nachricht global zu finden und daraus den Kanal zu ermitteln
+      try {
+        const found = await ctx.store.findLeaderboardMessage(guild, ctx.client);
+        if (found && found.channel && found.channel.isTextBased()) {
+          channel = found.channel;
+          entry.leaderboardChannelId = found.channel.id;
+          entry.leaderboardMessageId = found.message.id;
+          ctx.logger.info(`[xp-level-bot] Leaderboard-Kanal via Fallback gefunden (${guild.name} → ${channel.id})`);
+        }
+      } catch {}
+    }
     if (!channel || !channel.isTextBased()) {
       ctx.logger.warn(`[xp-level-bot] Leaderboard-Kanal ${entry.leaderboardChannelId} nicht erreichbar (${guild.name})`);
       return false;
@@ -241,7 +292,12 @@ async function refreshLeaderboard(ctx, entry, guild, now, opts = {}){
       if (treatAsHourly) {
         noteHourlyRefresh(entry.guildId, ts);
       }
+      // Persistierten Timestamp aktualisieren (überlebt Restarts, sichtbar in DB/File)
+      entry.lastLeaderboardRefresh = ts;
+      entry.lastLeaderboardUpdate = ts;
       ctx.store.setGuild(entry);
+      // Schneller Flush damit Restart den frischen Timestamp nicht verliert
+      void ctx.store.flush().catch(()=>{});
       ctx.logger.info(`[xp-level-bot] Leaderboard aktualisiert (${guild.name})${treatAsHourly ? ' [stündlich]' : ' [level]'}`);
       return true;
     }
@@ -264,6 +320,7 @@ module.exports = {
   applyDailyDecayForGuild,
   LEADERBOARD_MIN_REFRESH_MS,
   LEADERBOARD_HOURLY_MS,
+  LEADERBOARD_HOURLY_RETRY_MS,
   // Expose maps for testing / debugging
   _lastLeaderboardRefresh: lastLeaderboardRefresh,
   _lastHourlyRefresh: lastHourlyRefresh,
