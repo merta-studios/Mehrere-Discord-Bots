@@ -220,6 +220,20 @@ function createXpStore({ logger, env } = {}) {
       try { saveToFile(); } catch {}
     }
   }
+  function deleteGuildCommandIds(guildId) {
+    if (guildId && guildCommandIds.has(guildId)) {
+      guildCommandIds.delete(guildId);
+      dirtyMetadata = true;
+      try { saveToFile(); } catch {}
+    }
+  }
+  function clearGuildCommandIds() {
+    if (guildCommandIds.size > 0) {
+      guildCommandIds.clear();
+      dirtyMetadata = true;
+      try { saveToFile(); } catch {}
+    }
+  }
 
   // ----------------- Guild API -----------------
   function getGuild(guildId) { return guilds.get(guildId) || null; }
@@ -433,7 +447,7 @@ function createXpStore({ logger, env } = {}) {
     init,
     getGuild, setGuild, deleteGuild, getAllGuilds, getGuildIds,
     getUser, ensureUser, setUser, deleteUser, getUsersForGuild, getLeaderboard, getRank, getAllUsersCount,
-    getCommandIds, getCommandId, setCommandIds, getGuildCommandIds, setGuildCommandIds,
+    getCommandIds, getCommandId, setCommandIds, getGuildCommandIds, setGuildCommandIds, deleteGuildCommandIds, clearGuildCommandIds,
     flush,
     startBackupInterval, stopBackupInterval,
     findLeaderboardMessage,

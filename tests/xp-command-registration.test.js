@@ -295,3 +295,28 @@ test('store persistiert commandIds über setCommandIds und getCommandIds', () =>
   assert.equal(store.getCommandId('setup'), '8888');
   assert.deepEqual(store.getCommandIds(), { level_roles: '9999', setup: '8888' });
 });
+
+test('ensureCommandIds registriert automatisch neu, falls REST GET unvollständig ist (z.B. /level_roles fehlt)', async () => {
+  let putCalled = false;
+  const fakeRest = {
+    get: async (route) => {
+      assert.equal(route, Routes.applicationCommands('app1'));
+      // Unvollständige Antwort von Discord (ohne level_roles)
+      return [
+        { id: '3001', name: 'setup' },
+        { id: '3002', name: 'rank' },
+        { id: '3003', name: 'help' },
+      ];
+    },
+    put: async (route, { body }) => {
+      putCalled = true;
+      return (body || []).map((c) => ({ id: `new-${c.name}`, name: c.name }));
+    },
+  };
+  const ctx = makeCtx({ rest: fakeRest, commandIds: {} });
+  const ids = await ensureCommandIds(ctx);
+
+  assert.equal(putCalled, true, 'Sollte registerCommands ausführen, um fehlenden Command /level_roles zu registrieren');
+  assert.equal(ids.level_roles, 'new-level_roles');
+  assert.equal(ctx.commandIds.level_roles, 'new-level_roles');
+});

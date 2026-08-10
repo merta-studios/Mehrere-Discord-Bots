@@ -27,7 +27,7 @@
  * ============================================================================
  */
 
-const { GatewayIntentBits, ActivityType, Events, PermissionsBitField, MessageFlags } = require('discord.js');
+const { GatewayIntentBits, ActivityType, Events, PermissionsBitField, MessageFlags, Routes } = require('discord.js');
 
 const { createXpStore } = require('./src/store');
 const { registerCommands } = require('./src/commands');
@@ -339,6 +339,12 @@ module.exports = {
     client.on('guildCreate', (guild) => {
       void sendJoinNotice(ctx, guild);
       updatePresence();
+      if (!ctx.devGuildId) {
+        const clientId = client.user?.id;
+        if (clientId) {
+          ctx.rest.put(Routes.applicationGuildCommands(clientId, guild.id), { body: [] }).catch(() => {});
+        }
+      }
     });
 
     // ---------------- Nickname bei Serverbeitritt (ab Level 1) ----------------
