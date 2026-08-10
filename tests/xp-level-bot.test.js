@@ -2,7 +2,7 @@
  * Tests für die Kernlogik des XP Level Bots (ohne Discord-Verbindung):
  * - Nickname-Format: nur Top 3 bekommen eine Medaille, neues Format [Lvl X 🥇]
  * - stripLvlTag versteht sowohl das alte als auch das neue Format
- * - Daily Decay nutzt 10% Basis und zieht bei Level-Down den echten Restbetrag ab
+ * - Daily Decay nutzt 5% Basis und zieht bei Level-Down den echten Restbetrag ab
  * - Leaderboard-Titel lautet „Level Leaderboard“ (nicht „XP Leaderboard“)
  * - Rank-Fortschrittszeile: Prozent passt auch bei zweistelligen Zahlen in die Zeile
  *
@@ -74,7 +74,7 @@ test('stripLvlTag: entfernt neues und altes Tag-Format', () => {
 // Daily Decay
 // ---------------------------------------------------------------------------
 
-test('applyDailyDecay: nutzt 10% Basis vom aktuellen Level-Bedarf', () => {
+test('applyDailyDecay: nutzt 5% Basis vom aktuellen Level-Bedarf', () => {
   const user = { level: 10, xp: 100 };
   const needed = xpNeeded(user.level);
   const expectedDecay = Math.ceil(needed * DAILY_DECAY_RATE);

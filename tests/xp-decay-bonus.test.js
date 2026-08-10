@@ -1,5 +1,5 @@
 /**
- * Tests für den Daily-Decay (10% Basis, +5% pro inaktivem Tag)
+ * Tests für den Daily-Decay (5% Basis, +3% pro weiterem inaktivem Tag)
  * und das GE-PLANTE Bonus-Belohnungssystem des XP-Bots.
  *
  * Ausführen mit: npm test
@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 
 const {
   DAILY_DECAY_RATE,
+  INACTIVE_DECAY_STEP,
   decayRateForInactiveDays,
   nextDecayInfo,
   wasActiveRecently,
@@ -35,48 +36,50 @@ const { createBonusDropper, BONUS_CLAIM_PREFIX } = require('../bots/xp-level-bot
 const { createXpStore } = require('../bots/xp-level-bot/src/store');
 
 // ---------------------------------------------------------------------------
-// Decay: Basis 10 %, Inaktivitäts-Streak +5 Prozentpunkte
+// Decay: Basis 5 %, Inaktivitäts-Streak +3 Prozentpunkte
 // ---------------------------------------------------------------------------
 
-test('DAILY_DECAY_RATE ist jetzt 10%', () => {
-  assert.equal(DAILY_DECAY_RATE, 0.10);
+test('Daily-Decay-Konstanten sind 5% Basis und +3 Prozentpunkte', () => {
+  assert.equal(DAILY_DECAY_RATE, 0.05);
+  assert.equal(INACTIVE_DECAY_STEP, 0.03);
 });
 
-test('decayRateForInactiveDays: 0/1 Tag = 10%, dann +5% je Inaktiv-Tag', () => {
-  assert.equal(decayRateForInactiveDays(0), 0.10);
-  assert.equal(decayRateForInactiveDays(1), 0.10);
-  assert.equal(decayRateForInactiveDays(2), 0.15);
-  assert.equal(decayRateForInactiveDays(3), 0.20);
-  assert.equal(decayRateForInactiveDays(4), 0.25);
+test('decayRateForInactiveDays: 0/1 Tag = 5%, dann +3% je weiterem Inaktiv-Tag', () => {
+  assert.equal(decayRateForInactiveDays(0), 0.05);
+  assert.equal(decayRateForInactiveDays(1), 0.05);
+  assert.equal(decayRateForInactiveDays(2), 0.08);
+  assert.equal(decayRateForInactiveDays(3), 0.11);
+  assert.equal(decayRateForInactiveDays(4), 0.14);
 });
 
 test('decayRateForInactiveDays: ist nach oben bei 100% gedeckelt & robust gegen Mist', () => {
-  assert.equal(decayRateForInactiveDays(19), 1.0);
+  assert.equal(decayRateForInactiveDays(32), 0.98);
+  assert.equal(decayRateForInactiveDays(33), 1.0);
   assert.equal(decayRateForInactiveDays(99), 1.0);
-  assert.equal(decayRateForInactiveDays(-5), 0.10);
-  assert.equal(decayRateForInactiveDays(undefined), 0.10);
-  assert.equal(decayRateForInactiveDays('3'), 0.20);
+  assert.equal(decayRateForInactiveDays(-5), 0.05);
+  assert.equal(decayRateForInactiveDays(undefined), 0.05);
+  assert.equal(decayRateForInactiveDays('3'), 0.11);
 });
 
-test('Beispiel-Woche: aktiv=10%, dann 1./2./3. inaktiver Tag = 10/15/20%, wieder aktiv = 10%', () => {
+test('Beispiel-Woche: aktiv=5%, dann 1./2./3. inaktiver Tag = 5/8/11%, wieder aktiv = 5%', () => {
   const now = Date.now();
   const activeUser = { level: 10, xp: 50, lastXpGain: now - 3 * 3600 * 1000, lastActivity: now - 3 * 3600 * 1000, inactiveDays: 0 };
-  assert.equal(nextDecayInfo(activeUser, now).percent, 10);
+  assert.equal(nextDecayInfo(activeUser, now).percent, 5);
   assert.equal(nextDecayInfo(activeUser, now).inactiveDays, 0);
   const firstInactive = { level: 10, xp: 50, lastActivity: now - 30 * 3600 * 1000, inactiveDays: 0 };
   assert.equal(nextDecayInfo(firstInactive, now).inactiveDays, 1);
-  assert.equal(nextDecayInfo(firstInactive, now).percent, 10);
+  assert.equal(nextDecayInfo(firstInactive, now).percent, 5);
   const secondInactive = { level: 10, xp: 50, lastActivity: now - 50 * 3600 * 1000, inactiveDays: 1 };
   assert.equal(nextDecayInfo(secondInactive, now).inactiveDays, 2);
-  assert.equal(nextDecayInfo(secondInactive, now).percent, 15);
-  assert.equal(nextDecayInfo({ level: 10, xp: 50, lastActivity: now - 70 * 3600 * 1000, inactiveDays: 2 }, now).percent, 20);
-  assert.equal(nextDecayInfo({ level: 10, xp: 50, lastActivity: now - 90 * 3600 * 1000, inactiveDays: 3 }, now).percent, 25);
+  assert.equal(nextDecayInfo(secondInactive, now).percent, 8);
+  assert.equal(nextDecayInfo({ level: 10, xp: 50, lastActivity: now - 70 * 3600 * 1000, inactiveDays: 2 }, now).percent, 11);
+  assert.equal(nextDecayInfo({ level: 10, xp: 50, lastActivity: now - 90 * 3600 * 1000, inactiveDays: 3 }, now).percent, 14);
   const activeAgain = { level: 10, xp: 50, lastActivity: now - 2 * 3600 * 1000, inactiveDays: 4 };
-  assert.equal(nextDecayInfo(activeAgain, now).percent, 10);
+  assert.equal(nextDecayInfo(activeAgain, now).percent, 5);
   assert.equal(nextDecayInfo(activeAgain, now).inactiveDays, 0);
 });
 
-test('applyDailyDecay: respektiert den übergebenen Anteil (15% statt 10%)', () => {
+test('applyDailyDecay: respektiert einen explizit übergebenen Anteil von 15%', () => {
   const user = { level: 10, xp: 100 };
   const needed = xpNeeded(10);
   const res15 = applyDailyDecay(user, 0.15);
@@ -88,7 +91,7 @@ test('nextDecayInfo: alter lastXpGain ohne lastActivity zählt rückwirkend mit'
   const now = Date.now();
   const legacy = { level: 5, xp: 10, lastXpGain: now - 5 * 3600 * 1000 };
   assert.equal(wasActiveRecently(legacy, now), true);
-  assert.equal(nextDecayInfo(legacy, now).percent, 10);
+  assert.equal(nextDecayInfo(legacy, now).percent, 5);
 });
 
 test('nextDecayInfo: wer auf Level 1 mit 0 XP steht, verliert nichts', () => {
@@ -279,7 +282,7 @@ test('Bonus-Drop: neuer Tag setzt die gesendeten Slots zurück', async () => {
   assert.equal(h.cfg.bonusState.dayKey, todayKey('de'));
 });
 
-test('Bonus-Drop: der ERSTE Klick gewinnt und setzt den Decay auf 10% (inactiveDays=0)', async () => {
+test('Bonus-Drop: der ERSTE Klick gewinnt und setzt den Decay auf 5% (inactiveDays=0)', async () => {
   const h = makeBonusHarness();
   const day = todayKey('de');
   const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
@@ -311,8 +314,8 @@ test('Bonus-Drop: der ERSTE Klick gewinnt und setzt den Decay auf 10% (inactiveD
   const winner = h.store.getUser('g1', 'schnell1');
   assert.equal(winner.xp, 22, 'Gewinner bekam genau die angekündigten 22 XP');
   assert.equal(winner.lastActivity > 0, true, 'zählt als Aktivität');
-  assert.equal(winner.inactiveDays, 0, 'Decay fällt zurück auf 10% (inactiveDays=0)');
-  assert.equal(nextDecayInfo(winner, Date.now()).percent, 10, 'nächster Decay = 10%');
+  assert.equal(winner.inactiveDays, 0, 'Decay fällt zurück auf 5% (inactiveDays=0)');
+  assert.equal(nextDecayInfo(winner, Date.now()).percent, 5, 'nächster Decay = 5%');
   assert.equal(updates.length, 1, 'Nachricht wurde bearbeitet');
   const claimedText = payloadText(updates[0].components);
   assert.ok(claimedText.includes('<@schnell1>'), 'Ping auf den Schnelleren steht in der Nachricht');

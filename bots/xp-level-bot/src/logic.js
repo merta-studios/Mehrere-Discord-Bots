@@ -51,21 +51,23 @@ function xpNeeded(level) {
 function nextLevelXp(level) { return xpNeeded(level); }
 
 // Täglicher XP-Verlust um 0 Uhr:
-// - Basis: 10% des Level-Bedarfs, wenn man in den letzten 24h aktiv war (XP verdient hat)
-// - Jeder weitere Tag ohne verdiente XP: +5 Prozentpunkte (1. inaktiver Tag = 10%, dann 15%, 20%, 25%, …)
-const DAILY_DECAY_RATE = 0.10;
-const INACTIVE_DECAY_STEP = 0.05;
+// - Basis: 5% des Level-Bedarfs, wenn man in den letzten 24h aktiv war (XP verdient hat)
+// - Jeder weitere Tag ohne verdiente XP: +3 Prozentpunkte (1. inaktiver Tag = 5%, dann 8%, 11%, 14%, …)
+const DAILY_DECAY_RATE = 0.05;
+const INACTIVE_DECAY_STEP = 0.03;
 
 /**
  * Decay-Anteil für die nächste 0-Uhr-Abrechnung.
  * inactiveDays = wie viele Tage in Folge der Nutzer (ab heute/dieser Abrechnung)
- * inaktiv ist. 0 (aktiv) und 1 (erster inaktiver Tag) -> 10%, danach +5% pro Tag.
+ * inaktiv ist. 0 (aktiv) und 1 (erster inaktiver Tag) -> 5%, danach +3% pro Tag.
  */
 function decayRateForInactiveDays(inactiveDays) {
   const days = Math.max(0, Math.floor(Number(inactiveDays) || 0));
   if (days <= 1) return DAILY_DECAY_RATE;
-  // Ganzzahl-Prozentrechnung, damit 10 % + 5 % exakt 0.15 ergibt (kein Float-Fehler)
-  const percent = Math.min(100, 10 + (days - 1) * Math.round(INACTIVE_DECAY_STEP * 100));
+  // Ganzzahl-Prozentrechnung, damit 5 % + 3 % exakt 0.08 ergibt (kein Float-Fehler)
+  const basePercent = Math.round(DAILY_DECAY_RATE * 100);
+  const stepPercent = Math.round(INACTIVE_DECAY_STEP * 100);
+  const percent = Math.min(100, basePercent + (days - 1) * stepPercent);
   return percent / 100;
 }
 
@@ -79,7 +81,7 @@ function wasActiveRecently(user, now = Date.now()) {
 
 /**
  * Wie viele XP verliert der Nutzer bei der nächsten 0-Uhr-Abrechnung?
- * Aktiv in den letzten 24h -> 10%. Sonst steigt der Inaktivitäts-Streak an.
+ * Aktiv in den letzten 24h -> 5%. Sonst steigt der Inaktivitäts-Streak an.
  */
 function nextDecayInfo(user, now = Date.now()) {
   const inactiveDays = wasActiveRecently(user, now) ? 0 : (user?.inactiveDays || 0) + 1;
@@ -267,7 +269,7 @@ function applyXpGain(user, amount) {
 }
 
 function applyDailyDecay(user, rate = DAILY_DECAY_RATE) {
-  // täglich `rate` (Standard: 10%) von den für das nächste Level nötigen XP abziehen
+  // täglich `rate` (Standard: 5%) von den für das nächste Level nötigen XP abziehen
   // Falls das nicht mehr in die aktuellen XP passt, wird der echte Restbetrag
   // ins vorige Level mitgenommen statt pauschal auf einen Fixwert zu setzen.
   const startLevel = user.level;

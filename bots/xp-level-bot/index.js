@@ -14,9 +14,9 @@
  *  - Bonus-Drops: Geplant & zeitgesteuert – 2–4 feste Termine pro Tag (06:00–23:59
  *    Ortszeit, mind. 1h Abstand, pro Server unterschiedlich & stabil) senden eine
  *    XP-Belohnung (20–40 XP) mit „Einsammeln“-Button; der erste Klick gewinnt,
- *    der Drop ist 1 Stunde gültig und überlebt Restarts. Einsammeln setzt den Decay wieder auf 10%
- *  - Täglich 0 Uhr (TZ pro Sprache): 10% Decay; wer 24h keine XP verdient hat,
- *    bekommt +5 Prozentpunkte pro weiterem inaktivem Tag (10→15→20→25%…),
+ *    der Drop ist 1 Stunde gültig und überlebt Restarts. Einsammeln setzt den Decay wieder auf 5%
+ *  - Täglich 0 Uhr (TZ pro Sprache): 5% Decay; wer 24h keine XP verdient hat,
+ *    bekommt +3 Prozentpunkte pro weiterem inaktivem Tag (5→8→11→14%…),
  *    Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
  *  - Voice 25XP/min: nicht muted, mit mind. 1 anderer, >=5s gesprochen, Pause nötig
  *  - Leaderboard stündlich + bei Level-Up/Down (max alle 10 Min), Container V2,
