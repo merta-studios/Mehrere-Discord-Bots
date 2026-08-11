@@ -18,6 +18,7 @@ Kontext.
 |---|---|
 | **`/setup`** (Admin) | 3-Schritte-Assistent: **1. Sprache** (10 Sprachen, Auswahlmenü) → **2. Kanäle** (mehrere, Kanal-Auswahlmenü) → **3. Groq-API-Key** (Modal). Mit **Zurück / Weiter / Bestätigen / Abbrechen**, Zusammenfassung am Ende und klarer Anleitung pro Schritt. Bestehende Setups lassen sich jederzeit überschreiben. |
 | **`/test_love [user1] [user2]`** (alle) | Nur möglich, wenn das Setup abgeschlossen ist. Zuerst erscheint eine **öffentliche Bestätigung** mit Datenschutz-Hinweis – die Buttons **✅ Annehmen** / **❌ Ablehnen** kann **nur der Command-Sender** bedienen. |
+| **Endless Story (`/endless_story_channel`)** | **Nur für Admins:** Startet ein unendliches interaktives Story-Spiel im gewählten Kanal. Die KI erhält die **letzten 10 Situationen und Optionen** als Kontext. Jede Situation ist als **`### `-Heading (größerer Text)** formatiert. In bearbeiteten Nachrichten nach einer Entscheidung steht unter dem Text eine **Mention + Hinweis** (`<@ID> hat die nächste Option schon entschieden.`), wer die Wahl getroffen hat. |
 | **Analyse mit Live-Fortschritt** | Nach dem Annehmen wird die Nachricht laufend bearbeitet: echter Fortschrittsbalken, **Prozentsatz** und reale Scan-Zahlen (gelesene Nachrichten, Kanäle, Ausschnitte) – ohne Fake-Witze. |
 | **Chat-Scan** | Durchsucht die eingerichteten Kanäle – **maximal 500 Nachrichten** pro Scan über alle Kanäle. „Weiter analysieren“ holt die nächsten 500 älteren Nachrichten. |
 | **Ausschnitt-Sortierung** | Pro Ausschnitt: **4 Nachrichten davor** + der **Kern** (Nachrichten der beiden User, maximal 3 fremde nacheinander dazwischen) + **der Rest danach** für den Kontext (mind. 9 Nachrichten gesamt). Die Ausschnitte werden verständlich nummeriert und chronologisch sortiert. |
@@ -122,6 +123,7 @@ bots/love-tester-bot/
     ├── languages.js      # ★ ALLE Texte in 10 Sprachen (humorvoll)
     ├── store.js          # Turso (gleiche DB wie XP-Bot) + Datei-Fallback
     ├── embed-builder.js  # Container: Setup-Wizard, Bestätigung, Fortschritt, Ergebnis, Fehler
+    ├── endless-story.js  # ★ Endless Story Game: Start-Modal, Situation-Payload (### Format + Mention), Groq-Schleife (10 Züge Kontext)
     ├── commands.js       # Slash-Commands & Registrierung
     ├── interactions.js   # Buttons/Selects/Modal (Wizard + Love-Test-Steuerung)
     ├── runner.js         # Scan-Ablauf, Fortschritt, Retry-Logik

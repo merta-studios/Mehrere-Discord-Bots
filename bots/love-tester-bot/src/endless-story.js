@@ -10,7 +10,7 @@
  *   so editiert, dass die Buttons deaktiviert (ausgegraut) sind. Dann wird
  *   über die Groq API die nächste Situation + 3 neue Optionen generiert und
  *   als neue Nachricht geschickt. Das geht unendlich weiter.
- * - An Groq werden die letzten 5 Situationen (inkl. gewählter Option)
+ * - An Groq werden die letzten 10 Situationen (inkl. gewählter Option)
  *   geschickt, damit die Geschichte konsistent bleibt.
  * - Wenn unter der letzten Story-Nachricht mehr als 3 Fremd-Nachrichten
  *   (echte User, keine Bots, keine Story-Nachrichten) stehen, werden die
@@ -35,7 +35,7 @@ const { groqChat, GROQ_MODEL } = require('./analyzer');
 
 const STORY_BUTTON_COLORS = [ButtonStyle.Danger, ButtonStyle.Success, ButtonStyle.Primary];
 const STORY_PREFIX = 'story_';
-const STORY_HISTORY_LIMIT = 5;
+const STORY_HISTORY_LIMIT = 10;
 const MAX_FOREIGN_MESSAGES = 3;
 
 function randomColors() {
@@ -58,18 +58,36 @@ function flattenText(text) {
     .trim();
 }
 
+/** Erstellt aus einer User-ID, einem Erwähnungs-String oder einem User-Objekt eine gültige Mention. */
+function formatDecidedBy(decidedBy) {
+  if (!decidedBy) return null;
+  const uid = typeof decidedBy === 'object' ? decidedBy.id : String(decidedBy).replace(/^<@!?(\d+)>$/, '$1');
+  if (/^\d+$/.test(uid)) {
+    return `<@${uid}>`;
+  }
+  return String(decidedBy);
+}
+
 /** Baut die Container-Payload für eine Situation mit (ggf. deaktivierten) Buttons. */
-function buildSituationPayload({ situation, options, colors, disabled = false, turn = 1, chosenIndex = null }) {
+function buildSituationPayload({ situation, options, colors, disabled = false, turn = 1, chosenIndex = null, decidedBy = null }) {
   let safeSituation = flattenText(situation) || '…';
   // Maximal 3–4 Zeilen auf dem Handy → Text hart begrenzen
   if (safeSituation.length > 280) {
     safeSituation = safeSituation.slice(0, 277) + '…';
   }
+  const headingSituation = safeSituation.startsWith('### ')
+    ? safeSituation
+    : `### ${safeSituation}`;
+  let content = `# 📖 Endless Story — Zug ${turn}\n\n${headingSituation}`;
+  if (disabled && decidedBy) {
+    const mention = formatDecidedBy(decidedBy);
+    if (mention) {
+      content += `\n\n${mention} hat die nächste Option schon entschieden.`;
+    }
+  }
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(
-      `# 📖 Endless Story — Zug ${turn}\n\n${safeSituation}`
-    )
+    new TextDisplayBuilder().setContent(content)
   );
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   const row = new ActionRowBuilder();
@@ -159,6 +177,9 @@ function buildStoryUserPrompt({ history, chosenOptionText }) {
   lines.push('Bisherige Geschichte (letzte Züge, ältere zuerst):');
   history.forEach((h, i) => {
     lines.push(`Zug ${i + 1}: Situation: ${h.situation}`);
+    if (Array.isArray(h.options) && h.options.length) {
+      lines.push(`  Optionen: ${h.options.join(' | ')}`);
+    }
     if (h.chosenOption) lines.push(`  → Gewählt: ${h.chosenOption}`);
   });
   lines.push('');
@@ -426,6 +447,7 @@ async function handleStoryButton(ctx, interaction) {
   if (!chosenOption) { st.locked = false; return null; }
 
   try {
+    const decidedBy = interaction.user?.id || interaction.member?.id || interaction.user;
     const disabledPayload = buildSituationPayload({
       situation: currentEntry.situation,
       options: currentEntry.options,
@@ -433,10 +455,12 @@ async function handleStoryButton(ctx, interaction) {
       disabled: true,
       turn: st.turn,
       chosenIndex,
+      decidedBy,
     });
     await interaction.update(disabledPayload);
 
     currentEntry.chosenOption = chosenOption;
+    currentEntry.decidedBy = decidedBy;
     const historyForPrompt = st.history.slice(-STORY_HISTORY_LIMIT);
 
     if (!cfg?.groqApiKey) {
@@ -506,13 +530,16 @@ function attachMessageHandler(ctx) {
 
 module.exports = {
   STORY_PREFIX,
+  STORY_HISTORY_LIMIT,
   storyChannelCmd,
   handleStoryButton,
   handleStoryModal,
   attachMessageHandler,
   buildStoryModal,
   buildSituationPayload,
+  buildStoryUserPrompt,
   parseAiResponse,
   flattenText,
+  formatDecidedBy,
   randomColors,
 };
