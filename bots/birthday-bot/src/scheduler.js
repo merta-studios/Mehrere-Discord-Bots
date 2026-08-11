@@ -37,6 +37,7 @@ async function tick(ctx, counter) {
       const dayChanged = entry.lastRenderDay !== dayKey;
       let refreshed = false;
 
+      const cleanupDue = counter === 1 || counter % HOURLY_TICK === 0;
       if (dayChanged || counter % HOURLY_TICK === 0) {
         await ctx.store.refresh(entry);
         refreshed = true;
@@ -45,6 +46,12 @@ async function tick(ctx, counter) {
         if (ctx.store.cleanupBirthdayRoles) {
           await ctx.store.cleanupBirthdayRoles(entry).catch(() => {});
         }
+      }
+      // 7-Tage-Aufräumregel: abgelaufene Geburtstags-/Event-Posts löschen,
+      // samt aller Nachrichten darüber bis zur Liste. Stündlich, plus beim
+      // ersten Tick nach dem Start (counter 1), damit direkt aufgeräumt wird.
+      if (cleanupDue && ctx.store.cleanupExpired) {
+        await ctx.store.cleanupExpired(entry).catch(() => {});
       }
 
       // Neuer Tag (0 Uhr in der Sprach-Zeitzone) → Geburtstags-Check.

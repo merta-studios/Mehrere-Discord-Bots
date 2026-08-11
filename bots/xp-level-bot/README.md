@@ -32,7 +32,8 @@ Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche 
 | `/setup <leaderboard> <mainchat> <language>` | **Admin** | Richtet System ein: Leaderboard-Kanal, Haupt-Chat (Level-Ups & Nick-Fehler) & Sprache (10 zur Wahl). Erstellt sofort das Leaderboard, löscht alte. `BIRTHDAY_BOT` Style mit Ephemeral-Bestätigung. |
 | `/rank` | **Alle** | Zeigt deinen Platz im Server (von allen), Level, `xp/needed`, Fortschritts-Balken `████░░░░` und als Stichpunkt **deinen voraussichtlichen XP-Verlust heute um 0 Uhr** (inkl. aktuellem Schwund-Prozentsatz). Auf Server-Sprache, ephemeral. |
 | `/level_roles` | **Admin** | Öffnet ein Formular zum Anpassen der Level-Belohnungsrollen: Rollen-Format (Standard `Level {LEVEL}`) + Level-Zahlen (Standard `3,6,10,20`). Erstellt/löscht & sortiert die Rollen automatisch (ganz unten, mehr Level = weiter oben) und antwortet mit „Erledigt…“. Alte Level-Rollen werden bei erneuter Nutzung ersetzt. |
-| `/help` | **Alle** | Container-Übersicht aller Commands (Setup, Rank, Level-Rollen, Help, Profile) – wie Birthday Bot. |
+| `/update_leaderboard` | **Admin** | Aktualisiert das Leaderboard **sofort** (z. B. nach manuellen Rollen-/XP-Änderungen). **5-Minuten-Cooldown** pro Server gegen Spam – danach gibt es eine klare Meldung mit Restzeit. |
+| `/help` | **Alle** | Container-Übersicht aller Commands (Setup, Rank, Level-Rollen, Update-Leaderboard, Help, Profile) – wie Birthday Bot. |
 | `/admin_set_bot_profile <image>` | **Admin** | Ändert **serverspezifisches** Bot-Avatar: `standard` (reset), `server` (Server-Icon), `owner` (Owner-Avatar) via `PATCH /guilds/{id}/members/@me` – kein 405! |
 | `/adminpanel` | **Nur Owner im DM** | Serverliste paginiert (5/Seite, 🔴 ohne Owner zuerst), Detail mit Owner, Member, XP-Status, Buttons `Einladung` (1h/1×) & `Verlassen` (Confirm). |
 

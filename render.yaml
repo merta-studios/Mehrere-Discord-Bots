@@ -35,8 +35,15 @@ services:
         sync: false
       - key: XP_BOT_GUILD_ID
         sync: false
-      # Turso (einmal für beide Bots – XP nutzt Turso)
+      # Turso (eine DB für XP-Bot UND Love Tester – gleiche Zugangsdaten)
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN
+        sync: false
+      # --- Love Tester Bot 💘 ---
+      - key: LOVE_BOT_TOKEN
+        sync: false
+      - key: LOVE_BOT_OWNER_ID
+        sync: false
+      - key: LOVE_BOT_GUILD_ID
         sync: false

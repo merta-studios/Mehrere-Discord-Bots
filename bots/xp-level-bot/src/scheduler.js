@@ -37,6 +37,23 @@ const lastLeaderboardRefresh = new Map();
 const lastHourlyRefresh = new Map();
 // Ausschließlich letzter VERSUCH des Stunden-Refreshs.
 const lastLeaderboardAttempt = new Map();
+// Manueller /update_leaderboard-Cooldown (5 Minuten pro Server).
+const MANUAL_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+const lastManualRefresh = new Map();
+
+/**
+ * 5-Minuten-Cooldown für /update_leaderboard.
+ * Rückgabe: 0 = sofort erlaubt, sonst verbleibende Millisekunden.
+ */
+function isManualRefreshDue(guildId, now = Date.now()) {
+  const last = lastManualRefresh.get(guildId) || 0;
+  const remaining = MANUAL_REFRESH_COOLDOWN_MS - (now - last);
+  return remaining > 0 ? remaining : 0;
+}
+
+function noteManualRefresh(guildId, now = Date.now()) {
+  lastManualRefresh.set(guildId, now);
+}
 
 function asTimestamp(value) {
   const n = Number(value || 0);
@@ -437,10 +454,14 @@ module.exports = {
   noteHourlyRefresh,
   syncMapsFromEntry,
   applyDailyDecayForGuild,
+  isManualRefreshDue,
+  noteManualRefresh,
+  MANUAL_REFRESH_COOLDOWN_MS,
   LEADERBOARD_MIN_REFRESH_MS,
   LEADERBOARD_HOURLY_MS,
   LEADERBOARD_HOURLY_RETRY_MS,
   _lastLeaderboardRefresh: lastLeaderboardRefresh,
   _lastHourlyRefresh: lastHourlyRefresh,
   _lastLeaderboardAttempt: lastLeaderboardAttempt,
+  _lastManualRefresh: lastManualRefresh,
 };

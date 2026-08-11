@@ -46,8 +46,15 @@ steckt in den Komponenten selbst.
 - **Täglich um 0 Uhr** (Sprach-Zeitzone): Geburtstagskinder bekommen einen
   Gruß-Container mit „🎉 Gratulieren“-Button; Glückwünsche und
   Anzahl stehen direkt im Container (keine Doppel-Glückwünsche).
+  Die Glückwünsche und Event-Interessenten stehen **kompakt nebeneinander**
+  (Platzsparer) und zeigen jeweils die **Uhrzeit** des Gratulierens bzw.
+  Interesse-Meldens (unsichtbare Marker `wish:`/`int:` im Container speichern
+  die komplette Liste inkl. Zeitstempel – weiterhin ohne DB).
   Gratulieren ist nur in den **nächsten 24 Stunden** nach dem Gruß möglich.
-- **Max. 3 Nachrichten** unter der Liste – automatisches Aufräumen.
+- **7-Tage-Aufräumregel** unter der Liste: Geburtstags-Grüße & Event-Posts
+  bleiben **7 Tage** stehen. Danach werden sie gelöscht – samt **aller
+  Nachrichten darüber bis zur Liste**. Läuft stündlich (plus beim Bot-Start)
+  und ersetzt die alte „max. 3 Nachrichten“-Regel.
 - **/admin_set_bot_profile** – **Nur für Admins:** serverspezifisches Bot-Profilbild
   (Standard / Server-Icon / Server-Owner-Icon) sofort per Discord-API geändert.
 - **/admin_set_birthday** – **Nur für Admins:** setzt Geburtstage für andere

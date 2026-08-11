@@ -22,7 +22,8 @@
  *  - /admin_set_birthday – Admins setzen Geburtstage für andere (nur Admins)
  *  - /help – Befehlsübersicht (ohne /adminpanel)
  *  - /adminpanel – Owner-Panel im Privatchat (Serverliste, Einladung, Leave)
- *  - Max. 3 Nachrichten unter der Liste (wird automatisch aufgeräumt)
+ *  - 7-Tage-Regel unter der Liste: Geburtstags- & Event-Posts bleiben 7 Tage,
+ *    danach werden sie samt aller Nachrichten darüber bis zur Liste gelöscht
  *
  *  Owner-ID: kommt aus der Umgebungsvariable BIRTHDAY_BOT_OWNER_ID
  *  (siehe .env.example bzw. Render-Dashboard).
@@ -103,39 +104,13 @@ module.exports = {
       void handleInteraction(ctx, interaction);
     });
 
-    // ---------------- Aufräum-Logik: max. 3 Nachrichten unter der Liste ----------------
-    // Neue Nachrichten unter dem Listen-Container (egal ob vom Bot oder von
-    // Nutzern) werden begrenzt: die oberste Nachricht direkt unter dem
-    // Container wird gelöscht, bis nur noch 3 übrig sind.
-    client.on('messageCreate', (msg) => {
-      if (!msg.guild) return;
-      const entry = ctx.store.get(msg.guild.id);
-      if (!entry || entry.channelId !== msg.channel.id) return;
-
-      // Die Liste selbst nie löschen (auch kurz nach /setup, wenn die
-      // messageId im Store noch nicht aktuell ist).
-      const isList =
-        msg.id === entry.messageId ||
-        JSON.stringify(msg.components || []).includes('bday::v1::') ||
-        JSON.stringify(msg.components || []).includes('bday_add') ||
-        msg.embeds?.some((e) => (e.footer?.text || '').includes('bday::v1::'));
-      if (isList) return;
-
-      void (async () => {
-        try {
-          const after = await msg.channel.messages.fetch({ after: entry.messageId, limit: 100 });
-          const below = [...after.values()]
-            .filter((m) => !m.pinned)
-            .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-          while (below.length > 3) {
-            const oldest = below.shift();
-            await oldest.delete().catch(() => {});
-          }
-        } catch {
-          /* aufräumen ist nett, aber kein Weltuntergang */
-        }
-      })();
-    });
+    // ---------------- Aufräum-Logik: 7-Tage-Regel unter der Liste ----------------
+    // Früher: max. 3 Nachrichten unter der Liste, älteste wurde gelöscht.
+    // Jetzt: Geburtstags-Grüße & Event-Posts bleiben insgesamt 7 Tage stehen.
+    // Danach werden sie gelöscht – zusammen mit ALLEN Nachrichten, die
+    // darüber (zwischen Post und Liste) liegen. Das Aufräumen läuft stündlich
+    // über den Scheduler (siehe src/scheduler.js → cleanupExpired), damit die
+    // frischen Posts und die Konversation darunter in Ruhe leben können.
 
     // ---------------- Owner-Benachrichtigung bei Server-Beitritt ----------------
     client.on('guildCreate', (guild) => {

@@ -21,10 +21,27 @@ const {
   buildEventConfirmationEmbed,
   buildEventCongratsEmbed,
   decodeEventName,
+  normalizeWishEntries,
   smallContainer,
 } = require('./embed-builder');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
 const { componentsV2Payload } = require('./message-payload');
+
+/**
+ * Liest die Glückwunsch-/Interessenten-Einträge (id + Uhrzeit) aus den
+ * unsichtbaren Markern einer Nachricht:
+ *   \u200Bwish:<userId>:<ts>\u200B  bzw.  \u200Bint:<userId>:<ts>\u200B
+ * Gibt [] zurück, wenn keine Marker vorhanden sind (alte Nachrichten).
+ */
+function parseMarkedEntries(text, prefix) {
+  const out = [];
+  const re = new RegExp(`${prefix}:(\\d+):(\\d+)`, 'g');
+  let m;
+  while ((m = re.exec(text))) {
+    out.push({ id: m[1], ts: Number(m[2]) });
+  }
+  return out;
+}
 
 /**
  * Trägt die Nachricht das Ephemeral-Flag? Robust gegenüber dem
@@ -302,7 +319,7 @@ async function confirmYes(ctx, interaction) {
 
 /**
  * Gratulieren: Wer schon gratuliert hat, kann nicht doppelt.
- * Die Glückwünsche + Anzahl stecken im Container selbst (keine DB).
+ * Die Glückwünsche + Anzahl + Uhrzeiten stecken im Container selbst (keine DB).
  */
 async function congrats(ctx, interaction, id) {
   const parts = id.split('_'); // bday_congrats_<userId>_<dateKey>
@@ -336,11 +353,15 @@ async function congrats(ctx, interaction, id) {
 
   const rawText = extractAllText(interaction.message);
 
-  // Glückwünsche aus dem Text / den Feldern lesen (alle Mentions außer Geburtstagskind)
-  const allMentions = [...rawText.matchAll(/<@!?([^>]+)>/g)].map((m) => m[1]);
-  const wishes = [...new Set(allMentions.filter((uid) => uid !== birthdayUserId))];
+  // Glückwünsche aus den unsichtbaren Markern lesen (id + Uhrzeit).
+  // Fallback für alte Nachrichten ohne Marker: Mentions ohne Uhrzeit.
+  let wishes = parseMarkedEntries(rawText, 'wish');
+  if (!wishes.length) {
+    const allMentions = [...rawText.matchAll(/<@!?([^>]+)>/g)].map((m) => m[1]);
+    wishes = [...new Set(allMentions.filter((uid) => uid !== birthdayUserId))].map((id) => ({ id, ts: null }));
+  }
 
-  if (wishes.includes(clickerId)) {
+  if (wishes.some((w) => w.id === clickerId)) {
     return interaction.reply(
       componentsV2Payload(
         [smallContainer(null, t('alreadyWished', lang, { user: `<@${birthdayUserId}>` }))],
@@ -349,7 +370,8 @@ async function congrats(ctx, interaction, id) {
     );
   }
 
-  wishes.push(clickerId);
+  // Neuer Glückwunsch MIT Uhrzeit
+  wishes.push({ id: clickerId, ts: Date.now() });
 
   const { container } = buildCongratsEmbed({
     member: { id: birthdayUserId },
@@ -534,8 +556,8 @@ async function eventDeleteSelect(ctx, interaction) {
 
 /**
  * „Interessant! 😂“-Button auf der 0-Uhr-Event-Nachricht.
- * Analog zu den Geburtstags-Glückwünschen: Die Interessenten stecken im
- * Container selbst (keine DB), jeder nur einmal, Fenster: 24 Stunden.
+ * Analog zu den Geburtstags-Glückwünschen: Die Interessenten (inkl. Uhrzeit)
+ * stecken im Container selbst (keine DB), jeder nur einmal, Fenster: 24 Stunden.
  */
 async function eventInterest(ctx, interaction) {
   const entry = ctx.store.get(interaction.guildId);
@@ -560,13 +582,20 @@ async function eventInterest(ctx, interaction) {
     );
   }
 
-  const interested = [...new Set([...rawText.matchAll(/<@!?([^>]+)>/g)].map((mm) => mm[1]))];
-  if (interested.includes(clickerId)) {
+  // Interessenten aus den unsichtbaren Markern lesen (id + Uhrzeit).
+  // Fallback für alte Nachrichten ohne Marker: Mentions ohne Uhrzeit.
+  let interested = parseMarkedEntries(rawText, 'int');
+  if (!interested.length) {
+    interested = [...new Set([...rawText.matchAll(/<@!?([^>]+)>/g)].map((mm) => mm[1]))].map((id) => ({ id, ts: null }));
+  }
+
+  if (interested.some((w) => w.id === clickerId)) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('eventAlreadyInterested', lang, { name: boldName }))], { ephemeral: true })
     );
   }
-  interested.push(clickerId);
+  // Neuer Interessent MIT Uhrzeit
+  interested.push({ id: clickerId, ts: Date.now() });
 
   const { container } = buildEventCongratsEmbed({ name, lang, dateKey, interested });
   await interaction.update(componentsV2Payload([container]));
