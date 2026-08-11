@@ -18,13 +18,13 @@ Kontext.
 |---|---|
 | **`/setup`** (Admin) | 3-Schritte-Assistent: **1. Sprache** (10 Sprachen, Auswahlmenü) → **2. Kanäle** (mehrere, Kanal-Auswahlmenü) → **3. Groq-API-Key** (Modal). Mit **Zurück / Weiter / Bestätigen / Abbrechen**, Zusammenfassung am Ende und klarer Anleitung pro Schritt. Bestehende Setups lassen sich jederzeit überschreiben. |
 | **`/test_love [user1] [user2]`** (alle) | Nur möglich, wenn das Setup abgeschlossen ist. Zuerst erscheint eine **öffentliche Bestätigung** mit Datenschutz-Hinweis – die Buttons **✅ Annehmen** / **❌ Ablehnen** kann **nur der Command-Sender** bedienen. |
-| **Analyse mit Live-Fortschritt** | Nach dem Annehmen wird die Nachricht laufend bearbeitet: Fortschrittsbalken + **Prozentsatz** („wie weit ist der Scan?“) + humorvolle Zwischenmeldungen („Frage die Sterne (und Groq) nach eurer Chemie …“). |
+| **Analyse mit Live-Fortschritt** | Nach dem Annehmen wird die Nachricht laufend bearbeitet: echter Fortschrittsbalken, **Prozentsatz** und reale Scan-Zahlen (gelesene Nachrichten, Kanäle, Ausschnitte) – ohne Fake-Witze. |
 | **Chat-Scan** | Durchsucht die eingerichteten Kanäle – **maximal 500 Nachrichten** pro Scan über alle Kanäle. „Weiter analysieren“ holt die nächsten 500 älteren Nachrichten. |
 | **Ausschnitt-Sortierung** | Pro Ausschnitt: **4 Nachrichten davor** + der **Kern** (Nachrichten der beiden User, maximal 3 fremde nacheinander dazwischen) + **der Rest danach** für den Kontext (mind. 9 Nachrichten gesamt). Die Ausschnitte werden verständlich nummeriert und chronologisch sortiert. |
 | **KI-freundliche Umwandlung** | Bilder → `*hat ein Bild gesendet*`, Videos, Sprachnachrichten, Dateien, Sticker, Antworten (`*hat auf eine Nachricht von [USER] mit dem Inhalt „…“ geantwortet mit:*`), Server-Emojis → `:name:`, Erwähnungen → `@Name`, Rollen/Kanäle/Timestamps werden aufgelöst. **Beide User werden im Text markiert** (`[USER1]` / `[USER2]`), damit die KI sie eindeutig erkennt. |
-| **Prompts für Groq** | System-Prompt: teen-tauglicher, aber fairer Ship-Richter, **5 ausführlich begründete Sätze** (beide Vibes, Gemeinsamkeiten, mögliche Reibung, Gesamturteil) + finale Zeile `### XX %`. Beobachtungen werden mit Wortwahl, Reaktionen und Gesprächsdynamik begründet; auch niedrige Prozentwerte sind möglich, wenn die beiden nicht gut zusammenpassen. Keine erfundenen Zitate, passende Emojis und abwechslungsreiche Zahlen. User-Prompt enthält Username, Discord-Anzeigenamen, Server-Nickname & ID. **Namen im Urteil werden automatisch zu echten Mentions.** **Token-Budget** wird überwacht (Ausschnitte mit beiden Usern haben Vorrang, zu große Kontexte werden automatisch gestutzt). |
+| **Prompts für Groq** | System-Prompt: teen-tauglicher, aber fairer Ship-Richter, **5 ausführlich begründete Sätze** (beide Charaktere, Gemeinsamkeiten, mögliche Reibung, Gesamturteil) + finale Zeile `### XX %`. Der Fokus liegt auf Charakter und Persönlichkeit; **fehlende Interaktion wird weder erwähnt noch negativ bewertet**. Auch niedrige Prozentwerte sind möglich, wenn die Charaktere nicht zusammenpassen. Keine erfundenen Zitate, passende Emojis und abwechslungsreiche Zahlen. User-Prompt enthält Username, Discord-Anzeigenamen, Server-Nickname & ID. **Namen im Urteil werden automatisch zu echten Mentions.** **Token-Budget** wird überwacht (Ausschnitte mit beiden Usern haben Vorrang, zu große Kontexte werden automatisch gestutzt). |
 | **Fehlerbehandlung** | Groq-Limit (429), API-Fehler, Discord-Rate-Limits, keine Nachrichten gefunden → verständliche Fehler-Container mit **🔄 Erneut versuchen** (Groq-Call wiederholt sich, Scan bleibt erhalten), **📚 Weiter analysieren** (scannt mehr Nachrichten) und **🛑 Abbrechen**. Nichts geht verloren! |
-| **10 Sprachen** | Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch, Japanisch, Koreanisch, Chinesisch, Italienisch – inkl. humorvoller Analyse-Sprüche. |
+| **10 Sprachen** | Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch, Japanisch, Koreanisch, Chinesisch, Italienisch. |
 | **Admin-Panel & Hilfe** | `/help` und `/adminpanel` (Owner-DM, Serverliste, Einladung, Verlassen) identisch zu Birthday-/XP-Bot, plus `/admin_set_bot_profile`. |
 
 ---
@@ -95,8 +95,8 @@ cp .env.example .env
 
 1. Jemand ruft `/test_love @User1 @User2` auf → **öffentliche Bestätigung**
    mit Datenschutz-Hinweis (Chatverläufe → Groq).
-2. Der Aufrufende klickt **✅ Annehmen** → die Nachricht wird zu
-   „Analysiere …“ mit Fortschrittsbalken und Prozentanzeige.
+2. Der Aufrufende klickt **✅ Annehmen** → die Nachricht wird zu einem
+   echten Ladebildschirm mit Fortschrittsbalken, Prozent und Scan-Zahlen.
 3. Der Bot scannt die Kanäle (max. 500 Nachrichten), baut Ausschnitte
    (4 davor + Kern + Rest danach) und wandelt alles in KI-Text um
    (Bilder, Antworten, Sticker, Emojis, Erwähnungen …).

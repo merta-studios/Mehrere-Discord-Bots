@@ -8,7 +8,7 @@
  *  - runGroqPhase(): ruft Groq mit Retries auf (Rate-Limit, 5xx, Kontext zu
  *    groß → Budget halbieren und erneut versuchen).
  *  - updateProgress(): bearbeitet die sichtbare Nachricht laufend mit %-Stand
- *    und humorvollen Zwischenmeldungen (gedrosselt gegen Discord-Rate-Limits).
+ *    und echten Scan-Zahlen (gedrosselt gegen Discord-Rate-Limits).
  *
  * Fehler enden NIE im Nichts: Die Nachricht wird zu einem Fehler-Container
  * mit „Erneut versuchen“, „Weiter analysieren“ und „Abbrechen“ – der
@@ -367,28 +367,39 @@ async function runGroqPhase(ctx, session) {
 // Fortschritt
 // ---------------------------------------------------------------------------
 
-function phaseText(ctx, session, phase) {
-  const phases = t('analysingPhases', session.lang);
-  const list = Array.isArray(phases) ? phases : [];
+function phaseText(session, phase) {
   if (phase === 'final') return t('analysingFinal', session.lang);
-  return list[session.phaseIdx % Math.max(1, list.length)];
+  if (phase === 'prepare') return t('analysingPrepare', session.lang);
+  return t('analysingScan', session.lang);
+}
+
+function progressPayload(session, pct, phase = 'scan') {
+  return componentsV2Payload([
+    buildProgress({
+      lang: session.lang,
+      token: session.token,
+      pct,
+      phase: phaseText(session, phase),
+      user1: session.user1,
+      user2: session.user2,
+      scanned: session.scannedTotal || 0,
+      channelCount: (session.channels || []).length,
+      excerpts: (session.excerpts || []).length,
+    }),
+  ]);
 }
 
 async function updateProgress(ctx, session, pct, phase = 'scan') {
   const now = Date.now();
   const bigEnough = pct - session.lastPct >= PROGRESS_PCT_STEP || pct === 100 || pct >= 90;
   const longEnough = now - session.lastEditAt >= PROGRESS_MIN_INTERVAL_MS;
-  const isFinal = phase === 'final' || pct === 100;
+  const isFinal = phase === 'final' || phase === 'prepare' || pct === 100;
   if (!isFinal && (!bigEnough || !longEnough)) return;
 
   session.lastPct = Math.max(session.lastPct, pct);
   session.lastEditAt = now;
-  session.phaseIdx += 1;
 
-  const payload = componentsV2Payload([
-    buildProgress({ lang: session.lang, token: session.token, pct, phase: phaseText(ctx, session, phase), user1: session.user1, user2: session.user2 }),
-  ]);
-  await editSessionMessage(ctx, session, payload);
+  await editSessionMessage(ctx, session, progressPayload(session, pct, phase));
 }
 
 async function editSessionMessage(ctx, session, payload) {
@@ -428,11 +439,8 @@ async function runAnalysis(ctx, session) {
   session.status = 'running';
   session.lastError = null;
 
-  // Erste sichtbare Reaktion: humorvolle „Analysiere…“-Nachricht
-  const firstPayload = componentsV2Payload([
-    buildProgress({ lang: session.lang, token: session.token, pct: 0, phase: phaseText(ctx, session, 'scan'), user1: session.user1, user2: session.user2 }),
-  ]);
-  await editSessionMessage(ctx, session, firstPayload);
+  // Erste sichtbare Reaktion: echter Scan-Stand
+  await editSessionMessage(ctx, session, progressPayload(session, 0, 'scan'));
 
   try {
     // 1) Chat scanen (max. 500 Nachrichten über alle Kanäle)
@@ -445,7 +453,7 @@ async function runAnalysis(ctx, session) {
     // 3) Groq befragen
     const result = await runGroqPhase(ctx, session);
 
-    // 4) Ergebnis anzeigen (Mentions, enge Abstände, „### XX %“)
+    // 4) Ergebnis anzeigen (Mentions, normale Schrift, große Prozentzeile)
     session.status = 'done';
     const finalText = finalizeLoveVerdict(result.content, session.user1, session.user2);
     const payload = componentsV2Payload([
@@ -480,6 +488,7 @@ async function continueAnalysis(ctx, session) {
   try {
     await updateProgress(ctx, session, Math.min(90, Math.floor((session.scannedTotal / (MAX_MESSAGES_PER_SCAN * 2)) * 90)), 'scan');
     await scanChannels(ctx, session, MAX_MESSAGES_PER_SCAN);
+    await updateProgress(ctx, session, 90, 'prepare');
     await buildAnalysis(ctx, session);
     const result = await runGroqPhase(ctx, session);
     session.status = 'done';
@@ -531,6 +540,7 @@ module.exports = {
   runAnalysis,
   continueAnalysis,
   updateProgress,
+  progressPayload,
   editSessionMessage,
   scanChannels,
   buildAnalysis,

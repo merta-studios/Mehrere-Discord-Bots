@@ -200,12 +200,18 @@ function buildLoveConfirm({ lang, token, user1, user2 }) {
   return container;
 }
 
-/** Analyse-Fortschritt (wird laufend bearbeitet). */
-function buildProgress({ lang, token, pct, phase, user1, user2 }) {
+/** Analyse-Fortschritt mit echten Scan-Zahlen statt Witz-Phasen. */
+function buildProgress({ lang, token, pct, phase, user1, user2, scanned = 0, channelCount = 0, excerpts = 0 }) {
   const container = new ContainerBuilder();
   const bar = progressBar(pct);
+  const title = t('loveTestTitle', lang, { u1: user1?.displayName || '❔', u2: user2?.displayName || '❔' });
   const participants = user1 && user2 ? `${participantLine(user1, user2)}\n\n` : '';
-  const text = `# ${t('loveTestTitle', lang, { u1: user1?.displayName || '❔', u2: user2?.displayName || '❔' })}\n\n${participants}${bar}\n${t('analysingProgress', lang, { pct, phase })}`;
+  const stats = t('analysingStats', lang, {
+    scanned,
+    channels: channelCount,
+    excerpts,
+  });
+  const text = `# ${title}\n\n${participants}\`${bar}\`\n\n${t('analysingProgress', lang, { pct, phase })}\n${stats}`;
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text.trim()));
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   container.addActionRowComponents(
@@ -216,17 +222,17 @@ function buildProgress({ lang, token, pct, phase, user1, user2 }) {
   return container;
 }
 
-function progressBar(pct, segments = 12) {
+function progressBar(pct, segments = 16) {
   const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * segments);
-  return '🟥'.repeat(filled) + '⬜'.repeat(segments - filled);
+  return '█'.repeat(filled) + '░'.repeat(segments - filled);
 }
 
-/** Ergebnis-Container: KI-Text (enthält die „### XX %“-Zeile) + Footer. */
+/** Ergebnis-Container: großer Titel, normaler KI-Text, große Prozentzeile. */
 function buildResult({ lang, token, aiText, user1, user2 }) {
   const container = new ContainerBuilder();
-  const participants = user1 && user2 ? `${participantLine(user1, user2)}\n` : '';
-  const body = `${t('loveResultTitle', lang)}\n${participants}${aiText}${t('loveResultFooter', lang)}`;
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(body));
+  const participants = user1 && user2 ? `${participantLine(user1, user2)}\n\n` : '';
+  const body = `# ${t('loveResultTitle', lang)}\n\n${participants}${aiText}`;
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(body.trim()));
   return container;
 }
 
