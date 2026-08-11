@@ -390,6 +390,26 @@ test('Sprachdatei: alle wichtigen Keys in allen 10 Sprachen vorhanden', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Endless Story
+// ---------------------------------------------------------------------------
+
+test('Endless-Story-Startformular hält alle Discord-String-Limits ein', () => {
+  const { buildStoryModal } = require('../bots/love-tester-bot/src/endless-story');
+  const modal = buildStoryModal('test-token').toJSON();
+
+  assert.ok(modal.title.length <= 45, 'Modal-Titel ist zu lang');
+  assert.ok(modal.custom_id.length <= 100, 'Modal-Custom-ID ist zu lang');
+  assert.equal(modal.components.length, 4, 'Situation und drei Optionen sind vorhanden');
+
+  for (const row of modal.components) {
+    const input = row.components[0];
+    assert.ok(input.label.length <= 45, `${input.custom_id}: Label ist zu lang`);
+    assert.ok(input.placeholder.length <= 100, `${input.custom_id}: Platzhalter ist zu lang`);
+    assert.ok(input.custom_id.length <= 100, `${input.custom_id}: Custom-ID ist zu lang`);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
