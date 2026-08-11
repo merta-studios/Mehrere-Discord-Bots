@@ -6,8 +6,9 @@ node_modules/
 .env.local
 .env.*.local
 
-# XP Bot lokale Daten (RAM-Fallback, wird bei Turso nicht gebraucht)
+# Bot-lokale Daten (RAM-Fallback, wird bei Turso nicht gebraucht)
 bots/xp-level-bot/xp-data.json
+bots/love-tester-bot/love-data.json
 data/
 *.db
 *.sqlite

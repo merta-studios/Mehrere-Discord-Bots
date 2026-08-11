@@ -73,6 +73,12 @@ function defineCommands() {
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
     new SlashCommandBuilder()
+      .setName('update_leaderboard')
+      .setDescription('Aktualisiert das Leaderboard sofort (5 Min. Cooldown)')
+      .setDescriptionLocalizations(pick('updateLeaderboardHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    new SlashCommandBuilder()
       .setName('adminpanel')
       .setDescription('Owner-Admin-Panel (nur im DM)')
       .setDescriptionLocalizations(pick('helpAdminPanel'))
@@ -218,7 +224,7 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
  *   Guild-IDs einer fremden (Dev-)Gilde, sonst „Kein Befehl gefunden".
  */
 async function ensureCommandIds(ctx, guildId = null) {
-  const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'adminpanel'];
+  const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'adminpanel'];
   const hasAll = (obj) => obj && typeof obj === 'object' && needed.every((name) => Boolean(obj[name]));
 
   const devGuildId = normalizeGuildId(ctx.devGuildId);
@@ -327,6 +333,8 @@ async function handleChatInput(ctx, interaction) {
       return profileCmd(ctx, interaction);
     case 'level_roles':
       return handleLevelRolesCommand(ctx, interaction);
+    case 'update_leaderboard':
+      return updateLeaderboardCmd(ctx, interaction);
     case 'adminpanel':
       return openPanel(ctx, interaction);
     default:
@@ -461,6 +469,8 @@ async function helpCmd(ctx, interaction) {
       '',
       `**${commandMention(ctx, 'level_roles', interaction.guildId)}**\n${t('levelRolesHelp', lang)}`,
       '',
+      `**${commandMention(ctx, 'update_leaderboard', interaction.guildId)}**\n${t('updateLeaderboardHelp', lang)}`,
+      '',
       `**${commandMention(ctx, 'help', interaction.guildId)}**\n${t('helpHelp', lang)}`,
     ].join('\n'))
   );
@@ -500,6 +510,62 @@ async function profileCmd(ctx, interaction) {
     const msg = err?.code === RESTJSONErrorCodes.MissingPermissions || err?.status === 403 ? t('errAvatarPerms', lang) : t('errAvatar', lang, { error: err.message });
     return interaction.editReply(componentsV2Payload([smallContainer(null, msg)]));
   }
+}
+
+/**
+ * /update_leaderboard – Admin: Leaderboard SOFORT neu rendern.
+ * Cooldown: 5 Minuten pro Server (Anti-Spam). Der Cooldown lebt im
+ * Scheduler-Modul (Map) und übersteht auch einen fehlgeschlagenen Edit.
+ */
+async function updateLeaderboardCmd(ctx, interaction) {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }));
+  }
+  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
+  const cfg = ctx.store.getGuild(guildId);
+  const lang = cfg?.lang || langFromDiscord(interaction.locale);
+  if (!perms?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+  }
+  if (!cfg || !cfg.leaderboardChannelId) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('rankNoSetup', lang))], { ephemeral: true }));
+  }
+
+  const { isManualRefreshDue, noteManualRefresh } = require('./scheduler');
+  const now = Date.now();
+  const remainingMs = isManualRefreshDue(guildId, now);
+  if (remainingMs > 0) {
+    const minutes = Math.ceil(remainingMs / 60_000);
+    return interaction.reply(
+      componentsV2Payload(
+        [smallContainer(null, t('updateLeaderboardCooldown', lang, { minutes }))],
+        { ephemeral: true }
+      )
+    );
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  let guild = interaction.guild;
+  if (!guild) {
+    guild = ctx.client.guilds.cache.get(guildId) || (await ctx.client.guilds.fetch(guildId).catch(() => null));
+  }
+  if (!guild) {
+    return interaction.editReply(componentsV2Payload([smallContainer(null, t('errGeneric', lang))]));
+  }
+
+  const { refreshLeaderboard } = require('./scheduler');
+  const ok = await refreshLeaderboard(ctx, cfg, guild, new Date(), { isHourly: false, manual: true });
+  if (ok) {
+    noteManualRefresh(guildId, now);
+    return interaction.editReply(
+      componentsV2Payload([smallContainer(null, t('updateLeaderboardDone', lang))])
+    );
+  }
+  return interaction.editReply(
+    componentsV2Payload([smallContainer(null, t('updateLeaderboardFailed', lang))])
+  );
 }
 
 function todayKeyForLang(lang) {

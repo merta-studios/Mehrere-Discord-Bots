@@ -16,8 +16,9 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 
 | Bereich | Beschreibung |
 |---|---|
-| 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons im Container). 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche, Owner-Admin-Panel im DM. |
-| ⭐ **XP Level Bot** | **RAM-first & Turso-persistiert** – XP pro Wort (Spam-Erkennung krass, 3 XP/Wort, max 30, 30s Cooldown) + **15 XP für Bilder/Videos/Sprachnachrichten**, Level-Kurve 80→1999 XP, täglicher 5%-Basis-Schwund (bei Inaktivität steigend), Voice 25 XP/Min, Top15-Leaderboard **stündlich + bei Level-Ups**, Nicknames `[Lvl X 🥇]` (Top 3, **Rang-Verschiebungen werden zuverlässig nachgezogen**), **Level-Belohnungsrollen via Formular** (`/level_roles`), /rank + /setup (2 Kanäle) + Adminpanel. |
+| 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons im Container). 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche (**Glückwunsch-Liste kompakt nebeneinander mit Uhrzeit**), **7-Tage-Aufräumregel unter der Liste**, Owner-Admin-Panel im DM. |
+| ⭐ **XP Level Bot** | **RAM-first & Turso-persistiert** – XP pro Wort (Spam-Erkennung krass, 3 XP/Wort, max 30, 30s Cooldown) + **15 XP für Bilder/Videos/Sprachnachrichten**, Level-Kurve 80→1999 XP, täglicher 5%-Basis-Schwund (bei Inaktivität steigend), Voice 25 XP/Min, Top15-Leaderboard **stündlich + bei Level-Ups**, Nicknames `[Lvl X 🥇]` (Top 3, **Rang-Verschiebungen werden zuverlässig nachgezogen**), **Level-Belohnungsrollen via Formular** (`/level_roles`), **`/update_leaderboard` (Admin, 5-Min-Cooldown)**, /rank + /setup (2 Kanäle) + Adminpanel. |
+| 💘 **Love Tester Bot** | Schätzt die Liebe zwischen zwei Personen anhand eurer Chatverläufe – **10 Sprachen, humorvolle Groq-Analyse** (`/test_love` mit Datenschutz-Bestätigung & Live-Fortschritt %), `/setup`-Assistent (3 Schritte: Sprache → Kanäle → Groq-Key), nutzt **dieselbe Turso-DB wie der XP-Bot**, Admin-Panel + /help wie die anderen Bots. |
 | 🛠️ **Multi-Bot-Hoster** | Loader, der alle Bots im `bots/`-Ordner automatisch startet (nur die mit gesetztem Token), plus Health-Server für UptimeRobot. |
 
 ## 🗂️ Projektstruktur
@@ -34,8 +35,12 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 │   ├── birthday-bot/         # 🎂 Geburtstags-Bot (komplett)
 │   │   ├── index.js          # Bot-Einstieg (Factory für den Loader)
 │   │   └── src/              # gesamte Bot-Logik
-│   └── xp-level-bot/         # ⚒️ XP-Level-Bot (Platzhalter, System folgt)
-│       └── index.js
+│   ├── xp-level-bot/         # ⭐ XP-Level-Bot (Turso-persistiert)
+│   │   ├── index.js
+│   │   └── src/              # gesamte Bot-Logik
+│   └── love-tester-bot/      # 💘 Love Tester Bot (nutzt dieselbe Turso-DB wie der XP-Bot)
+│       ├── index.js
+│       └── src/              # Wizard, Analyse-Runner, Groq, 10 Sprachen
 │
 ├── tests/                    # Tests (npm test) – ohne Discord-Verbindung
 ├── render.yaml               # Render-Blueprint (Deployment-Config)
@@ -77,7 +82,11 @@ In `.env` eintragen:
 | `BIRTHDAY_BOT_TOKEN` | Token des Geburtstags-Bots |
 | `BIRTHDAY_BOT_OWNER_ID` | **Deine Discord-ID** – der Bot-Owner fürs `/adminpanel` |
 | `BIRTHDAY_BOT_GUILD_ID` | optional: eine Server-ID zum sofortigen Testen der Commands (sonst leer lassen) |
-| `XP_BOT_TOKEN` | Token des XP-Bots (Platzhalter, kann leer bleiben) |
+| `XP_BOT_TOKEN` | Token des XP-Bots |
+| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Turso-DB – **eine DB für XP-Bot UND Love Tester** (gleiche Zugangsdaten) |
+| `LOVE_BOT_TOKEN` | Token des Love-Tester-Bots |
+| `LOVE_BOT_OWNER_ID` | optional: Owner fürs Love-Tester-`/adminpanel` (Fallback: XP-/Birthday-Owner) |
+| `LOVE_BOT_GUILD_ID` | optional: Dev-Server für sofortige Love-Tester-Command-Registrierung |
 | `PORT` | Port für den Health-Server (Standard 10000) |
 
 **Deine Discord-ID findest du so:** Discord → Einstellungen → Erweitert → „Entwicklermodus“
@@ -178,12 +187,16 @@ Die Geburtstagsliste nutzt **Discord Layout Components (Components V2)**:
 hat. Jedes Geburtstagskind bekommt einen hübschen Gruß-Container mit
 einem **🎉 Gratulieren**-Button. Glückwünsche + Anzahl werden direkt
 in den Container geschrieben (auch das ohne DB!) – doppelt gratulieren geht nicht.
+Die Glückwünsche (und Event-Interessenten) stehen **kompakt nebeneinander**
+(statt untereinander) und zeigen jeweils die **Uhrzeit** des Gratulierens.
 Gratulieren ist nur in den **nächsten 24 Stunden** nach dem Gruß möglich – danach
 nimmt der Bot keine Glückwünsche mehr an.
 
-**Aufräumen:** Unter der Liste sind maximal **3 Nachrichten** erlaubt (egal ob von
-Nutzern oder vom Bot). Ältere werden automatisch gelöscht, damit der Container immer
-sofort sichtbar ist.
+**7-Tage-Aufräumregel:** Geburtstags-Grüße & Event-Posts bleiben **insgesamt 7 Tage**
+unter der Liste stehen. Danach werden sie gelöscht – und zwar zusammen mit
+**allen Nachrichten, die darüber bis zur Liste liegen**. So bleibt der Bereich
+unter der Liste sauber, ohne dass frische Posts oder Konversation vorzeitig
+verschwinden. (Vorher: max. 3 Nachrichten unter der Liste, älteste flog raus.)
 
 ### Die 10 Sprachen & Zeitzonen
 
@@ -212,9 +225,35 @@ Kurzfassung – Details siehe [`bots/xp-level-bot/README.md`](bots/xp-level-bot/
 - **Voice**: `25 XP/min` im Voice (nicht stumm/taub, mind. 1 andere Person, ≥5s geredet + Pause).
 - **`/level_roles`** (nur Admins): öffnet ein **Formular** – Rollen-Format (Standard `Level {LEVEL}`, `{LEVEL}` = Platzhalter) + Level-Zahlen kommagetrennt (Standard `3,6,10,20`, Tippfehler werden korrigiert). Der Bot löscht alte Level-Rollen, erstellt neue, **sortiert sie (mehr Level = weiter oben)** und legt sie **ganz unten** in der Rollenliste ab. Bei Level Up/Down bekommen Nutzer alle fehlenden Level-Rollen (mehrere möglich), vorhandene werden nie entfernt.
 - **`/rank`** (alle): Platz, Level, `xp/needed`, Balken & fehlende XP.
+- **`/update_leaderboard`** (nur Admins): rendert das Leaderboard **sofort** neu
+  (z. B. nach manuellen Änderungen) – **5-Minuten-Cooldown** gegen Spam.
 - **`/help` + `/admin_set_bot_profile` + `/adminpanel`** – identisch zum Birthday Bot, mit XP-Details.
 - **Nicknames**: `[Lvl X 🥇] Name` – nur Top 3 mit Medaille, bei Auf-/Abstieg sofort. **Verrückte Plätze werden zuverlässig nachgezogen** (Top-5-Refresh bei jedem Level-Change, XP-only-Überholer alle 2 Min geprüft), 32-Zeichen-Cap, Rechte-Fehler → Ping im Haupt-Chat (außer für den Server-Owner).
 - **Turso**: **RAM-first**, ein Batch-Load beim Start, alle Ops im RAM, Flush nur bei `SIGTERM`, alle 5 Min & bei Level-Change – spart Limits extrem.
+
+---
+
+## 💘 Love Tester Bot – alle Funktionen
+
+Details siehe [`bots/love-tester-bot/README.md`](bots/love-tester-bot/README.md):
+
+- **`/setup`** (nur Admins): **3-Schritte-Assistent** – 1. Sprache (Auswahlmenü,
+  10 Sprachen), 2. mehrere Kanäle (Kanal-Auswahlmenü), 3. Groq-API-Key (Formular).
+  Mit **Zurück / Weiter / Bestätigen / Abbrechen**, guter Anleitung pro Schritt und
+  Zusammenfassung vor dem Speichern.
+- **`/test_love <user1> <user2>`** (alle, nur nach Setup): öffentliche
+  **Datenschutz-Bestätigung** (Chatverläufe → Groq), Buttons nur für den
+  Command-Sender. Danach humorvolle **Live-Analyse mit Fortschrittsbalken in %**.
+- **Scan**: max. **500 Nachrichten** über alle eingerichteten Kanäle; Ausschnitte
+  mit 4 Nachrichten davor, Kern (max. 3 Fremde dazwischen) und Rest danach.
+- **KI-Text-Umwandlung**: Bilder, Videos, Sprachnachrichten, Antworten, Sticker,
+  Server-Emojis, Erwähnungen → lesbarer Text; beide User markiert als `[USER1]`/`[USER2]`.
+- **Groq** (`llama-3.3-70b-versatile`): humorvoller System-Prompt, 3–5 begründete
+  Sätze, finale Zeile `### XX %`. Token-Budget wird überwacht.
+- **Fehler-Resilienz**: Groq-Limit, API-Fehler, Discord-Rate-Limits →
+  „Erneut versuchen“ / „Weiter analysieren“ / „Abbrechen“, Fortschritt bleibt erhalten.
+- **Datenbank**: dieselbe Turso-DB wie der XP-Bot (eigene Tabellen, kaum Daten).
+- `/help` + `/admin_set_bot_profile` + `/adminpanel` – wie bei den anderen Bots.
 
 ---
 

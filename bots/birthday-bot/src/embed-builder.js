@@ -340,12 +340,80 @@ function buildSevenDayErrorEmbed(lang, day, month) {
 }
 
 // ---------------------------------------------------------------------------
+// Glückwunsch-/Interessenten-Listen: kompakt nebeneinander + Uhrzeit
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalisiert Glückwunsch-/Interessenten-Einträge. Erlaubt sowohl alte
+ * Listen (nur User-ID-Strings) als auch neue Einträge mit Zeitstempel:
+ *   "123"                -> { id: "123", ts: null }
+ *   { id: "123", ts: n } -> { id: "123", ts: n }
+ */
+function normalizeWishEntries(entries) {
+  return (entries || [])
+    .map((w) => {
+      if (typeof w === 'string') return { id: w, ts: null };
+      return { id: String(w.id ?? w.userId ?? ''), ts: w.ts || null };
+    })
+    .filter((w) => w.id);
+}
+
+/** Uhrzeit („14:32“) im Format + Zeitzone der Listensprache. */
+function formatWishTime(ts, lang) {
+  if (!ts) return '';
+  const locale = LANGS[lang]?.locale || 'en-US';
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      timeZone: tzOf(lang),
+    }).format(new Date(ts));
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Baut die kompakte, platzsparende Listen-Zeile: Mentions NEBENEINANDER
+ * (nicht mehr untereinander), jeweils mit Uhrzeit des Klicks:
+ *   @Mia · 14:32  @Tom · 14:41  @Lisa · 15:03
+ */
+function wishListText(entries, lang, perLine = 4) {
+  const lines = [];
+  for (let i = 0; i < entries.length; i += perLine) {
+    const chunk = entries.slice(i, i + perLine);
+    lines.push(
+      chunk
+        .map((w) => (w.ts ? `<@${w.id}> · ${formatWishTime(w.ts, lang)}` : `<@${w.id}>`))
+        .join('  ')
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Unsichtbare Marker für ALLE Einträge (auch über maxShown hinaus), damit
+ * der Bot die komplette Liste samt Uhrzeiten jederzeit wieder auslesen kann:
+ *   \u200Bwish:<userId>:<ts>\u200B  bzw.  \u200Bint:<userId>:<ts>\u200B
+ */
+function wishMarkerText(entries, prefix) {
+  return entries
+    .map((w) => (w.ts ? `\u200B${prefix}:${w.id}:${w.ts}\u200B` : ''))
+    .join('');
+}
+
+// ---------------------------------------------------------------------------
 // Täglicher Geburtstags-Gruß
 // ---------------------------------------------------------------------------
 
 /**
  * Geburtstags-Container mit Titel, Erwähnung, Glückwünschen, Trennlinie
  * und „Gratulieren“-Button direkt im Container.
+ *
+ * Glückwünsche: Mentions nebeneinander (Platzsparer), mit Uhrzeit des
+ * Gratulierens. Die komplette Liste inkl. Uhrzeiten steckt als unsichtbarer
+ * Marker im Container (das ist die „Datenbank“).
  */
 function buildCongratsEmbed({ member, lang, dateKey, wishes = [] }) {
   const container = new ContainerBuilder();
@@ -353,13 +421,16 @@ function buildCongratsEmbed({ member, lang, dateKey, wishes = [] }) {
   const header = `# ${t('bdayCongratsTitle', lang)}\n\n${t('bdayCongratsBody', lang, { user: `<@${member.id}>` })}\n\u200Bbday-congrats:${dateKey}:${member.id}\u200B`;
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(header));
 
-  if (wishes.length > 0) {
+  const all = normalizeWishEntries(wishes);
+  if (all.length > 0) {
     const maxShown = 12;
-    let wishesText = `### ${t('congratsField', lang, { count: wishes.length })}\n`;
-    wishesText += wishes.slice(0, maxShown).map((u) => `<@${u}>`).join('\n');
-    if (wishes.length > maxShown) {
-      wishesText += `\n${t('congratsMore', lang, { count: wishes.length - maxShown })}`;
+    let wishesText = `### ${t('congratsField', lang, { count: all.length })}\n`;
+    wishesText += wishListText(all.slice(0, maxShown), lang);
+    if (all.length > maxShown) {
+      wishesText += `\n${t('congratsMore', lang, { count: all.length - maxShown })}`;
     }
+    // Unsichtbare Marker für die komplette Liste (Zähler & Uhrzeiten bleiben korrekt)
+    wishesText += wishMarkerText(all, 'wish');
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(wishesText));
   }
@@ -461,6 +532,7 @@ function eventConfirmationRow(lang) {
 /**
  * Die tägliche Event-Nachricht um 0 Uhr – wie der Geburtstags-Gruß, aber mit
  * Event-Titel, „Interessenten“-Abschnitt und „Interessant! 😂“-Button.
+ * Interessenten: Mentions nebeneinander, mit Uhrzeit des Klicks.
  */
 function buildEventCongratsEmbed({ name, lang, dateKey, interested = [] }) {
   const container = new ContainerBuilder();
@@ -469,13 +541,16 @@ function buildEventCongratsEmbed({ name, lang, dateKey, interested = [] }) {
   const header = `# ${t('eventCongratsTitle', lang)}\n\n${t('eventCongratsBody', lang, { name: `**${name}**` })}\n\u200Bbday-event:${dateKey}:${hex}\u200B`;
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(header));
 
-  if (interested.length > 0) {
+  const all = normalizeWishEntries(interested);
+  if (all.length > 0) {
     const maxShown = 12;
-    let text = `### ${t('eventInterestedField', lang, { count: interested.length })}\n`;
-    text += interested.slice(0, maxShown).map((u) => `<@${u}>`).join('\n');
-    if (interested.length > maxShown) {
-      text += `\n${t('congratsMore', lang, { count: interested.length - maxShown })}`;
+    let text = `### ${t('eventInterestedField', lang, { count: all.length })}\n`;
+    text += wishListText(all.slice(0, maxShown), lang);
+    if (all.length > maxShown) {
+      text += `\n${t('congratsMore', lang, { count: all.length - maxShown })}`;
     }
+    // Unsichtbare Marker für die komplette Liste (Zähler & Uhrzeiten bleiben korrekt)
+    text += wishMarkerText(all, 'int');
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
   }
@@ -554,6 +629,10 @@ module.exports = {
   buildEventCongratsEmbed,
   buildEventDeleteEmbed,
   eventConfirmationRow,
+  normalizeWishEntries,
+  formatWishTime,
+  wishListText,
+  wishMarkerText,
   smallContainer,
   smallEmbed,
 };

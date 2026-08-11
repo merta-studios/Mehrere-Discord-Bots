@@ -32,6 +32,12 @@ const { tzOf } = require('./languages');
 const { componentsV2Payload } = require('./message-payload');
 
 const BIRTHDAY_ROLE_DURATION_MS = 24 * 60 * 60 * 1000; // Geburtstagsrolle: 24 Stunden
+// Geburtstags-Grüße & Event-Posts bleiben 7 Tage unter der Liste stehen und
+// werden danach samt aller Nachrichten darüber (bis zur Liste) gelöscht.
+const POST_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+// Obergrenze: So viele Nachrichten unter der Liste werden pro Cleanup maximal
+// durchsucht, damit das Aufräumen auf sehr aktiven Servern nicht explodiert.
+const CLEANUP_SCAN_CAP = 2000;
 
 // Emojis für Geburtstags-Glückwünsche – in zufälliger Reihenfolge als Reaktionen
 const BIRTHDAY_REACTION_EMOJIS = ['🎉', '🎂', '🎊', '🎁', '🎈', '🥳'];
@@ -420,6 +426,126 @@ function createStore({ client, logger }) {
     }
   }
 
+  /**
+   * Die neue 7-Tage-Aufräumregel:
+   *
+   * Geburtstags-Grüße & Event-Posts (erkennbar an ihren Markern) bleiben
+   * insgesamt 7 Tage unter der Liste stehen. Ist ein Post älter als 7 Tage,
+   * wird er gelöscht – und zwar zusammen mit ALLEN Nachrichten, die darüber
+   * (zwischen ihm und der Liste) liegen. Danach ist der Bereich direkt unter
+   * der Liste wieder sauber, ohne dass frische Posts vorzeitig verschwinden.
+   *
+   * Läuft stündlich über den Scheduler (plus beim ersten Tick nach dem Start).
+   */
+  async function cleanupExpired(entry) {
+    const guild = client.guilds.cache.get(entry.guildId);
+    if (!guild) return { deleted: 0, scanned: 0, hitCap: false };
+
+    let channel = await client.channels.fetch(entry.channelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return { deleted: 0, scanned: 0, hitCap: false };
+
+    // Listen-Nachricht holen – falls die gespeicherte ID veraltet ist,
+    // über den Marker selbst wiederfinden (Self-Healing).
+    let listMsg = entry.messageId ? await channel.messages.fetch(entry.messageId).catch(() => null) : null;
+    if (!listMsg) {
+      const found = await findListMessage(guild);
+      if (!found) return { deleted: 0, scanned: 0, hitCap: false };
+      channel = found.channel;
+      listMsg = found.message;
+      entry.channelId = channel.id;
+      entry.messageId = listMsg.id;
+    }
+
+    const listTs = listMsg.createdTimestamp;
+    const now = Date.now();
+
+    // Nachrichten unter der Liste in Batches einsammeln (neueste zuerst),
+    // bis die Liste selbst erreicht ist oder der Scan-Cap greift.
+    const fetched = [];
+    let before = undefined;
+    let hitCap = false;
+    while (fetched.length < CLEANUP_SCAN_CAP) {
+      let batch;
+      try {
+        batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+      } catch {
+        break; // z. B. Rate-Limit – nächstes Mal weiter
+      }
+      if (!batch.size) break;
+      const arr = [...batch.values()];
+      fetched.push(...arr);
+      if (arr.some((m) => m.id === entry.messageId)) break; // Liste erreicht
+      before = arr[arr.length - 1].id; // älteste der Batch als Cursor
+      if (fetched.length >= CLEANUP_SCAN_CAP) hitCap = true;
+      await sleep(150); // höflich zur API
+    }
+
+    // Nur Nachrichten UNTER der Liste (neuer als die Liste), chronologisch
+    const below = fetched
+      .filter((m) => m.id !== entry.messageId && m.createdTimestamp > listTs)
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+    // Abgelaufene Posts: eigene Geburtstags-Grüße / Event-Posts, älter als 7 Tage.
+    const isPost = (m) => {
+      const s = JSON.stringify(m.components || []);
+      return s.includes('bday-congrats:') || s.includes('bday-event:') || (m.content || '').includes('bday-congrats:') || (m.content || '').includes('bday-event:');
+    };
+    const expired = below.filter((m) => isPost(m) && m.createdTimestamp + POST_LIFETIME_MS <= now);
+    if (!expired.length) return { deleted: 0, scanned: below.length, hitCap };
+
+    // Für jeden abgelaufenen Post (ältester zuerst): erst alle Nachrichten
+    // darüber bis zur Liste löschen, dann den Post selbst.
+    const deletedIds = new Set();
+    let deleted = 0;
+    for (const post of expired) {
+      const between = below
+        .filter((m) => !deletedIds.has(m.id) && m.createdTimestamp > listTs && m.createdTimestamp < post.createdTimestamp)
+        .map((m) => m.id);
+      const targets = [...between, post.id];
+      for (const id of targets) {
+        await deleteMessageSafely(channel, id);
+        deletedIds.add(id);
+        deleted += 1;
+      }
+    }
+
+    if (deleted > 0) {
+      logger.info(`[birthday-bot] 7-Tage-Cleanup auf „${guild.name}“: ${deleted} Nachricht(en) gelöscht (${expired.length} abgelaufene Posts).`);
+    }
+    return { deleted, scanned: below.length, hitCap };
+  }
+
+  /** Löscht Nachrichten robust: Bulk wo möglich (unter 14 Tagen), sonst einzeln, mit Rate-Limit-Retry. */
+  async function deleteMessageSafely(channel, id) {
+    // Bulk-Delete nur für Nachrichten unter 14 Tagen – unsere Ziele sind
+    // höchstens ~7 Tage alt, aber Nachrichten zwischen Liste und altem Post
+    // können älter sein. filterOld=true entfernt zu alte aus dem Bulk.
+    try {
+      const done = await channel.bulkDelete([id], true);
+      if (done && done.size) return;
+    } catch (err) {
+      if (err?.status === 403) return; // keine Manage-Messages-Rechte → aufgeben
+      // 429/5xx: unten einzeln mit Retry versuchen
+    }
+    // Einzeln löschen (funktioniert auch für >14 Tage), mit 429-Retry
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const m = await channel.messages.fetch(id).catch(() => null);
+        if (m) await m.delete();
+        return;
+      } catch (err) {
+        if (err?.status === 429) {
+          const wait = (err.retryAfter ?? err.rateLimit?.retryAfter ?? 1) * 1000 + 250;
+          await sleep(Math.min(wait, 10_000));
+          continue;
+        }
+        if (err?.status === 403) return;
+        if (err?.code === 10008 || err?.code === 10005) return; // schon weg
+        await sleep(300 * (attempt + 1));
+      }
+    }
+  }
+
   return {
     get: (guildId) => registry.get(guildId),
     set: (entry) => registry.set(entry.guildId, entry),
@@ -429,10 +555,11 @@ function createStore({ client, logger }) {
     scanGuilds,
     refresh,
     birthdayCheck,
+    cleanupExpired,
     assignBirthdayRole,
     cleanupBirthdayRoles,
     BIRTHDAY_ROLE_DURATION_MS,
-    _roleTimers: roleTimers,
+    POST_LIFETIME_MS,
     // Exposed for testing
     _extractEmojis: extractEmojisFromText,
     _shuffle: shuffleArray,

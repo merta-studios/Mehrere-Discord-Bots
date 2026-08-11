@@ -1,6 +1,6 @@
 /**
  * Tests für die Slash-Command-Registrierung und den /help Command des XP-Bots:
- * 1. Discord-API-Validierung aller 6 Commands (inkl. /level_roles)
+ * 1. Discord-API-Validierung aller 7 Commands (inkl. /level_roles & /update_leaderboard)
  * 2. Saubere globale Registrierung ohne Dev-Gilden-Verwechslung + Shadowing-Cleanup
  * 3. Spezifische Dev-Gilden-Registrierung bei gesetzter XP_BOT_GUILD_ID
  * 4. Whitespace-Toleranz bei Env-Variablen
@@ -103,9 +103,9 @@ function makeCtx(overrides = {}) {
   };
 }
 
-test('alle 6 Command-JSONs sind Discord-API-valide (inkl. /level_roles)', () => {
+test('alle 7 Command-JSONs sind Discord-API-valide (inkl. /level_roles & /update_leaderboard)', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 6);
+  assert.equal(cmds.length, 7);
   for (const c of cmds) {
     assert.deepEqual(validateCommand(c), [], `Command "${c.name}" würde von Discord abgelehnt`);
   }
@@ -129,7 +129,7 @@ test('registerCommands registriert global (inkl. /level_roles) und räumt alte G
   assert.equal(calls[0].route, Routes.applicationCommands('app1'));
   const names = calls[0].body.map((c) => c.name);
   assert.ok(names.includes('level_roles'), `/level_roles fehlt im Registrierungs-Payload! Enthalten: ${names.join(', ')}`);
-  assert.deepEqual(names, ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'adminpanel']);
+  assert.deepEqual(names, ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'adminpanel']);
 
   // Zweiter Call: alte Guild-Commands auf g1 geleert ({ body: [] }), damit kein Shadowing entsteht
   assert.equal(calls[1].route, Routes.applicationGuildCommands('app1', 'g1'));
@@ -231,7 +231,8 @@ test('ensureCommandIds lädt IDs von Discord REST GET nach wenn RAM und Store le
         { id: '1003', name: 'help' },
         { id: '1004', name: 'admin_set_bot_profile' },
         { id: '1005', name: 'level_roles' },
-        { id: '1006', name: 'adminpanel' },
+        { id: '1006', name: 'update_leaderboard' },
+        { id: '1007', name: 'adminpanel' },
       ];
     },
   };
@@ -440,7 +441,8 @@ test('ensureCommandIds lädt auf normalen Servern GLOBALE Commands, auch wenn De
         { id: '4003', name: 'help' },
         { id: '4004', name: 'admin_set_bot_profile' },
         { id: '4005', name: 'level_roles' },
-        { id: '4006', name: 'adminpanel' },
+        { id: '4006', name: 'update_leaderboard' },
+        { id: '4007', name: 'adminpanel' },
       ];
     },
   };
@@ -466,7 +468,8 @@ test('ensureCommandIds lädt auf der Dev-Gilde die Guild-Commands und verschmutz
         { id: '5003', name: 'help' },
         { id: '5004', name: 'admin_set_bot_profile' },
         { id: '5005', name: 'level_roles' },
-        { id: '5006', name: 'adminpanel' },
+        { id: '5006', name: 'update_leaderboard' },
+        { id: '5007', name: 'adminpanel' },
       ];
     },
   };

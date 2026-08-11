@@ -213,7 +213,13 @@ test('Formular-Absenden erzeugt genau eine ephemere Bestätigungsnachricht (Cont
 
 test('Formular mit Tippfehler im Monat erkennt September trotzdem', async () => {
   const h = makeHarness();
-  const good = dateIn(20);
+  // Datum so wählen, dass der Tag in JEDEM Monat gültig ist (1.–28.),
+  // damit der Test nicht vom aktuellen Datum abhängt (z. B. 31. August
+  // wäre im Fuzzy-September ungültig).
+  const now = tzParts('Europe/Berlin');
+  // min(day, 8) + 20 = immer 28. des Monats → in jedem Monat gültig
+  const d = new Date(Date.UTC(now.year, now.month - 1, Math.min(now.day, 8) + 20));
+  const good = { day: d.getUTCDate(), month: d.getUTCMonth() + 1 };
   const interaction = h.makeInteraction({
     customId: 'bday_modal',
     fields: {
