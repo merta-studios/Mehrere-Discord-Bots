@@ -222,7 +222,17 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
  * - Auf der Dev-Gilde (guildId === devGuildId) werden Guild-Command-IDs verwendet.
  * - Auf ALLEN anderen Servern werden NUR globale Command-IDs verwendet – nie
  *   Guild-IDs einer fremden (Dev-)Gilde, sonst „Kein Befehl gefunden".
+ *
+ * VERIFIZIERUNG (Versuch 6): Gespeicherte Command-IDs werden NICHT blind
+ * vertraut. Eine veraltete Snowflake (z.B. weil Discord einen Command neu
+ * angelegt oder gelöscht hat) würde sonst in /help als </name:STALE_ID>
+ * gerendert – beim Klick meldet Discord dann „Kein Befehl gefunden"
+ * (genau das passierte bei /update_leaderboard). Deshalb werden die IDs
+ * gegen die Discord REST API geprüft, sobald sie älter als die TTL sind
+ * (max. 1 GET alle 5 Minuten pro Bot-Prozess, /help bleibt schnell).
  */
+const COMMAND_ID_VERIFY_TTL_MS = 5 * 60 * 1000;
+
 async function ensureCommandIds(ctx, guildId = null) {
   const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'adminpanel'];
   const hasAll = (obj) => obj && typeof obj === 'object' && needed.every((name) => Boolean(obj[name]));
@@ -230,27 +240,38 @@ async function ensureCommandIds(ctx, guildId = null) {
   const devGuildId = normalizeGuildId(ctx.devGuildId);
   const isDevGuildCall = Boolean(devGuildId && guildId && String(guildId) === devGuildId);
 
-  // 1. In-Memory Check (Guild-Slot zuerst, aber NUR auf der Dev-Gilde)
+  // Wurden die geladenen IDs erst kürzlich gegen Discord verifiziert?
+  const verifyScope = isDevGuildCall ? `guild:${guildId}` : 'global';
+  const isFresh = () =>
+    ctx.commandIdsVerifiedScope === verifyScope &&
+    typeof ctx.commandIdsVerifiedAt === 'number' &&
+    Date.now() - ctx.commandIdsVerifiedAt < COMMAND_ID_VERIFY_TTL_MS;
+
+  // 1. In-Memory Check (Guild-Slot zuerst, aber NUR auf der Dev-Gilde).
+  //    Nur zurückgeben, wenn frisch verifiziert – sonst weiter zu Schritt 3.
   if (isDevGuildCall && ctx.guildCommandIds instanceof Map && hasAll(ctx.guildCommandIds.get(guildId))) {
-    return ctx.guildCommandIds.get(guildId);
+    if (isFresh()) return ctx.guildCommandIds.get(guildId);
   }
   if (hasAll(ctx.commandIds)) {
-    return ctx.commandIds;
+    if (isFresh()) return ctx.commandIds;
   }
 
-  // 2. Store Check (übersteht Bot-Restarts sofort ohne REST-Aufruf)
+  // 2. Store Check (übersteht Bot-Restarts sofort ohne REST-Aufruf).
+  //    Auch hier: ohne frische Verifizierung nicht blind zurückgeben.
   if (isDevGuildCall && ctx.store?.getGuildCommandIds && hasAll(ctx.store.getGuildCommandIds(guildId))) {
     const storedG = ctx.store.getGuildCommandIds(guildId);
     ctx.guildCommandIds = ctx.guildCommandIds || new Map();
     ctx.guildCommandIds.set(guildId, storedG);
-    return storedG;
+    if (isFresh()) return storedG;
   }
   if (ctx.store?.getCommandIds && hasAll(ctx.store.getCommandIds())) {
     ctx.commandIds = { ...(ctx.commandIds || {}), ...ctx.store.getCommandIds() };
-    return ctx.commandIds;
+    if (isFresh()) return ctx.commandIds;
   }
 
-  // 3. Fallback: Command-IDs direkt von der Discord REST API abrufen
+  // 3. Command-IDs direkt von der Discord REST API abrufen und damit die
+  //    gespeicherten IDs VERIFIZIEREN bzw. korrigieren. Verwaiste Snowflakes
+  //    (z.B. gelöschte/neu angelegte Commands) werden so ersetzt.
   const clientId = ctx.client?.user?.id;
   const token = ctx.token;
   if (clientId && token) {
@@ -261,33 +282,57 @@ async function ensureCommandIds(ctx, guildId = null) {
         // Nur auf der Dev-Gilde selbst die Guild-Commands laden – und nur in den
         // Guild-Slot schreiben, nie in den globalen Slot.
         const fetched = await rest.get(Routes.applicationGuildCommands(clientId, devGuildId));
-        if (Array.isArray(fetched) && fetched.length > 0) {
+        if (Array.isArray(fetched)) {
           const ids = Object.fromEntries(fetched.map((c) => [c.name, c.id]));
           ctx.guildCommandIds = ctx.guildCommandIds || new Map();
           ctx.guildCommandIds.set(devGuildId, ids);
           if (ctx.store?.setGuildCommandIds) ctx.store.setGuildCommandIds(devGuildId, ids);
-          if (hasAll(ids)) return ids;
+          if (hasAll(ids)) {
+            ctx.commandIdsVerifiedScope = verifyScope;
+            ctx.commandIdsVerifiedAt = Date.now();
+            return ids;
+          }
         }
       } else {
         // Normaler Server / Produktion: IMMER die globalen Commands laden.
         const fetched = await rest.get(Routes.applicationCommands(clientId));
-        if (Array.isArray(fetched) && fetched.length > 0) {
+        if (Array.isArray(fetched)) {
           const ids = Object.fromEntries(fetched.map((c) => [c.name, c.id]));
           ctx.commandIds = ids;
           if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
-          if (hasAll(ids)) return ids;
+          if (hasAll(ids)) {
+            ctx.commandIdsVerifiedScope = verifyScope;
+            ctx.commandIdsVerifiedAt = Date.now();
+            return ids;
+          }
         }
       }
 
-      // Falls GET immer noch unvollständig ist (z.B. /level_roles fehlt auf Discord),
-      // aktiv neu registrieren
-      await registerCommands(ctx, { retryDelays: [0] });
-      if (hasAll(ctx.commandIds)) return ctx.commandIds;
+      // Falls GET immer noch unvollständig ist (z.B. /level_roles oder
+      // /update_leaderboard fehlt auf Discord), aktiv neu registrieren und
+      // die frischen IDs verwenden. Nur bei echtem Erfolg als verifiziert
+      // markieren – sonst versucht der nächste /help-Aufruf es erneut.
+      const registered = await registerCommands(ctx, { retryDelays: [0] });
+      if (registered) {
+        if (isDevGuildCall) {
+          const guildIds = ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(devGuildId) : null;
+          if (guildIds && hasAll(guildIds)) {
+            ctx.commandIdsVerifiedScope = verifyScope;
+            ctx.commandIdsVerifiedAt = Date.now();
+            return guildIds;
+          }
+        } else if (hasAll(ctx.commandIds)) {
+          ctx.commandIdsVerifiedScope = verifyScope;
+          ctx.commandIdsVerifiedAt = Date.now();
+          return ctx.commandIds;
+        }
+      }
     } catch (err) {
       ctx.logger?.warn?.(`[xp-level-bot] ensureCommandIds: Fetch/Register fehlgeschlagen: ${err.message}`);
     }
   }
 
+  // Keine verifizierten IDs verfügbar – bestmöglichen Fallback liefern.
   return ctx.commandIds || {};
 }
 

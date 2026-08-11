@@ -170,7 +170,11 @@ function createLoveStore({ logger, env } = {}) {
   function getCommandId(name) { return commandIds[name] || null; }
   function setCommandIds(ids) {
     if (ids && typeof ids === 'object') {
-      commandIds = { ...commandIds, ...ids };
+      // ERSTZEN statt mergen: `ids` ist immer die vollständige, autoritative
+      // Liste von Discord (PUT-Antwort oder REST-GET). Verwaiste Snowflakes
+      // dürfen beim Merge sonst als alte ID überleben und in /help
+      // „Kein Befehl gefunden" auslösen.
+      commandIds = { ...ids };
       dirtyMetadata = true;
       try { saveToFile(); } catch {}
     }

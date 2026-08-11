@@ -239,7 +239,12 @@ function createXpStore({ logger, env } = {}) {
   }
   function setCommandIds(ids) {
     if (ids && typeof ids === 'object') {
-      commandIds = { ...commandIds, ...ids };
+      // ERSTZEN statt mergen: `ids` ist immer die vollständige, autoritative
+      // Liste von Discord (PUT-Antwort oder REST-GET). Verwaiste Snowflakes
+      // (z.B. /update_leaderboard, das Discord neu angelegt hat) dürfen beim
+      // Merge sonst als alte ID überleben und in /help „Kein Befehl gefunden"
+      // auslösen.
+      commandIds = { ...ids };
       dirtyMetadata = true;
       try { saveToFile(); } catch {}
     }

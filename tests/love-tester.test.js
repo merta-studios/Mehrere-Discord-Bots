@@ -338,3 +338,148 @@ test('Store: RAM-Roundtrip + Datei-Fallback (gleiche Turso-Env-Auflösung wie XP
   store.stopBackupInterval();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------------------
+// Bugfix-Regressionstests: Command-Registrierung & -Verifizierung
+//
+// Gemeldete Bugs:
+//  1. „Love Tester hat gar keine Commands registriert – unbenutzbar":
+//     Die Registrierung lief nur EINMAL beim Start; schlug sie fehl, gab es
+//     keinen Retry. → startCommandSelfHealing registriert alle 15 min nach.
+//  2. Verwaiste Store-Snowflakes (wie beim XP-Bot) dürfen in /help keine
+//     toten Mentions erzeugen → ensureCommandIds verifiziert gegen Discord.
+// ---------------------------------------------------------------------------
+
+test('ensureCommandIds korrigiert verwaiste Store-Snowflakes gegen Discord REST', async () => {
+  const { createLoveStore } = require('../bots/love-tester-bot/src/store');
+  const { ensureCommandIds } = require('../bots/love-tester-bot/src/commands');
+  const store = createLoveStore({ env: () => '' });
+  store.setCommandIds({
+    setup: '101',
+    test_love: '102',
+    help: '103',
+    admin_set_bot_profile: '104',
+    adminpanel: 'STALE-OLD', // ← verwaiste ID
+  });
+
+  const fakeRest = {
+    get: async () => [
+      { id: '101', name: 'setup' },
+      { id: '102', name: 'test_love' },
+      { id: '103', name: 'help' },
+      { id: '104', name: 'admin_set_bot_profile' },
+      { id: '205', name: 'adminpanel' },
+    ],
+  };
+
+  const ctx = {
+    store,
+    token: 'test-token',
+    rest: fakeRest,
+    client: { user: { id: 'app1' } },
+    commandIds: store.getCommandIds(),
+    guildCommandIds: new Map(),
+  };
+
+  const ids = await ensureCommandIds(ctx, 'g1');
+  assert.equal(ids.adminpanel, '205', 'verwaiste ID muss durch frische ersetzt werden');
+  assert.equal(ctx.store.getCommandId('adminpanel'), '205', 'Store muss korrigiert werden');
+});
+
+test('love-store.setCommandIds ERSTZT die komplette Liste (keine verwaisten IDs per Merge)', () => {
+  const { createLoveStore } = require('../bots/love-tester-bot/src/store');
+  const store = createLoveStore({ env: () => '' });
+  store.setCommandIds({ setup: '111', adminpanel: 'STALE' });
+  store.setCommandIds({ setup: '222', test_love: '333' });
+  assert.equal(store.getCommandId('adminpanel'), null, 'verwaiste ID darf nicht weiterleben');
+  assert.equal(store.getCommandId('setup'), '222');
+  assert.equal(store.getCommandId('test_love'), '333');
+});
+
+test('Command-Selbstheilung holt eine fehlgeschlagene Initial-Registrierung nach', async () => {
+  const { startCommandSelfHealing } = require('../bots/love-tester-bot/src/scheduler');
+  let putCalls = 0;
+  const fakeRest = {
+    put: async (route, { body }) => {
+      putCalls++;
+      return (body || []).map((c) => ({ id: `id-${c.name}`, name: c.name }));
+    },
+  };
+  const ctx = {
+    commandsRegistered: false, // Initial-Registrierung ist fehlgeschlagen
+    token: 'test-token',
+    rest: fakeRest,
+    client: { user: { id: 'app1' }, guilds: { cache: new Map() } },
+    logger: { info() {}, warn() {}, error() {} },
+    commandIds: {},
+    guildCommandIds: new Map(),
+  };
+
+  const stop = startCommandSelfHealing({ ctx, retryMs: 5, revMs: 10_000 });
+  try {
+    const deadline = Date.now() + 2000;
+    while (ctx.commandsRegistered !== true && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(ctx.commandsRegistered, true, 'Selbstheilung muss die Registrierung nachholen');
+    assert.ok(putCalls >= 1, 'es muss ein PUT an Discord gehen');
+  } finally {
+    stop();
+  }
+});
+
+test('Command-Selbstheilung lässt eine erfolgreiche Registrierung in Ruhe', async () => {
+  const { startCommandSelfHealing } = require('../bots/love-tester-bot/src/scheduler');
+  let putCalls = 0;
+  const fakeRest = {
+    put: async (route, { body }) => {
+      putCalls++;
+      return (body || []).map((c) => ({ id: `id-${c.name}`, name: c.name }));
+    },
+  };
+  const ctx = {
+    commandsRegistered: true,
+    token: 'test-token',
+    rest: fakeRest,
+    client: { user: { id: 'app1' }, guilds: { cache: new Map() } },
+    logger: { info() {}, warn() {}, error() {} },
+    commandIds: {},
+    guildCommandIds: new Map(),
+  };
+
+  const stop = startCommandSelfHealing({ ctx, retryMs: 5, revMs: 10_000 });
+  await new Promise((r) => setTimeout(r, 50));
+  stop();
+  assert.equal(putCalls, 0, 'keine unnötige Neu-Registrierung bei intakter Registrierung');
+});
+
+test('Command-Selbstheilung stößt periodisch (24h) eine frische Registrierung an', async () => {
+  const { startCommandSelfHealing } = require('../bots/love-tester-bot/src/scheduler');
+  let putCalls = 0;
+  const fakeRest = {
+    put: async (route, { body }) => {
+      putCalls++;
+      return (body || []).map((c) => ({ id: `id-${c.name}`, name: c.name }));
+    },
+  };
+  const ctx = {
+    commandsRegistered: true,
+    token: 'test-token',
+    rest: fakeRest,
+    client: { user: { id: 'app1' }, guilds: { cache: new Map() } },
+    logger: { info() {}, warn() {}, error() {} },
+    commandIds: {},
+    guildCommandIds: new Map(),
+  };
+
+  const stop = startCommandSelfHealing({ ctx, retryMs: 5, revMs: 20 });
+  try {
+    const deadline = Date.now() + 2000;
+    while (putCalls < 1 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.ok(putCalls >= 1, 'nach dem Reverify-Flip wird frisch registriert');
+  } finally {
+    stop();
+  }
+});

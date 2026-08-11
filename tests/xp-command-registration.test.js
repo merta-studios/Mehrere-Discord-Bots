@@ -533,3 +533,143 @@ test('store persistiert den Command-ID-Scope über Datei-Neustart hinweg', async
   await store4.init();
   assert.equal(store4.getCommandIdScope(), 'guild:123456789012345678');
 });
+
+// ---------------------------------------------------------------------------
+// Bugfix-Regressionstests: verwaiste (stale) Command-IDs
+//
+// Gemeldeter Bug: /update_leaderboard stand in der /help-Übersicht blau
+// (klickbar), aber Discord meldete beim Klick „KEIN BEFEHL GEFUNDEN / Dieser
+// Befehl ist nicht verfügbar". Ursache: Der Store enthielt eine ALTE Snowflake
+// für /update_leaderboard (Discord hatte den Command zwischenzeitlich neu
+// angelegt und damit eine neue ID vergeben). ensureCommandIds hat die
+// gespeicherten IDs blind vertraut, solange alle Namen vorhanden waren –
+// /help rendert dann </update_leaderboard:ALTE_ID>.
+// ---------------------------------------------------------------------------
+
+test('ensureCommandIds korrigiert verwaiste Store-Snowflakes gegen Discord REST (Bugfix /update_leaderboard)', async () => {
+  const store = createXpStore({ env: () => '' });
+  store.setCommandIds({
+    setup: '1001',
+    rank: '1002',
+    help: '1003',
+    admin_set_bot_profile: '1004',
+    level_roles: '1005',
+    update_leaderboard: 'DEAD-BEEF-OLD', // ← verwaiste ID aus früherer Registrierung
+    adminpanel: '1007',
+  });
+
+  const routes = [];
+  const fakeRest = {
+    get: async (route) => {
+      routes.push(route);
+      // Discord kennt /update_leaderboard unter einer NEUEN Snowflake:
+      return [
+        { id: '1001', name: 'setup' },
+        { id: '1002', name: 'rank' },
+        { id: '1003', name: 'help' },
+        { id: '1004', name: 'admin_set_bot_profile' },
+        { id: '1005', name: 'level_roles' },
+        { id: '2006', name: 'update_leaderboard' },
+        { id: '1007', name: 'adminpanel' },
+      ];
+    },
+  };
+
+  const ctx = makeCtx({ store, rest: fakeRest, commandIds: store.getCommandIds() });
+  const ids = await ensureCommandIds(ctx, 'g1');
+
+  assert.equal(routes[0], Routes.applicationCommands('app1'), 'muss gegen Discord verifizieren (global)');
+  assert.equal(ids.update_leaderboard, '2006', 'verwaiste ID muss durch die frische ersetzt werden');
+  assert.equal(ctx.commandIds.update_leaderboard, '2006');
+  assert.equal(ctx.store.getCommandId('update_leaderboard'), '2006', 'Store muss korrigiert werden');
+});
+
+test('verifizierte IDs werden innerhalb der TTL aus dem Memory genutzt (kein REST-Spam bei /help)', async () => {
+  let getCalls = 0;
+  const fakeRest = {
+    get: async () => {
+      getCalls++;
+      return [
+        { id: '1', name: 'setup' },
+        { id: '2', name: 'rank' },
+        { id: '3', name: 'help' },
+        { id: '4', name: 'admin_set_bot_profile' },
+        { id: '5', name: 'level_roles' },
+        { id: '6', name: 'update_leaderboard' },
+        { id: '7', name: 'adminpanel' },
+      ];
+    },
+  };
+  const ctx = makeCtx({ rest: fakeRest, commandIds: {} });
+  const first = await ensureCommandIds(ctx, 'g1');
+  assert.equal(getCalls, 1);
+  assert.equal(first.update_leaderboard, '6');
+
+  // Zweiter Aufruf direkt danach: frisch verifiziert → kein weiterer REST-Call
+  const second = await ensureCommandIds(ctx, 'g1');
+  assert.equal(getCalls, 1, 'TTL verhindert unnötige REST-Aufrufe');
+  assert.equal(second.update_leaderboard, '6');
+});
+
+test('store.setCommandIds ERSTZT die komplette Liste (verwaiste IDs überleben keinen Merge)', () => {
+  const store = createXpStore({ env: () => '' });
+  store.setCommandIds({ setup: '111', update_leaderboard: 'STALE' });
+  // Frische, vollständige Registrierungsantwort von Discord:
+  store.setCommandIds({ setup: '222', rank: '333' });
+  assert.equal(store.getCommandId('update_leaderboard'), null, 'verwaiste ID darf nicht weiterleben');
+  assert.equal(store.getCommandId('setup'), '222');
+  assert.equal(store.getCommandId('rank'), '333');
+});
+
+test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Store-ID (End-to-End-Bugfix)', async () => {
+  let replyPayload = null;
+  const store = createXpStore({ env: () => '' });
+  store.setGuild({ guildId: 'g1', lang: 'de' });
+  store.setCommandIds({
+    setup: '3001',
+    rank: '3002',
+    help: '3003',
+    admin_set_bot_profile: '3004',
+    level_roles: '3005',
+    update_leaderboard: 'DEAD-BEEF-OLD', // ← verwaist (der gemeldete Bug)
+    adminpanel: '3007',
+  });
+
+  const fakeRest = {
+    get: async () => [
+      { id: '3001', name: 'setup' },
+      { id: '3002', name: 'rank' },
+      { id: '3003', name: 'help' },
+      { id: '3004', name: 'admin_set_bot_profile' },
+      { id: '3005', name: 'level_roles' },
+      { id: '4006', name: 'update_leaderboard' }, // frische Snowflake von Discord
+      { id: '3007', name: 'adminpanel' },
+    ],
+  };
+
+  const ctx = {
+    store,
+    token: 'test-token',
+    rest: fakeRest,
+    client: { user: { id: 'app1' } },
+    commandIds: store.getCommandIds(),
+    guildCommandIds: new Map(),
+  };
+
+  const interaction = {
+    commandName: 'help',
+    guildId: 'g1',
+    locale: 'de',
+    isChatInputCommand: () => true,
+    reply: async (payload) => {
+      replyPayload = payload;
+      return payload;
+    },
+  };
+
+  await handleChatInput(ctx, interaction);
+
+  const text = JSON.stringify(replyPayload.components.map((c) => (c.toJSON ? c.toJSON() : c)));
+  assert.ok(text.includes('</update_leaderboard:4006>'), '/help muss die frische ID rendern');
+  assert.ok(!text.includes('DEAD-BEEF-OLD'), 'verwaiste Store-ID darf nie gerendert werden');
+});
