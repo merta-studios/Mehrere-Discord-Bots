@@ -292,6 +292,34 @@ async function sendNextSituationMessage(ctx, guildId, channel, { situation, opti
   return sent;
 }
 
+/**
+ * Reaktiviert die Buttons der letzten Story-Nachricht und verwirft die gerade
+ * gewählte (noch nicht gespielte) Option. So kann ein fehlgeschlagener Groq-Call
+ * nicht das Ende der Runde bedeuten – die User können später erneut klicken.
+ * Gibt true zurück, wenn das Reaktivieren erfolgreich war, sonst false.
+ */
+async function revertPendingChoice(ctx, guildId, channel) {
+  const st = getRuntimeState(ctx, guildId);
+  const entry = st.history && st.history.length ? st.history[st.history.length - 1] : null;
+  if (!entry || !st.lastMessageId) return false;
+  try {
+    const payload = buildSituationPayload({
+      situation: entry.situation,
+      options: entry.options,
+      colors: st.colors,
+      disabled: false,
+      turn: st.turn,
+    });
+    await channel.messages.edit(st.lastMessageId, payload);
+    entry.chosenOption = null;
+    entry.decidedBy = null;
+    return true;
+  } catch (e) {
+    ctx.logger?.warn?.('[love-tester-bot] story revert failed:', e.message);
+    return false;
+  }
+}
+
 /** Löscht überzählige Fremd-Nachrichten unter der letzten Story-Nachricht. */
 async function cleanupForeignMessages(ctx, channel, lastStoryMsg) {
   try {
@@ -496,7 +524,8 @@ async function handleStoryButton(ctx, interaction) {
 
     if (!cfg?.groqApiKey) {
       st.locked = false;
-      return interaction.followUp(componentsV2Payload([smallContainer(null, 'Groq-API-Key fehlt – /setup ausführen.')], { ephemeral: true })).catch(() => {});
+      await revertPendingChoice(ctx, interaction.guildId, interaction.channel);
+      return interaction.followUp(componentsV2Payload([smallContainer(null, 'Groq-API-Key fehlt – /setup ausführen. Die Runde bleibt offen, du kannst gleich nochmal klicken.')], { ephemeral: true })).catch(() => {});
     }
 
     let next;
@@ -510,8 +539,11 @@ async function handleStoryButton(ctx, interaction) {
     } catch (err) {
       st.locked = false;
       ctx.logger?.error?.('[love-tester-bot] story groq error:', err.message);
+      // Runde NICHT abbrechen: Buttons wieder aktivieren und Wahl verwerfen,
+      // damit die User später erneut versuchen können weiterzuspielen.
+      await revertPendingChoice(ctx, interaction.guildId, interaction.channel);
       return interaction.followUp(
-        componentsV2Payload([smallContainer(null, `⚠️ Die KI hat gerade keinen Bock (${err.message}). Die Runde ist beendet – starte bei Bedarf mit /endless_story_channel neu.`)], { ephemeral: true })
+        componentsV2Payload([smallContainer(null, `⚠️ Die KI ist gerade nicht erreichbar (${err.message}). Die Runde bleibt offen – klicke einfach nochmal auf eine Option, um weiterzuspielen.`)], { ephemeral: true })
       ).catch(() => {});
     }
 
@@ -576,4 +608,6 @@ module.exports = {
   shortenSituation,
   formatDecidedBy,
   randomColors,
+  revertPendingChoice,
+  getRuntimeState,
 };

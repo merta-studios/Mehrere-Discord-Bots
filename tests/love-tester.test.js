@@ -468,6 +468,37 @@ test('Endless-Story: Situationen bleiben kurz – die KI kann keine Romane mehr 
   assert.equal(shortenSituation('Du triffst eine Katze im Zauberwald.'), 'Du triffst eine Katze im Zauberwald.');
 });
 
+test('Endless-Story: revertPendingChoice reaktiviert Buttons und verwirft die gewählte Option', async () => {
+  const { getRuntimeState, revertPendingChoice } = require('../bots/love-tester-bot/src/endless-story');
+
+  const edited = [];
+  const channel = {
+    messages: {
+      edit: async (id, payload) => { edited.push({ id, payload }); },
+    },
+  };
+  const ctx = { logger: { warn: () => {} } };
+  const st = getRuntimeState(ctx, 'guild-1');
+  st.channelId = 'chan-1';
+  st.lastMessageId = 'msg-9';
+  st.turn = 5;
+  st.history = [{ situation: 'Du stehst vor einer Tür.', options: ['A', 'B', 'C'], chosenOption: 'A', decidedBy: '42' }];
+
+  const ok = await revertPendingChoice(ctx, 'guild-1', channel);
+  assert.equal(ok, true, 'Revert meldet Erfolg');
+
+  // Buttons wurden reaktiviert (disabled: false)
+  const container = edited[0].payload.components[0].toJSON();
+  const row = container.components.find((c) => c.type === 1);
+  const btn = row.components[0];
+  assert.equal(btn.disabled, false, 'Button wieder anklickbar');
+  assert.equal(edited[0].id, 'msg-9', 'Richtige Nachricht editiert');
+
+  // Gewählte Option wurde verworfen, damit später neu geklickt werden kann
+  assert.equal(st.history[0].chosenOption, null, 'chosenOption zurückgesetzt');
+  assert.equal(st.history[0].decidedBy, null, 'decidedBy zurückgesetzt');
+});
+
 test('Endless-Story: Bearbeitete Nachricht (entschieden) enthält Mention und Hinweis wer entschieden hat', () => {
   const { buildSituationPayload } = require('../bots/love-tester-bot/src/endless-story');
   const payload = buildSituationPayload({
