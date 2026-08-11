@@ -23,6 +23,9 @@ const {
   selectExcerpts,
   extractPercent,
   cleanContent,
+  mentionifyNames,
+  compactVerdictLines,
+  finalizeLoveVerdict,
 } = require('../bots/love-tester-bot/src/analyzer');
 const { t, LANGS } = require('../bots/love-tester-bot/src/languages');
 
@@ -213,12 +216,16 @@ test('cleanContent: Server-Emojis, Mentions, Rollen, Kanäle, Timestamps', () =>
 // Prompts & Budget
 // ---------------------------------------------------------------------------
 
-test('buildSystemPrompt: enthält USER-Namen, Regeln und „### “-Zeile', () => {
+test('buildSystemPrompt: Ship-Richter, 4 kurze Sätze, keine Chat-Klage, hohe Prozent', () => {
   const p = buildSystemPrompt('de', { name: 'Mia' }, { name: 'Lukas' });
   assert.ok(p.includes('Mia'), 'USER1-Name fehlt');
   assert.ok(p.includes('Lukas'), 'USER2-Name fehlt');
   assert.ok(p.includes('### '), 'Prozent-Zeilen-Vorgabe fehlt');
-  assert.ok(p.includes('3 bis 5 Sätze'), 'Satz-Regel fehlt');
+  assert.ok(/Genau 4 Sätze|4 kurze Sätze|4 Sätze/i.test(p), '4-Satz-Struktur fehlt');
+  assert.ok(/Teenager|teen/i.test(p), 'Teen-Ton fehlt');
+  assert.ok(/niemals|NIEMALS|nicht.*Austausch|reden nie/i.test(p), 'Regel gegen Chat-Klage fehlt');
+  assert.ok(/66–84|62–86|großzügig/i.test(p), 'hohe Prozent-Kalibrierung fehlt');
+  assert.ok(!/zwei Leerzeilen/i.test(p), 'alte Riesen-Abstände dürfen nicht mehr gefordert werden');
 });
 
 test('buildUserPrompt: USER-Infos + Ausschnitt-Blöcke', () => {
@@ -267,6 +274,55 @@ test('extractPercent: findet „### XX %“', () => {
   assert.equal(extractPercent('### 0%'), 0);
   assert.equal(extractPercent('### 150%'), 100, 'über 100 wird gedeckelt');
   assert.equal(extractPercent('keine Prozent'), null);
+});
+
+test('mentionifyNames: Server-Nick, Username und @Name werden zu Mentions', () => {
+  const user1 = { id: '11', name: 'Mia', username: 'mia_2001', nickname: 'Miaaa', displayName: 'Mia', globalName: 'Mia' };
+  const user2 = { id: '22', name: 'Lukas', username: 'luki', nickname: 'LukiOnDC', displayName: 'Lukas', globalName: 'Lukas' };
+  const text = 'Miaaa schreibt ständig „bro“. Lukas sagt nur „ok.“ @luki und mia_2001 wären cute.';
+  const out = mentionifyNames(text, user1, user2);
+  assert.ok(out.includes('<@11>'), out);
+  assert.ok(out.includes('<@22>'), out);
+  assert.ok(!out.includes('Miaaa'), out);
+  assert.ok(!out.includes('mia_2001'), out);
+  assert.ok(!out.includes('@luki'), out);
+});
+
+test('mentionifyNames: lässt bestehende Mentions, [USER]-Tags und Fremdwörter in Ruhe', () => {
+  const user1 = { id: '11', name: 'Mia', username: 'mia', nickname: 'Mia', displayName: 'Mia' };
+  const user2 = { id: '22', name: 'Lukas', username: 'lukas', nickname: 'Lukas', displayName: 'Lukas' };
+  const text = 'Mias Aura und <@11> plus [USER2] rockt.';
+  const out = mentionifyNames(text, user1, user2);
+  assert.match(out, /Mias Aura/);
+  assert.ok(out.includes('<@11>'), out);
+  assert.ok(out.includes('<@22>'), out);
+  assert.ok(!out.includes('[USER2]'), out);
+  assert.equal((out.match(/<@11>/g) || []).length, 1, 'bestehende Mention nicht doppeln');
+});
+
+test('mentionifyNames: gemeinsame Namen werden nicht geraten', () => {
+  const user1 = { id: '11', name: 'Alex', username: 'alex1', nickname: 'Alex' };
+  const user2 = { id: '22', name: 'Alex', username: 'alex2', nickname: 'Alex' };
+  const out = mentionifyNames('Alex ist chaotic.', user1, user2);
+  assert.equal(out, 'Alex ist chaotic.');
+});
+
+test('compactVerdictLines: entfernt Riesen-Abstände und macht Sätze klein', () => {
+  const out = compactVerdictLines('Satz eins 💀\n\n\nSatz zwei 😐\n\nSatz drei 💘');
+  assert.equal(out, '-# Satz eins 💀\n-# Satz zwei 😐\n-# Satz drei 💘');
+});
+
+test('finalizeLoveVerdict: Mentions + dichte Sätze + Prozent unten', () => {
+  const user1 = { id: '11', name: 'Mia', username: 'mia', nickname: 'Mia', displayName: 'Mia' };
+  const user2 = { id: '22', name: 'Lukas', username: 'lukas', nickname: 'Lukas', displayName: 'Lukas' };
+  const raw = 'Mia ist chaotic 💀\n\n\nLukas ist dry 😐\n\nDie knallen.\n\n### 81%';
+  const out = finalizeLoveVerdict(raw, user1, user2);
+  assert.ok(!out.includes('\n\n'), out);
+  assert.ok(out.includes('<@11>'), out);
+  assert.ok(out.includes('<@22>'), out);
+  assert.ok(out.includes('-# '), out);
+  assert.ok(out.endsWith('### 81%'), out);
+  assert.ok(!/Mia ist/.test(out), out);
 });
 
 // ---------------------------------------------------------------------------

@@ -128,7 +128,7 @@ test('runAnalysis: Scan → Ausschnitte → Groq → Ergebnis mit ### XX %', asy
   channel._messages = chMessages;
   const ctx = makeCtx({
     channels: [channel],
-    groqResponse: 'Erstens: ihr schreibt viel.\n\nZweitens: sehr viel Herz.<3\n\n### 87%',
+    groqResponse: 'Mia schreibt ständig „hey“.\n\nLukas antwortet nur mit „ok.“\n\nZusammen knallt das.\n\nUrteil: ich ship das.\n\n### 87%',
   });
 
   const session = createSession({
@@ -150,7 +150,11 @@ test('runAnalysis: Scan → Ausschnitte → Groq → Ergebnis mit ### XX %', asy
   const final = ctx._messages.get('msg1').payload;
   const text = extractAllText(final);
   assert.ok(text.includes('### 87%'), `Prozentzeile fehlt: ${text}`);
-  assert.ok(text.includes('Love'), text);
+  assert.ok(text.includes('-# <@11>'), `User1-Mention im Urteil fehlt: ${text}`);
+  assert.ok(text.includes('-# <@22>'), `User2-Mention im Urteil fehlt: ${text}`);
+  assert.ok(!/\n\n.*\n\n/.test(text.replace(/-# /g, '')), `Urteil ist nicht dicht genug: ${text}`);
+  assert.ok(text.includes('-# '), `kleine Begründungszeilen fehlen: ${text}`);
+  assert.ok(text.includes('Love') || text.includes('Urteil'), text);
   assert.equal(session.status, 'done');
   ctx._restore();
 });

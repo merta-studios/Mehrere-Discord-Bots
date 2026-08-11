@@ -11,7 +11,7 @@
  *    mit Zurück/Weiter/Bestätigen/Abbrechen und guter Anleitung
  *  - /test_love [user1] [user2] (alle): Datenschutz-Bestätigung (öffentlich,
  *    Buttons nur für den Sender) → humorvolle Analyse mit Live-Fortschritt %
- *    → Ergebnis mit „### XX %“-Zeile
+ *    → kurzes Ship-Urteil mit Mentions und „### XX %“-Zeile
  *  - Scan: max. 500 Nachrichten über alle eingerichteten Kanäle; Ausschnitte
  *    mit 4 Nachrichten davor + Kern (max. 3 Fremde dazwischen) + Rest danach
  *  - Medien/Format-Umwandlung: Bilder, Videos, Sprachnachrichten, Antworten,

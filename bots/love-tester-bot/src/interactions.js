@@ -280,12 +280,8 @@ async function handleLoveButton(ctx, interaction) {
         try {
           const result = await runGroqPhase(ctx, session);
           session.status = 'done';
-          const { extractPercent } = require('./analyzer');
-          const percent = extractPercent(result.content);
-          let finalText = result.content;
-          if (percent !== null) {
-            finalText = `${result.content.replace(/###\s*\d{1,3}\s*%.*$/i, '').trim()}\n### ${percent}%`;
-          }
+          const { finalizeLoveVerdict } = require('./analyzer');
+          const finalText = finalizeLoveVerdict(result.content, session.user1, session.user2);
           await editSessionMessage(ctx, session, componentsV2Payload([buildResult({ lang, token, aiText: finalText, user1: session.user1, user2: session.user2 })]));
         } catch (err) {
           session.status = 'error';
