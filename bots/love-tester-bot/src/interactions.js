@@ -16,6 +16,7 @@ const { t, langFromDiscord } = require('./languages');
 const { smallContainer, componentsV2Payload } = require('./embed-builder');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
 const { runAnalysis, continueAnalysis } = require('./runner');
+const { handleStoryButton, handleStoryModal, STORY_PREFIX } = require('./endless-story');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -28,6 +29,7 @@ async function handleInteraction(ctx, interaction) {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith(PANEL_PREFIX)) return await handlePanelButton(ctx, interaction);
       if (interaction.customId.startsWith('love_setup_')) return await handleSetupButton(ctx, interaction);
+      if (interaction.customId.startsWith(STORY_PREFIX)) return await handleStoryButton(ctx, interaction);
       if (interaction.customId.startsWith('love_')) return await handleLoveButton(ctx, interaction);
     }
     if (interaction.isStringSelectMenu()) {
@@ -39,6 +41,7 @@ async function handleInteraction(ctx, interaction) {
     }
     if (interaction.isModalSubmit()) {
       if (interaction.customId.startsWith('love_key_')) return await handleKeyModal(ctx, interaction);
+      if (interaction.customId.startsWith('love_story_modal_')) return await handleStoryModal(ctx, interaction);
     }
     return null;
   } catch (err) {

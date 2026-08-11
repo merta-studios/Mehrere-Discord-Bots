@@ -15,12 +15,14 @@ const {
   TextDisplayBuilder,
   MessageFlags,
   RESTJSONErrorCodes,
+  ChannelType,
 } = require('discord.js');
 
 const { LANGS, t, langFromDiscord, DISCORD_LOCALE } = require('./languages');
 const { smallContainer, componentsV2Payload } = require('./embed-builder');
 const { openPanel } = require('./admin-panel');
 const { createSession, resolveMemberInfo } = require('./runner');
+const { storyChannelCmd } = require('./endless-story');
 
 function pick(key) {
   const map = {};
@@ -76,6 +78,17 @@ function defineCommands() {
       .setDescription('Owner-Admin-Panel (nur im DM)')
       .setDescriptionLocalizations(pick('helpAdminPanel'))
       .setContexts(InteractionContextType.BotDM),
+
+    new SlashCommandBuilder()
+      .setName('endless_story_channel')
+      .setDescription('Startet das Endless Story Game in einem Kanal (nur Admins)')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addChannelOption((o) =>
+        o.setName('channel')
+          .setDescription('Kanal, in dem das Endless Story Game laufen soll')
+          .setRequired(true)
+          .addChannelTypes(ChannelType.GuildText)
+      ),
   ];
 }
 
@@ -200,7 +213,7 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
 const COMMAND_ID_VERIFY_TTL_MS = 5 * 60 * 1000;
 
 async function ensureCommandIds(ctx, guildId = null) {
-  const needed = ['setup', 'test_love', 'help', 'admin_set_bot_profile', 'adminpanel'];
+  const needed = ['setup', 'test_love', 'help', 'admin_set_bot_profile', 'adminpanel', 'endless_story_channel'];
   const hasAll = (obj) => obj && typeof obj === 'object' && needed.every((name) => Boolean(obj[name]));
 
   const devGuildId = normalizeGuildId(ctx.devGuildId);
@@ -312,6 +325,8 @@ async function handleChatInput(ctx, interaction) {
       return profileCmd(ctx, interaction);
     case 'adminpanel':
       return openPanel(ctx, interaction);
+    case 'endless_story_channel':
+      return storyChannelCmd(ctx, interaction);
     default:
       return interaction.reply(componentsV2Payload([smallContainer(null, 'Unbekannter Befehl.')], { ephemeral: true }));
   }
