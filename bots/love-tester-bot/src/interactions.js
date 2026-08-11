@@ -245,7 +245,7 @@ async function handleLoveButton(ctx, interaction) {
       // Erste Bearbeitung über update() (ersetzt die Bestätigungs-Buttons)
       await interaction.deferUpdate().catch(() => {});
       await interaction.editReply(
-        componentsV2Payload([require('./embed-builder').buildProgress({ lang, token, pct: 0, phase: t('loveAccepted', lang) })])
+        componentsV2Payload([require('./embed-builder').buildProgress({ lang, token, pct: 0, phase: t('loveAccepted', lang), user1: session.user1, user2: session.user2 })])
       );
       void runAnalysis(ctx, session);
       return null;
@@ -270,7 +270,7 @@ async function handleLoveButton(ctx, interaction) {
       }
       await interaction.deferUpdate().catch(() => {});
       await interaction.editReply(
-        componentsV2Payload([require('./embed-builder').buildProgress({ lang, token, pct: 90, phase: t('analysingFinal', lang) })])
+        componentsV2Payload([require('./embed-builder').buildProgress({ lang, token, pct: 90, phase: t('analysingFinal', lang), user1: session.user1, user2: session.user2 })])
       );
       session.status = 'running';
       void (async () => {
@@ -286,7 +286,7 @@ async function handleLoveButton(ctx, interaction) {
           if (percent !== null) {
             finalText = `${result.content.replace(/###\s*\d{1,3}\s*%.*$/i, '').trim()}\n### ${percent}%`;
           }
-          await editSessionMessage(ctx, session, componentsV2Payload([buildResult({ lang, token, aiText: finalText })]));
+          await editSessionMessage(ctx, session, componentsV2Payload([buildResult({ lang, token, aiText: finalText, user1: session.user1, user2: session.user2 })]));
         } catch (err) {
           session.status = 'error';
           session.lastError = err;
@@ -308,7 +308,7 @@ async function handleLoveButton(ctx, interaction) {
       }
       await interaction.deferUpdate().catch(() => {});
       await interaction.editReply(
-        componentsV2Payload([require('./embed-builder').buildProgress({ lang, token, pct: 90, phase: t('analysingFinal', lang) })])
+        componentsV2Payload([require('./embed-builder').buildProgress({ lang, token, pct: 90, phase: t('analysingFinal', lang), user1: session.user1, user2: session.user2 })])
       );
       void continueAnalysis(ctx, session);
       return null;
