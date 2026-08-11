@@ -409,6 +409,19 @@ test('Endless-Story-Startformular hält alle Discord-String-Limits ein', () => {
   }
 });
 
+test('Endless-Story-Situationsnachricht enthält keine Spoiler-Tags (graue Box)', () => {
+  const { buildSituationPayload } = require('../bots/love-tester-bot/src/endless-story');
+  const payload = buildSituationPayload({
+    situation: 'Du bist im Zauberwald und triffst eine Katze.',
+    options: ['Option A', 'Option B', 'Option C'],
+    turn: 2,
+  });
+  const container = payload.components[0].toJSON();
+  const textDisplay = container.components[0];
+  assert.equal(textDisplay.content, '# 📖 Endless Story — Zug 2\n\nDu bist im Zauberwald und triffst eine Katze.');
+  assert.equal(textDisplay.content.includes('||'), false, 'Darf keine Spoiler-Tags (graue Box) enthalten');
+});
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------

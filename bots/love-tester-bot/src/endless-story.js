@@ -68,7 +68,7 @@ function buildSituationPayload({ situation, options, colors, disabled = false, t
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(
-      `# 📖 Endless Story — Zug ${turn}\n\n||${safeSituation}||`
+      `# 📖 Endless Story — Zug ${turn}\n\n${safeSituation}`
     )
   );
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
