@@ -69,10 +69,8 @@ function buildLeaderboardEmbed({ lang='de', entries=[], now=new Date(), guildNam
       const needed = xpNeeded(e.level);
       const medal = rank<=3 ? getMedal(rank) : '';
       const medalStr = medal ? ` ${medal}` : '';
-      // Format: #1 @User — Lvl 12 · 45/100 XP 🥇
-      // Use translation lbEntryLine but we build directly for stability
-      // Show bar?
-      return `\`#${rank}\` <@${e.userId}> — **Lvl ${e.level}** · ${e.xp}/${needed} XP${medalStr}`;
+      // Format: #1 — Lvl 12 · @User · 45/100 XP 🥇  (Rank, Level, Mention, XP)
+      return `\`#${rank}\` — **Lvl ${e.level}** · <@${e.userId}> · ${e.xp}/${needed} XP${medalStr}`;
     });
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));
   }

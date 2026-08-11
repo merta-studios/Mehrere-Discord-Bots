@@ -76,6 +76,9 @@ function createLoveStore({ logger, env } = {}) {
       setup_complete INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER
     );`);
+    // Spalten nachträglich hinzufügen (Endless-Story-Game) – safe, falls schon da.
+    try { await db.execute(`ALTER TABLE love_configs ADD COLUMN endless_story_channel_id TEXT`); } catch {}
+    try { await db.execute(`ALTER TABLE love_configs ADD COLUMN endless_story_history TEXT`); } catch {}
     await db.execute(`CREATE TABLE IF NOT EXISTS love_metadata (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -98,6 +101,8 @@ function createLoveStore({ logger, env } = {}) {
         groqApiKey: row.groq_api_key || '',
         setupComplete: Number(row.setup_complete) === 1,
         updatedAt: row.updated_at ? Number(row.updated_at) : null,
+        endlessStoryChannelId: row.endless_story_channel_id || null,
+        endlessStoryHistory: parseJsonCol(row.endless_story_history, null),
       });
     }
     try {
@@ -259,11 +264,13 @@ function createLoveStore({ logger, env } = {}) {
           const g = guilds.get(gid);
           if (!g) continue;
           statements.push({
-            sql: `INSERT INTO love_configs (guild_id, lang, channels, groq_api_key, setup_complete, updated_at)
-                  VALUES (?, ?, ?, ?, ?, ?)
+            sql: `INSERT INTO love_configs (guild_id, lang, channels, groq_api_key, setup_complete, updated_at, endless_story_channel_id, endless_story_history)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id) DO UPDATE SET
                     lang=excluded.lang, channels=excluded.channels, groq_api_key=excluded.groq_api_key,
-                    setup_complete=excluded.setup_complete, updated_at=excluded.updated_at`,
+                    setup_complete=excluded.setup_complete, updated_at=excluded.updated_at,
+                    endless_story_channel_id=excluded.endless_story_channel_id,
+                    endless_story_history=excluded.endless_story_history`,
             args: [
               g.guildId,
               g.lang || 'de',
@@ -271,6 +278,8 @@ function createLoveStore({ logger, env } = {}) {
               g.groqApiKey || '',
               g.setupComplete ? 1 : 0,
               g.updatedAt || Date.now(),
+              g.endlessStoryChannelId || null,
+              g.endlessStoryHistory ? JSON.stringify(g.endlessStoryHistory) : null,
             ],
           });
         }

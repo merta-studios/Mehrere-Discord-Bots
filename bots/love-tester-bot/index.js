@@ -32,6 +32,7 @@ const { registerCommands } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
 const { sendJoinNotice } = require('./src/admin-panel');
 const { startCommandSelfHealing } = require('./src/scheduler');
+const { attachMessageHandler } = require('./src/endless-story');
 
 module.exports = {
   id: 'love-tester-bot',
@@ -141,6 +142,9 @@ module.exports = {
       capMap(ctx.loveSessions);
       void handleInteraction(ctx, interaction);
     });
+
+    // Message-Handler für das Endless-Story-Spiel (aufräumen von Fremd-Nachrichten)
+    attachMessageHandler(ctx);
 
     client.on('guildDelete', (guild) => {
       store.deleteGuild(guild.id);

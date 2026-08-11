@@ -4,7 +4,7 @@
  * - Nachricht → KI-Text (Bilder, Videos, Antworten, Sticker, Emojis, Mentions)
  * - Prompt-Bau (System + User) & Token-Budget-Auswahl
  * - Prozent-Extraktion („### 73 %“)
- * - Command-JSONs Discord-API-valide (5 Commands)
+ * - Command-JSONs Discord-API-valide (6 Commands)
  * - Store-Roundtrip (RAM + Datei-Fallback, gleiche Env-Auflösung wie XP-Bot)
  */
 
@@ -393,17 +393,20 @@ test('Sprachdatei: alle wichtigen Keys in allen 10 Sprachen vorhanden', () => {
 // Commands
 // ---------------------------------------------------------------------------
 
-test('Command-JSONs: 5 Commands, valide Struktur', () => {
+test('Command-JSONs: 6 Commands, valide Struktur', () => {
   const { defineCommands } = require('../bots/love-tester-bot/src/commands');
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 5);
+  assert.equal(cmds.length, 6);
   const names = cmds.map((c) => c.name).sort();
-  assert.deepEqual(names, ['admin_set_bot_profile', 'adminpanel', 'help', 'setup', 'test_love']);
+  assert.deepEqual(names, ['admin_set_bot_profile', 'adminpanel', 'endless_story_channel', 'help', 'setup', 'test_love']);
   const testLove = cmds.find((c) => c.name === 'test_love');
   assert.deepEqual(testLove.options.map((o) => o.name), ['user1', 'user2']);
   assert.ok(testLove.options.every((o) => o.required), 'beide User-Optionen sind Pflicht');
   const setup = cmds.find((c) => c.name === 'setup');
   assert.equal(setup.default_member_permissions, '8', 'setup nur für Admins');
+  const story = cmds.find((c) => c.name === 'endless_story_channel');
+  assert.equal(story.default_member_permissions, '8', 'endless_story_channel nur für Admins');
+  assert.deepEqual(story.options.map((o) => o.name), ['channel']);
 });
 
 // ---------------------------------------------------------------------------
