@@ -49,6 +49,28 @@ function serializedDrop(drop) {
   };
 }
 
+function asMinute(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeFiredSlots(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.map(asMinute).filter((n) => n !== null))].sort((a, b) => a - b);
+}
+
+function hasSlot(list, slot) {
+  const want = asMinute(slot);
+  if (want === null) return false;
+  return normalizeFiredSlots(list).includes(want);
+}
+
+function dropIsExpired(drop, nowMs = Date.now()) {
+  const created = Number(drop?.createdAt);
+  if (!Number.isFinite(created) || created <= 0) return true;
+  return nowMs - created >= BONUS_CLAIM_MS;
+}
+
 function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random }) {
   // guildId -> { activeDrop }
   const states = new Map();
@@ -73,7 +95,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
       cfg.bonusState = state;
       ctx.store.setGuild(cfg);
     }
-    if (!Array.isArray(state.firedSlots)) state.firedSlots = [];
+    state.firedSlots = normalizeFiredSlots(state.firedSlots);
     return state;
   }
 
@@ -112,7 +134,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
       message: message || null,
       expiryTimer: null,
     };
-    if (Date.now() - drop.createdAt >= BONUS_CLAIM_MS) {
+    if (dropIsExpired(drop)) {
       // Erst hydrieren, damit expireDrop auch die alte Discord-Nachricht umbauen kann.
       drops.set(drop.dropId, drop);
       stateFor(drop.guildId).activeDrop = drop;
@@ -133,24 +155,30 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
    * jüngste nachgeholt und der ältere Rückstand ohne Spam abgeschlossen.
    */
   async function checkScheduled(cfg, guild, now = new Date()) {
-    if (!cfg?.guildId || !cfg.mainChannelId || !cfg.leaderboardChannelId) return false;
+    if (!cfg?.guildId) return false;
+    const mainId = String(cfg.mainChannelId || '').trim();
+    const boardId = String(cfg.leaderboardChannelId || '').trim();
+    if (!mainId && !boardId) return false;
+
     const lang = cfg.lang || 'de';
     const dayKey = todayKey(lang, now);
     const daySt = dayState(cfg, dayKey);
 
     const runtimeState = stateFor(cfg.guildId);
+    if (runtimeState.activeDrop && dropIsExpired(runtimeState.activeDrop)) {
+      await expireDrop(runtimeState.activeDrop.dropId);
+    }
     if (!runtimeState.activeDrop && daySt.activeDrop) {
       await restorePersistedDrop(cfg);
     }
-    if (runtimeState.activeDrop) return false;
+    if (runtimeState.activeDrop && !dropIsExpired(runtimeState.activeDrop)) return false;
 
     const plan = planDailyBonusSlots(cfg.guildId, dayKey, seededRngForDay(cfg.guildId, dayKey));
     if (daySt.planVersion !== BONUS_PLAN_VERSION) {
-      // Einmalige Migration vom alten 06:00–00:30-Plan: Die exakten Minuten
-      // haben sich leicht verschoben. Bereits gesendete ANZAHL auf die ersten
-      // neuen Slots abbilden, damit am Deployment-Tag nichts doppelt erscheint.
-      const alreadySent = Math.min(daySt.firedSlots.length, plan.length);
-      daySt.firedSlots = plan.slice(0, alreadySent);
+      // Nur exakt gleiche Minuten behalten. Eine reine Längen-Abbildung hat
+      // komplette Tage als „schon gesendet“ markiert, ohne dass ein Drop
+      // sichtbar wurde.
+      daySt.firedSlots = plan.filter((slot) => hasSlot(daySt.firedSlots, slot));
       daySt.planVersion = BONUS_PLAN_VERSION;
       cfg.bonusState = daySt;
       ctx.store.setGuild(cfg);
@@ -158,27 +186,38 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     }
     const minuteOfDay = currentMinuteOfDay(lang, now);
     const ready = plan
-      .filter((slot) => slot <= minuteOfDay && !daySt.firedSlots.includes(slot))
+      .filter((slot) => slot <= minuteOfDay && !hasSlot(daySt.firedSlots, slot))
       .sort((a, b) => a - b);
     if (!ready.length) return false;
 
+    // Nur den jüngsten überfälligen Slot senden. Ältere Rückstände werden erst
+    // NACH erfolgreichem Send als übersprungen markiert.
     const due = ready[ready.length - 1];
     const skipped = ready.slice(0, -1);
     return sendDrop(cfg, guild, daySt, due, skipped);
   }
 
-  async function resolveMainChannel(cfg, guild) {
-    const cached = guild?.channels?.cache?.get?.(cfg.mainChannelId);
+  async function fetchTextChannel(channelId, guild) {
+    const id = String(channelId || '').trim();
+    if (!id) return null;
+    const cached = guild?.channels?.cache?.get?.(id);
     if (cached?.isTextBased?.()) return cached;
     try {
-      const channel = await ctx.client.channels.fetch(cfg.mainChannelId);
+      const channel = await ctx.client.channels.fetch(id);
       if (channel?.isTextBased?.()) return channel;
     } catch {}
     try {
-      const channel = await guild.channels.fetch(cfg.mainChannelId);
+      const channel = await guild?.channels?.fetch?.(id);
       if (channel?.isTextBased?.()) return channel;
     } catch {}
     return null;
+  }
+
+  async function resolveMainChannel(cfg, guild) {
+    const main = await fetchTextChannel(cfg.mainChannelId, guild);
+    if (main) return main;
+    // Fallback: lieber im Leaderboard-Kanal posten als den ganzen Tag ausfallen.
+    return fetchTextChannel(cfg.leaderboardChannelId, guild);
   }
 
   async function sendDrop(cfg, guild, daySt, slot, skippedSlots = []) {
@@ -217,8 +256,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
 
     // Erst nach erfolgreichem Discord-Send abschließen. So werden Sendefehler
     // beim nächsten Minutentick automatisch erneut versucht.
-    daySt.firedSlots.push(...skippedSlots, slot);
-    daySt.firedSlots = [...new Set(daySt.firedSlots)].sort((a, b) => a - b);
+    daySt.firedSlots = normalizeFiredSlots([...daySt.firedSlots, ...skippedSlots, slot]);
     cfg.bonusState = daySt;
     persistOpenDrop(cfg, drop);
 

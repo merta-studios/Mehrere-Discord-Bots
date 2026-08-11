@@ -248,12 +248,20 @@ function startScheduler({ ctx }) {
     launch('leaderboard', () => runLeaderboardTick(ctx, now, { force: startup }));
   };
 
+  // Bonus-Drops dürfen den Event-Loop nicht verlieren: das Intervall bleibt
+  // referenziert. Zusätzlich sofort ein erster Bonus-Tick, damit nach Deploy
+  // nicht erst eine volle Minute (plus 5s Leaderboard-Start) verstreicht.
   const startupTimer = setTimeout(() => heartbeat(true), 5_000);
   startupTimer.unref?.();
   timers.add(startupTimer);
 
+  const bonusKickoff = setTimeout(() => {
+    if (stopped) return;
+    launch('bonus', () => runBonusTick(ctx, new Date()));
+  }, 1_500);
+  timers.add(bonusKickoff);
+
   const interval = setInterval(() => heartbeat(false), MINUTE_MS);
-  interval.unref?.();
   timers.add(interval);
 
   return () => {
