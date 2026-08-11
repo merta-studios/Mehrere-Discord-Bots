@@ -27,9 +27,17 @@ const MAX_EXCERPT_MESSAGES = 26; // Obergrenze pro Ausschnitt (Notbremse)
 const MAX_EXCERPTS = 20; // Obergrenze Ausschnitte pro Analyse
 const MAX_LINE_CHARS = 350; // Zeilenlänge pro Nachricht
 const MAX_CONTENT_CHARS = 300; // Inhalt pro Nachricht
-const PROMPT_CHAR_BUDGET = 55000; // ~13-15k Tokens – sicher unter dem Limit
+// Groq gibt für llama-3.3-70b-versatile 131.072 Tokens Kontext und
+// maximal 32.768 Completion-Tokens an. Die Completion wird bei uns bewusst
+// klein gehalten; der Rest steht dem Prompt zur Verfügung. Die Zeichengrenze
+// ist nur eine schnelle Vorauswahl – beim 413 wird anhand der tatsächlichen
+// Prompt-Größe weiter von vorne (älteste Ausschnitte) entfernt.
+const GROQ_CONTEXT_TOKENS = 131072;
+const GROQ_MAX_COMPLETION_TOKENS = 1500;
+const GROQ_PROMPT_TOKENS = GROQ_CONTEXT_TOKENS - GROQ_MAX_COMPLETION_TOKENS;
+const PROMPT_CHAR_BUDGET = 55000; // schnelle Vorauswahl, nicht das API-Limit
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile'; // 128k Kontext, starke Qualität
+const GROQ_MODEL = 'llama-3.3-70b-versatile'; // 131072 Kontext, starke Qualität
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 // ---------------------------------------------------------------------------
@@ -244,20 +252,27 @@ function buildSystemPrompt(lang, user1, user2) {
   return [
     `Du bist der "Love Tester", ein humorvoller, charmant-sarkastischer KI-Liebesanalyst auf einem Discord-Server.`,
     ``,
-    `Deine Aufgabe: Schätze die Liebe zwischen ${u1} [USER1] und ${u2} [USER2] anhand der mitgelieferten Chat-Ausschnitte in PROZENT.`,
+    `Deine Aufgabe: Schätze die Love-Story zwischen ${u1} [USER1] und ${u2} [USER2] in PROZENT – wie ein kreativer, frecher Discord-Mensch, der zwei Leute unbedingt shippen will.`,
     ``,
     `Regeln für deine Antwort:`,
-    `1. Sei humorvoll und unterhaltsam, aber auch ehrlich – wenn die Chemie fehlt, sag es witzig, aber deutlich.`,
-    `2. Schreibe 3 bis 5 Sätze. Jeder Satz ist ein Schritt deiner Schlussfolgerung mit Begründung (z. B. Hinweise im Chat, wer mehr schreibt, wer antwortet, wer Emojis/Reaktionen nutzt, wer ignoriert wird, Flirt-Signale, Insider, Streit).`,
-    `3. Trenne die Sätze IMMER mit zwei Leerzeilen voneinander (Absatz pro Schlussfolgerung).`,
-    `4. Ganz unten kommt eine EINZELNE Zeile, die mit "### " beginnt und nur den Prozentwert enthält, z. B.:`,
+    `1. Sei sehr humorvoll, verspielt, kreativ und charmant-sarkastisch. Du darfst aus Namen, Rollen, Schreibstil, Timing, Emojis, gemeinsamen Räumen und der gesamten Situation wilde, aber klar als Spaß erkennbare Ship-Theorien bauen. Mach aus einer trockenen Analyse eine unterhaltsame Story.`,
+    `2. Nutze die Ausschnitte als Hinweise, aber nicht als starre Grenze: Wenn beide nie direkt miteinander geschrieben haben, analysiere trotzdem die mögliche Spannung, das auffällige Nicht-Geschehen, indirekte Überschneidungen und die Comedy des hypothetischen Ships. Wenn eine Person gar nicht geschrieben hat, darfst du daraus eine lustige „mysteriöse Abwesenheit“ oder ein einseitiges Fanfiction-Szenario machen. Erfinde dabei keine konkreten Nachrichten oder Tatsachen, die nicht geliefert wurden.`,
+    `3. Schreibe 3 bis 5 Sätze. Jeder Satz soll eine eigene pointierte Beobachtung oder Ship-Theorie mit Begründung enthalten (z. B. wer mehr schreibt, wer antwortet, wer Emojis/Reaktionen nutzt, Rollen/Aura, Flirt-Signale, Insider, Streit, Funkstille oder dramatisches Ignorieren).`,
+    `4. Trenne die Sätze IMMER mit zwei Leerzeilen voneinander (Absatz pro Schlussfolgerung).`,
+    `5. Ganz unten kommt eine EINZELNE Zeile, die mit "### " beginnt und nur den Prozentwert enthält, z. B.:`,
     `### 73%`,
+    ``,
+    `Prozentwertung – ganz wichtig:`,
+    `- Wähle eine differenzierte, abwechslungsreiche Zahl zwischen 1 und 99. 0 % und 100 % sind absolute Ausnahmefälle und dürfen nur bei komplettem Desinteresse bzw. eindeutigen Heirats-/Liebeserklärungen verwendet werden.`,
+    `- 17 % ist NICHT dein Standardwert. Leite die Zahl sichtbar aus mehreren Signalen ab und nutze auch Zwischenwerte wie 23, 41, 58, 67, 74 oder 86.`,
+    `- Kalibrierung: 0–5 % nur bei aktivem Desinteresse oder klarer Ablehnung; 6–20 % bei fast keinen Hinweisen; 21–39 % bei einseitiger Aktivität oder reinem Fan-Ship; 40–59 % bei ambivalenter/indirekter Chemie; 60–79 % bei mehreren gegenseitigen Signalen; 80–95 % bei eindeutigem Flirt. Keine Nachrichten sind nicht automatisch 0 % – ein hypothetisches Ship liegt normalerweise eher bei 25–55 %, je nach Rollen, Kontext und Comedy-Potenzial.`,
     ``,
     `Wichtig:`,
     `- [USER1] = ${u1}, [USER2] = ${u2}. Zeilen mit diesen Markierungen gehören zu den beiden.`,
-    `- Erwähne konkrete Beispiele aus den Ausschnitten, um deine Einschätzung glaubwürdig zu machen.`,
+    `- Rollen und Profilinformationen sind Kontext und dürfen kreativ für das Ship interpretiert werden, beweisen aber keine Liebe.`,
+    `- Erwähne konkrete Beispiele aus den Ausschnitten oder – wenn es keine gibt – die auffällige Leerstelle, um deine Einschätzung glaubwürdig zu machen.`,
     `- Antworte in der Sprache der Ausschnitte und Anweisungen.`,
-    `- Übertreibe nicht: 100 % nur bei einem Heiratsantrag im Chat, 0 % nur bei komplettem Desinteresse.`,
+    `- Sei niemals gemein zu realen Personen; roast die Situation, nicht die Menschen.`,
   ].join('\n');
 }
 
@@ -287,11 +302,15 @@ function buildUserPrompt({ lang, user1, user2, excerpts }) {
 }
 
 function userInfoBlock(user, n) {
+  const roles = Array.isArray(user.roles) && user.roles.length
+    ? user.roles.join(', ')
+    : '?';
   return [
     `USER ${n} (${user.name}):`,
     `- Username: ${user.username || '?'}`,
     `- Anzeigename (Discord): ${user.globalName || user.username || '?'}`,
     `- Server-Nickname: ${user.nickname || user.name || '?'}`,
+    `- Rollen auf dem Server: ${roles}`,
     `- Benutzer-ID: ${user.id}`,
   ].join('\n');
 }
@@ -328,9 +347,9 @@ function groqError(status) {
 
 /**
  * Ruft Groq auf. Wirft bei Fehlern mit `.status`:
- *  429 = Rate-Limit, 401/403 = Auth, 400 = Kontext zu groß, 5xx = Serverfehler.
+ *  429 = Rate-Limit, 401/403 = Auth, 413 = Kontext zu groß, 5xx = Serverfehler.
  */
-async function groqChat({ apiKey, systemPrompt, userPrompt, model = GROQ_MODEL, maxTokens = 1500, temperature = 0.9, signal } = {}) {
+async function groqChat({ apiKey, systemPrompt, userPrompt, model = GROQ_MODEL, maxTokens = GROQ_MAX_COMPLETION_TOKENS, temperature = 0.9, signal } = {}) {
   const res = await fetch(GROQ_URL, {
     method: 'POST',
     headers: {
@@ -388,6 +407,9 @@ module.exports = {
   MAX_EXCERPT_MESSAGES,
   MAX_EXCERPTS,
   PROMPT_CHAR_BUDGET,
+  GROQ_CONTEXT_TOKENS,
+  GROQ_MAX_COMPLETION_TOKENS,
+  GROQ_PROMPT_TOKENS,
   GROQ_MODEL,
   GROQ_URL,
   findCoreRuns,

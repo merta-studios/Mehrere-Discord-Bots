@@ -29,6 +29,7 @@ const {
   extractPercent,
   sleep,
   PROMPT_CHAR_BUDGET,
+  GROQ_MAX_COMPLETION_TOKENS,
 } = require('./analyzer');
 const {
   buildProgress,
@@ -60,6 +61,7 @@ function createSession({ ctx, interaction, cfg, user1, user2, token }) {
     channelState: new Map(), // channelId -> { before: null | id }
     scannedTotal: 0,
     excerpts: [], // { startTs, hasBoth, messages: [{line}] }
+    selectedExcerpts: [], // tatsächlich an Groq gesendete Ausschnitte
     systemPrompt: null,
     userPrompt: null,
     canContinue: true,
@@ -76,6 +78,14 @@ function createSession({ ctx, interaction, cfg, user1, user2, token }) {
 function resolveMemberInfo(guild, userId) {
   const member = guild.members?.cache?.get(userId);
   const user = member?.user;
+  // GuildMember.roles.cache enthält auch @everyone. Diese technische Rolle
+  // ist für die Analyse nicht hilfreich und wird deshalb ausgelassen.
+  const roles = member?.roles?.cache
+    ? [...member.roles.cache.values()]
+      .filter((role) => role.id !== guild.id)
+      .map((role) => role.name)
+      .filter(Boolean)
+    : [];
   return {
     id: userId,
     name: member?.displayName || user?.displayName || user?.username || userId,
@@ -83,6 +93,7 @@ function resolveMemberInfo(guild, userId) {
     username: user?.username || userId,
     globalName: user?.globalName || user?.username || userId,
     nickname: member?.nickname || user?.username || userId,
+    roles,
   };
 }
 
@@ -269,6 +280,7 @@ async function buildAnalysis(ctx, session) {
   }
   session.systemPrompt = buildSystemPrompt(session.lang, session.user1, session.user2);
   const chosen = selectExcerpts(session.excerpts, session.groqBudget);
+  session.selectedExcerpts = chosen;
   session.userPrompt = buildUserPrompt({
     lang: session.lang,
     user1: session.user1,
@@ -278,10 +290,28 @@ async function buildAnalysis(ctx, session) {
   return chosen.length > 0;
 }
 
+/** Entfernt genau den ältesten gesendeten Ausschnitt und baut den Prompt neu. */
+function removeOldestExcerptForRetry(session) {
+  const selected = session.selectedExcerpts || [];
+  if (!selected.length) return false;
+  // selectedExcerpts ist chronologisch sortiert (selectExcerpts garantiert das).
+  // Dadurch bleiben die jüngsten, für die aktuelle Analyse relevanteren
+  // Ausschnitte erhalten – und wir verlieren nicht pauschal die Hälfte.
+  session.selectedExcerpts = selected.slice(1);
+  session.userPrompt = buildUserPrompt({
+    lang: session.lang,
+    user1: session.user1,
+    user2: session.user2,
+    excerpts: session.selectedExcerpts,
+  });
+  return true;
+}
+
 /**
  * Groq-Call mit Retries. Wirft am Ende den letzten Fehler mit .status.
- * Bei HTTP 400 (Kontext zu groß) wird das Budget halbiert, neu ausgewählt
- * und einmal erneut versucht.
+ * HTTP 413 bedeutet bei Groq, dass Kontext (Nachrichten plus gewünschte
+ * Completion) zu groß ist. Dann wird immer der älteste gesendete Ausschnitt
+ * entfernt und unmittelbar erneut versucht – bis der Request passt.
  */
 async function runGroqPhase(ctx, session) {
   const cfg = ctx.store.getGuild(session.guildId);
@@ -291,13 +321,16 @@ async function runGroqPhase(ctx, session) {
   }
 
   let lastErr = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  let attempt = 0;
+  let contextRetries = 0;
+  while (true) {
     try {
       await updateProgress(ctx, session, 92, 'final');
       const result = await groqChat({
         apiKey,
         systemPrompt: session.systemPrompt,
         userPrompt: session.userPrompt,
+        maxTokens: GROQ_MAX_COMPLETION_TOKENS,
       });
       await updateProgress(ctx, session, 98, 'final');
       return result;
@@ -305,23 +338,23 @@ async function runGroqPhase(ctx, session) {
       lastErr = err;
       if (err.status === 429) {
         // Groq-Nutzungslimit: warten und erneut versuchen
-        await sleep(GROQ_RETRY_DELAYS[attempt] ?? 5000);
+        if (attempt >= 3) throw err;
+        const retryAttempt = attempt;
+        attempt += 1;
+        await sleep(GROQ_RETRY_DELAYS[retryAttempt] ?? 5000);
         continue;
       }
       if (err.status >= 500) {
-        await sleep(Math.min(GROQ_RETRY_DELAYS[attempt] ?? 2500, 10000) / 2);
+        if (attempt >= 3) throw err;
+        const retryAttempt = attempt;
+        attempt += 1;
+        await sleep(Math.min(GROQ_RETRY_DELAYS[retryAttempt] ?? 2500, 10000) / 2);
         continue;
       }
-      if (err.status === 400 && session.groqBudget > 10000) {
-        // Kontext zu groß → Budget halbieren und mit wichtigeren Ausschnitten neu bauen
-        session.groqBudget = Math.floor(session.groqBudget / 2);
-        session.excerpts = selectExcerpts(session.excerpts, session.groqBudget);
-        session.userPrompt = buildUserPrompt({
-          lang: session.lang,
-          user1: session.user1,
-          user2: session.user2,
-          excerpts: session.excerpts,
-        });
+      const contextTooLarge = err.status === 413 ||
+        (err.status === 400 && /context|token|too large|length/i.test(err.detail || err.message || ''));
+      if (contextTooLarge && contextRetries < 50 && removeOldestExcerptForRetry(session)) {
+        contextRetries += 1;
         continue;
       }
       throw err;
@@ -353,7 +386,7 @@ async function updateProgress(ctx, session, pct, phase = 'scan') {
   session.phaseIdx += 1;
 
   const payload = componentsV2Payload([
-    buildProgress({ lang: session.lang, token: session.token, pct, phase: phaseText(ctx, session, phase) }),
+    buildProgress({ lang: session.lang, token: session.token, pct, phase: phaseText(ctx, session, phase), user1: session.user1, user2: session.user2 }),
   ]);
   await editSessionMessage(ctx, session, payload);
 }
@@ -397,7 +430,7 @@ async function runAnalysis(ctx, session) {
 
   // Erste sichtbare Reaktion: humorvolle „Analysiere…“-Nachricht
   const firstPayload = componentsV2Payload([
-    buildProgress({ lang: session.lang, token: session.token, pct: 0, phase: phaseText(ctx, session, 'scan') }),
+    buildProgress({ lang: session.lang, token: session.token, pct: 0, phase: phaseText(ctx, session, 'scan'), user1: session.user1, user2: session.user2 }),
   ]);
   await editSessionMessage(ctx, session, firstPayload);
 
@@ -421,7 +454,7 @@ async function runAnalysis(ctx, session) {
       finalText = `${result.content.replace(/###\s*\d{1,3}\s*%.*$/i, '').trim()}\n### ${percent}%`;
     }
     const payload = componentsV2Payload([
-      buildResult({ lang: session.lang, token: session.token, aiText: finalText }),
+      buildResult({ lang: session.lang, token: session.token, aiText: finalText, user1: session.user1, user2: session.user2 }),
     ]);
     await editSessionMessage(ctx, session, payload);
   } catch (err) {
@@ -461,7 +494,7 @@ async function continueAnalysis(ctx, session) {
       finalText = `${result.content.replace(/###\s*\d{1,3}\s*%.*$/i, '').trim()}\n### ${percent}%`;
     }
     const payload = componentsV2Payload([
-      buildResult({ lang: session.lang, token: session.token, aiText: finalText }),
+      buildResult({ lang: session.lang, token: session.token, aiText: finalText, user1: session.user1, user2: session.user2 }),
     ]);
     await editSessionMessage(ctx, session, payload);
     return { busy: false };
@@ -491,6 +524,7 @@ function errorText(ctx, session, err) {
   if (err?.loveKind === 'auth' || err?.message === 'NO_KEY') return t('errGroqAuth', lang);
   if (err?.loveKind === 'discord429') return t('errDiscordRateLimit', lang);
   if (status === 429) return t('errGroqRateLimit', lang);
+  if (status === 413) return t('errGroqContext', lang);
   if (status === 401 || status === 403) return t('errGroqAuth', lang);
   if (status >= 500) return t('errGroqServer', lang, { status });
   if (status === 0 && /fetch|network|ECONN|ENOTFOUND|abort/i.test(String(err?.message || ''))) {

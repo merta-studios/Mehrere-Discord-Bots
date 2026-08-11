@@ -176,14 +176,19 @@ function buildSetupSuccess({ lang, session }) {
 // ---------------------------------------------------------------------------
 
 /** Datenschutz-Bestätigung (öffentlich sichtbar, Buttons nur für den Sender). */
+function participantLine(user1, user2) {
+  const mention = (user) => user?.id ? `<@${user.id}>` : (user?.displayName || user?.name || '?');
+  return `**${mention(user1)}  ↔  ${mention(user2)}**`;
+}
+
 function buildLoveConfirm({ lang, token, user1, user2 }) {
   const container = new ContainerBuilder();
   const desc = t('loveConfirmBody', lang, {
-    u1: `**${user1.displayName}**`,
-    u2: `**${user2.displayName}**`,
+    u1: `**<@${user1.id}>**`,
+    u2: `**<@${user2.id}>**`,
   });
   container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`# ${t('loveTestTitle', lang, { u1: user1.displayName, u2: user2.displayName })}\n\n${desc}`)
+    new TextDisplayBuilder().setContent(`# ${t('loveTestTitle', lang, { u1: user1.displayName, u2: user2.displayName })}\n\n${participantLine(user1, user2)}\n\n${desc}`)
   );
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   container.addActionRowComponents(
@@ -196,10 +201,11 @@ function buildLoveConfirm({ lang, token, user1, user2 }) {
 }
 
 /** Analyse-Fortschritt (wird laufend bearbeitet). */
-function buildProgress({ lang, token, pct, phase }) {
+function buildProgress({ lang, token, pct, phase, user1, user2 }) {
   const container = new ContainerBuilder();
   const bar = progressBar(pct);
-  const text = `# ${t('loveTestTitle', lang, { u1: '❔', u2: '❔' })}\n\n${bar}\n${t('analysingProgress', lang, { pct, phase })}`;
+  const participants = user1 && user2 ? `${participantLine(user1, user2)}\n\n` : '';
+  const text = `# ${t('loveTestTitle', lang, { u1: user1?.displayName || '❔', u2: user2?.displayName || '❔' })}\n\n${participants}${bar}\n${t('analysingProgress', lang, { pct, phase })}`;
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text.trim()));
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   container.addActionRowComponents(
@@ -216,9 +222,10 @@ function progressBar(pct, segments = 12) {
 }
 
 /** Ergebnis-Container: KI-Text (enthält die „### XX %“-Zeile) + Footer. */
-function buildResult({ lang, token, aiText }) {
+function buildResult({ lang, token, aiText, user1, user2 }) {
   const container = new ContainerBuilder();
-  const body = `${t('loveResultTitle', lang)}\n\n${aiText}\n${t('loveResultFooter', lang)}`;
+  const participants = user1 && user2 ? `${participantLine(user1, user2)}\n\n` : '';
+  const body = `${t('loveResultTitle', lang)}\n\n${participants}${aiText}\n${t('loveResultFooter', lang)}`;
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(body));
   return container;
 }
