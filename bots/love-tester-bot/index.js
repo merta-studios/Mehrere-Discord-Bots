@@ -31,6 +31,7 @@ const { createLoveStore } = require('./src/store');
 const { registerCommands } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
 const { sendJoinNotice } = require('./src/admin-panel');
+const { startCommandSelfHealing } = require('./src/scheduler');
 
 module.exports = {
   id: 'love-tester-bot',
@@ -105,6 +106,10 @@ module.exports = {
         .catch(() => {});
     };
 
+    // Command-Selbstheilung: Falls die initiale Registrierung fehlschlägt,
+    // alle 15 min erneut versuchen + alle 24h frisch registrieren.
+    let stopSelfHealing = null;
+
     client.once(Events.ClientReady, async () => {
       updatePresence();
       try {
@@ -112,9 +117,11 @@ module.exports = {
       } catch (err) {
         logger.error('[love-tester-bot] Initial-Command-Registrierung fehlgeschlagen:', err.message);
       }
+      stopSelfHealing = startCommandSelfHealing({ ctx });
       logger.info(
         `[love-tester-bot] Bereit auf ${client.guilds.cache.size} Server(n) – ` +
-        `${store.getAllGuilds().filter((g) => g.setupComplete).length} Love-Setups aktiv`
+        `${store.getAllGuilds().filter((g) => g.setupComplete).length} Love-Setups aktiv` +
+        (ctx.commandsRegistered === false ? ' (Commands noch nicht registriert – Selbstheilung aktiv)' : '')
       );
     });
 
@@ -145,6 +152,9 @@ module.exports = {
     // Graceful shutdown helpers
     const originalDestroy = client.destroy.bind(client);
     client.destroy = () => {
+      try {
+        if (stopSelfHealing) stopSelfHealing();
+      } catch {}
       try {
         void store.flush({ force: true }).catch(() => {});
       } catch {}
