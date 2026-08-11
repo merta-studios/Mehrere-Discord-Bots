@@ -37,6 +37,10 @@ const STORY_BUTTON_COLORS = [ButtonStyle.Danger, ButtonStyle.Success, ButtonStyl
 const STORY_PREFIX = 'story_';
 const STORY_HISTORY_LIMIT = 10;
 const MAX_FOREIGN_MESSAGES = 3;
+// Harte Limits für jede generierte Situation, damit die KI niemals zu Romanen
+// auswächst, egal wie weit die Geschichte schon fortgeschritten ist.
+const MAX_STORY_SITUATION_LENGTH = 240;
+const MAX_STORY_SITUATION_SENTENCES = 2;
 
 function randomColors() {
   // Zufällige Permutation von [Danger, Success, Primary] → Rot, Grün, Blau
@@ -56,6 +60,32 @@ function flattenText(text) {
     .replace(/\s*\n+\s*/g, ' ')
     .replace(/[ \t]+/g, ' ')
     .trim();
+}
+
+/**
+ * Begrenzt eine generierte Situation hart auf 2 kurze Sätze und eine maximale
+ * Zeichenzahl. Wenn die KI also entgegen der Prompt-Anweisung plötzlich einen
+ * Roman schreibt, wird die Situation auf die gewohnte Kurzform gestutzt –
+ * unabhängig davon, wie weit die Geschichte fortgeschritten ist.
+ */
+function shortenSituation(text) {
+  let t = flattenText(text);
+  if (!t) return t;
+
+  // Maximal 2 Sätze behalten.
+  const sentences = t.match(/[^.!?]+[.!?]+(\s|$)/g) || [];
+  if (sentences.length > MAX_STORY_SITUATION_SENTENCES) {
+    t = sentences.slice(0, MAX_STORY_SITUATION_SENTENCES).join(' ').trim();
+  }
+
+  // Harte Zeichenbegrenzung, ohne ein Wort zu zerschneiden.
+  if (t.length > MAX_STORY_SITUATION_LENGTH) {
+    let cut = t.slice(0, MAX_STORY_SITUATION_LENGTH);
+    const lastSpace = cut.lastIndexOf(' ');
+    if (lastSpace > 0) cut = cut.slice(0, lastSpace);
+    t = `${cut.replace(/[\s,]+$/, '')}…`;
+  }
+  return t;
 }
 
 /** Erstellt aus einer User-ID, einem Erwähnungs-String oder einem User-Objekt eine gültige Mention. */
@@ -123,7 +153,7 @@ function parseAiResponse(raw) {
     s = s.replace(/^\s*(?:SITUATION|SZENARIO)\s*[:\-–—]?\s*/i, '');
     situation = s;
   }
-  situation = flattenText(situation);
+  situation = shortenSituation(situation);
 
   const o1 = flattenText(opt1Match?.[1] || '');
   const o2 = flattenText(opt2Match?.[1] || '');
@@ -158,7 +188,7 @@ function buildStorySystemPrompt(lang = 'de') {
     '',
     'ANTWORTE STRENG IN DIESEM FORMAT (genau diese Blöcke, KEINE Zusatztexte davor/danach):',
     'SITUATION:',
-    '<Kurze Beschreibung der neuen Situation. MAXIMAL 3–4 ZEILEN auf dem Handy (2 kurze, spannende Sätze, keine Romane!). Keine Zeilenumbrüche im Fließtext.>',
+    '<Kurze Beschreibung der neuen Situation. GENAU 1–2 kurze, spannende Sätze (max 240 Zeichen, keine Romane!). Keine Zeilenumbrüche im Fließtext.>',
     'OPTION 1: <Eine kurze, klare Handlungsmöglichkeit (max 50 Zeichen).>',
     'OPTION 2: <Eine zweite Handlungsmöglichkeit (max 50 Zeichen).>',
     'OPTION 3: <Eine dritte Handlungsmöglichkeit (max 50 Zeichen).>',
@@ -166,6 +196,7 @@ function buildStorySystemPrompt(lang = 'de') {
     'Regeln:',
     '- Die "SITUATION:"-Zeile und die "OPTION N:"-Zeilen stehen JEWEILS AM ANFANG EINER EIGENEN ZEILE.',
     '- Keine Überschriften, Einleitungen, Meta-Kommentare oder Fragen außerhalb des Formats.',
+    '- WICHTIG: Jede neue Situation muss GENAU SO KURZ sein wie die erste (1–2 kurze Sätze). Nur weil die Geschichte länger wird, darf die Situation NICHT länger werden. Schreibe niemals ganze Absätze oder Kapitel.',
     '- Die drei Optionen müssen sich deutlich unterscheiden und zu unterschiedlichen Ausgängen führen.',
     `- ${langLine}`,
   ].join('\n');
@@ -259,6 +290,34 @@ async function sendNextSituationMessage(ctx, guildId, channel, { situation, opti
   persistState(ctx, guildId);
   void cleanupForeignMessages(ctx, channel, sent).catch(() => {});
   return sent;
+}
+
+/**
+ * Reaktiviert die Buttons der letzten Story-Nachricht und verwirft die gerade
+ * gewählte (noch nicht gespielte) Option. So kann ein fehlgeschlagener Groq-Call
+ * nicht das Ende der Runde bedeuten – die User können später erneut klicken.
+ * Gibt true zurück, wenn das Reaktivieren erfolgreich war, sonst false.
+ */
+async function revertPendingChoice(ctx, guildId, channel) {
+  const st = getRuntimeState(ctx, guildId);
+  const entry = st.history && st.history.length ? st.history[st.history.length - 1] : null;
+  if (!entry || !st.lastMessageId) return false;
+  try {
+    const payload = buildSituationPayload({
+      situation: entry.situation,
+      options: entry.options,
+      colors: st.colors,
+      disabled: false,
+      turn: st.turn,
+    });
+    await channel.messages.edit(st.lastMessageId, payload);
+    entry.chosenOption = null;
+    entry.decidedBy = null;
+    return true;
+  } catch (e) {
+    ctx.logger?.warn?.('[love-tester-bot] story revert failed:', e.message);
+    return false;
+  }
 }
 
 /** Löscht überzählige Fremd-Nachrichten unter der letzten Story-Nachricht. */
@@ -465,7 +524,8 @@ async function handleStoryButton(ctx, interaction) {
 
     if (!cfg?.groqApiKey) {
       st.locked = false;
-      return interaction.followUp(componentsV2Payload([smallContainer(null, 'Groq-API-Key fehlt – /setup ausführen.')], { ephemeral: true })).catch(() => {});
+      await revertPendingChoice(ctx, interaction.guildId, interaction.channel);
+      return interaction.followUp(componentsV2Payload([smallContainer(null, 'Groq-API-Key fehlt – /setup ausführen. Die Runde bleibt offen, du kannst gleich nochmal klicken.')], { ephemeral: true })).catch(() => {});
     }
 
     let next;
@@ -479,8 +539,11 @@ async function handleStoryButton(ctx, interaction) {
     } catch (err) {
       st.locked = false;
       ctx.logger?.error?.('[love-tester-bot] story groq error:', err.message);
+      // Runde NICHT abbrechen: Buttons wieder aktivieren und Wahl verwerfen,
+      // damit die User später erneut versuchen können weiterzuspielen.
+      await revertPendingChoice(ctx, interaction.guildId, interaction.channel);
       return interaction.followUp(
-        componentsV2Payload([smallContainer(null, `⚠️ Die KI hat gerade keinen Bock (${err.message}). Die Runde ist beendet – starte bei Bedarf mit /endless_story_channel neu.`)], { ephemeral: true })
+        componentsV2Payload([smallContainer(null, `⚠️ Die KI ist gerade nicht erreichbar (${err.message}). Die Runde bleibt offen – klicke einfach nochmal auf eine Option, um weiterzuspielen.`)], { ephemeral: true })
       ).catch(() => {});
     }
 
@@ -531,6 +594,8 @@ function attachMessageHandler(ctx) {
 module.exports = {
   STORY_PREFIX,
   STORY_HISTORY_LIMIT,
+  MAX_STORY_SITUATION_LENGTH,
+  MAX_STORY_SITUATION_SENTENCES,
   storyChannelCmd,
   handleStoryButton,
   handleStoryModal,
@@ -540,6 +605,9 @@ module.exports = {
   buildStoryUserPrompt,
   parseAiResponse,
   flattenText,
+  shortenSituation,
   formatDecidedBy,
   randomColors,
+  revertPendingChoice,
+  getRuntimeState,
 };

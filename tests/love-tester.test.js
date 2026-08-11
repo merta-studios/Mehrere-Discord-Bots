@@ -438,6 +438,67 @@ test('Endless-Story: History-Limit beträgt 10 Situationen und Optionen', () => 
   assert.ok(prompt.includes('→ Gewählt: Opt A0'), 'Gewählte Option im Prompt aufgeführt');
 });
 
+test('Endless-Story: Situationen bleiben kurz – die KI kann keine Romane mehr erzeugen', () => {
+  const { parseAiResponse, shortenSituation, MAX_STORY_SITUATION_LENGTH } = require('../bots/love-tester-bot/src/endless-story');
+
+  // Sehr langer Roman-Typ-Output, wie ihn die KI bei fortgeschrittener Geschichte liefern kann
+  const longRaw = [
+    'SITUATION: Du betrittst den alten Wald und spürst sofort, wie sich die Stimmung verändert. Die Bäume',
+    'scheinen sich zu bewegen und flüstern leise Geheimnisse, während der Nebel langsam zwischen den Stämmen',
+    'aufsteigt. In der Ferne siehst du eine Lichtung, auf der ein einzelner, silberner Baum steht, dessen Blätter',
+    'im Mondlicht funkeln. Du erinnerst dich an all die Abenteuer, die dich hierher geführt haben, an die Freunde,',
+    'die du unterwegs verloren hast, und an die Gefahren, die noch vor dir liegen. Plötzlich hörst du ein leises',
+    'Knacken im Unterholz und spürst, dass etwas Großes dich beobachtet.',
+    'OPTION 1: Nachsehen, was es war.',
+    'OPTION 2: Schnell weitergehen.',
+    'OPTION 3: Umkehren und fliehen.',
+  ].join('\n');
+
+  const parsed = parseAiResponse(longRaw);
+  assert.ok(parsed.situation.length <= MAX_STORY_SITUATION_LENGTH, `Situation zu lang: ${parsed.situation.length}`);
+
+  // Direkter Test der Stutz-Funktion
+  const novel = 'Satz eins über die Reise. Satz zwei über die Gefahr. Satz drei über die Vergangenheit. Satz vier und mehr über endlose Details und Beschreibungen, die ein ganzes Kapitel füllen würden.';
+  const short = shortenSituation(novel);
+  assert.ok(short.length <= MAX_STORY_SITUATION_LENGTH, 'shortenSituation hält das Zeichenlimit');
+  const sentenceCount = (short.match(/[.!?]+(\s|$)/g) || []).length;
+  assert.ok(sentenceCount <= 2, `shortenSituation erlaubt höchstens 2 Sätze, bekam: ${sentenceCount}`);
+
+  // Kurze Situation bleibt unverändert
+  assert.equal(shortenSituation('Du triffst eine Katze im Zauberwald.'), 'Du triffst eine Katze im Zauberwald.');
+});
+
+test('Endless-Story: revertPendingChoice reaktiviert Buttons und verwirft die gewählte Option', async () => {
+  const { getRuntimeState, revertPendingChoice } = require('../bots/love-tester-bot/src/endless-story');
+
+  const edited = [];
+  const channel = {
+    messages: {
+      edit: async (id, payload) => { edited.push({ id, payload }); },
+    },
+  };
+  const ctx = { logger: { warn: () => {} } };
+  const st = getRuntimeState(ctx, 'guild-1');
+  st.channelId = 'chan-1';
+  st.lastMessageId = 'msg-9';
+  st.turn = 5;
+  st.history = [{ situation: 'Du stehst vor einer Tür.', options: ['A', 'B', 'C'], chosenOption: 'A', decidedBy: '42' }];
+
+  const ok = await revertPendingChoice(ctx, 'guild-1', channel);
+  assert.equal(ok, true, 'Revert meldet Erfolg');
+
+  // Buttons wurden reaktiviert (disabled: false)
+  const container = edited[0].payload.components[0].toJSON();
+  const row = container.components.find((c) => c.type === 1);
+  const btn = row.components[0];
+  assert.equal(btn.disabled, false, 'Button wieder anklickbar');
+  assert.equal(edited[0].id, 'msg-9', 'Richtige Nachricht editiert');
+
+  // Gewählte Option wurde verworfen, damit später neu geklickt werden kann
+  assert.equal(st.history[0].chosenOption, null, 'chosenOption zurückgesetzt');
+  assert.equal(st.history[0].decidedBy, null, 'decidedBy zurückgesetzt');
+});
+
 test('Endless-Story: Bearbeitete Nachricht (entschieden) enthält Mention und Hinweis wer entschieden hat', () => {
   const { buildSituationPayload } = require('../bots/love-tester-bot/src/endless-story');
   const payload = buildSituationPayload({
