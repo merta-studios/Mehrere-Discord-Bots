@@ -26,7 +26,7 @@ const {
   buildUserPrompt,
   selectExcerpts,
   groqChat,
-  extractPercent,
+  finalizeLoveVerdict,
   sleep,
   PROMPT_CHAR_BUDGET,
   GROQ_MAX_COMPLETION_TOKENS,
@@ -445,14 +445,9 @@ async function runAnalysis(ctx, session) {
     // 3) Groq befragen
     const result = await runGroqPhase(ctx, session);
 
-    // 4) Ergebnis anzeigen (mit „### XX %“-Zeile)
+    // 4) Ergebnis anzeigen (Mentions, enge Abstände, „### XX %“)
     session.status = 'done';
-    const percent = extractPercent(result.content);
-    let finalText = result.content;
-    if (percent !== null) {
-      // Sicherstellen, dass die Prozentzeile ganz unten steht (Discord-Format)
-      finalText = `${result.content.replace(/###\s*\d{1,3}\s*%.*$/i, '').trim()}\n### ${percent}%`;
-    }
+    const finalText = finalizeLoveVerdict(result.content, session.user1, session.user2);
     const payload = componentsV2Payload([
       buildResult({ lang: session.lang, token: session.token, aiText: finalText, user1: session.user1, user2: session.user2 }),
     ]);
@@ -488,11 +483,7 @@ async function continueAnalysis(ctx, session) {
     await buildAnalysis(ctx, session);
     const result = await runGroqPhase(ctx, session);
     session.status = 'done';
-    const percent = extractPercent(result.content);
-    let finalText = result.content;
-    if (percent !== null) {
-      finalText = `${result.content.replace(/###\s*\d{1,3}\s*%.*$/i, '').trim()}\n### ${percent}%`;
-    }
+    const finalText = finalizeLoveVerdict(result.content, session.user1, session.user2);
     const payload = componentsV2Payload([
       buildResult({ lang: session.lang, token: session.token, aiText: finalText, user1: session.user1, user2: session.user2 }),
     ]);

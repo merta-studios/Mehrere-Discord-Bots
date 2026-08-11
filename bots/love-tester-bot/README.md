@@ -22,7 +22,7 @@ Kontext.
 | **Chat-Scan** | Durchsucht die eingerichteten Kanäle – **maximal 500 Nachrichten** pro Scan über alle Kanäle. „Weiter analysieren“ holt die nächsten 500 älteren Nachrichten. |
 | **Ausschnitt-Sortierung** | Pro Ausschnitt: **4 Nachrichten davor** + der **Kern** (Nachrichten der beiden User, maximal 3 fremde nacheinander dazwischen) + **der Rest danach** für den Kontext (mind. 9 Nachrichten gesamt). Die Ausschnitte werden verständlich nummeriert und chronologisch sortiert. |
 | **KI-freundliche Umwandlung** | Bilder → `*hat ein Bild gesendet*`, Videos, Sprachnachrichten, Dateien, Sticker, Antworten (`*hat auf eine Nachricht von [USER] mit dem Inhalt „…“ geantwortet mit:*`), Server-Emojis → `:name:`, Erwähnungen → `@Name`, Rollen/Kanäle/Timestamps werden aufgelöst. **Beide User werden im Text markiert** (`[USER1]` / `[USER2]`), damit die KI sie eindeutig erkennt. |
-| **Prompts für Groq** | System-Prompt: humorvoll, 3–5 Schlussfolgerungs-Sätze (mit 2 Leerzeilen getrennt) + finale Zeile `### XX %` (rendert in Discord als Überschrift). User-Prompt enthält Username, Discord-Anzeigenamen, Server-Nickname & ID beider Personen. **Token-Budget** wird überwacht (Ausschnitte mit beiden Usern haben Vorrang, zu große Kontexte werden automatisch gestutzt). |
+| **Prompts für Groq** | System-Prompt: teen-tauglicher Ship-Richter, **4 kurze Sätze** (Vibe von User1, Vibe von User2, 2× Zusammenpassen) + finale Zeile `### XX %`. Keine Klage über wenig Chat – stattdessen kreativ shippen, mit Emojis, Wortwahl-Zitaten und eher hohen Prozenten. User-Prompt enthält Username, Discord-Anzeigenamen, Server-Nickname & ID. **Namen im Urteil werden automatisch zu echten Mentions.** **Token-Budget** wird überwacht (Ausschnitte mit beiden Usern haben Vorrang, zu große Kontexte werden automatisch gestutzt). |
 | **Fehlerbehandlung** | Groq-Limit (429), API-Fehler, Discord-Rate-Limits, keine Nachrichten gefunden → verständliche Fehler-Container mit **🔄 Erneut versuchen** (Groq-Call wiederholt sich, Scan bleibt erhalten), **📚 Weiter analysieren** (scannt mehr Nachrichten) und **🛑 Abbrechen**. Nichts geht verloren! |
 | **10 Sprachen** | Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch, Japanisch, Koreanisch, Chinesisch, Italienisch – inkl. humorvoller Analyse-Sprüche. |
 | **Admin-Panel & Hilfe** | `/help` und `/adminpanel` (Owner-DM, Serverliste, Einladung, Verlassen) identisch zu Birthday-/XP-Bot, plus `/admin_set_bot_profile`. |
@@ -100,10 +100,11 @@ cp .env.example .env
 3. Der Bot scannt die Kanäle (max. 500 Nachrichten), baut Ausschnitte
    (4 davor + Kern + Rest danach) und wandelt alles in KI-Text um
    (Bilder, Antworten, Sticker, Emojis, Erwähnungen …).
-4. Groq analysiert mit einem humorvollen System-Prompt und antwortet mit
-   3–5 begründeten Sätzen + `### XX %`.
-5. Das Ergebnis erscheint direkt in der Nachricht – mit der Prozentzeile
-   als Discord-Überschrift. 🎉
+4. Groq analysiert als Ship-Richter: 4 kurze Sätze (User1, User2, 2× Fit)
+   + `### XX %`. Wenig Chat wird nicht kommentiert, sondern kreativ
+   weitergedacht. Nicknames im Text werden zu echten Mentions.
+5. Das Ergebnis erscheint dicht und klein untereinander – mit der
+   Prozentzeile als Discord-Überschrift. 🎉
 
 Bei Fehlern (Groq-Limit, Rate-Limits …) gibt es **Erneut versuchen** /
 **Weiter analysieren** / **Abbrechen** – der Scan-Fortschritt bleibt erhalten.

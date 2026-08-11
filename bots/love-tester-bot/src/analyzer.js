@@ -9,9 +9,11 @@
  *    Sprachnachrichten, Sticker, Server-Emojis, Erwähnungen …
  * 4. System-Prompt + User-Prompt für Groq bauen (Token-Budget beachten).
  * 5. Groq-API-Call mit Retry-/Fehlerbehandlung (Rate-Limits, 5xx, Kontext zu groß).
+ * 6. Antwort nachbereiten: Namen → Mentions, enge Abstände, 4-Satz-Urteil.
  *
  * Die Kernfunktionen (findCoreRuns/buildExcerpts/messageToAiText/buildPrompts/
- * extractPercent) sind bewusst ohne Discord-Objekte testbar.
+ * extractPercent/mentionifyNames/finalizeLoveVerdict) sind bewusst ohne
+ * Discord-Objekte testbar.
  */
 
 const { MessageFlags } = require('discord.js');
@@ -33,7 +35,7 @@ const MAX_CONTENT_CHARS = 300; // Inhalt pro Nachricht
 // ist nur eine schnelle Vorauswahl – beim 413 wird anhand der tatsächlichen
 // Prompt-Größe weiter von vorne (älteste Ausschnitte) entfernt.
 const GROQ_CONTEXT_TOKENS = 131072;
-const GROQ_MAX_COMPLETION_TOKENS = 1500;
+const GROQ_MAX_COMPLETION_TOKENS = 700;
 const GROQ_PROMPT_TOKENS = GROQ_CONTEXT_TOKENS - GROQ_MAX_COMPLETION_TOKENS;
 const PROMPT_CHAR_BUDGET = 55000; // schnelle Vorauswahl, nicht das API-Limit
 
@@ -243,37 +245,77 @@ function messageToAiText(msg, ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * System-Prompt: humorvoll, fordert 3–5 Sätze (mit 2 Leerzeilen getrennt)
- * und die „### XX %“-Zeile ganz unten.
+ * System-Prompt: teen-tauglicher Ship-Richter.
+ * Genau 4 kurze Sätze (User1, User2, 2× Zusammenpassen) + „### XX %“.
+ * Keine Klage über wenig Chat – stattdessen kreativ shippen.
  */
 function buildSystemPrompt(lang, user1, user2) {
   const u1 = user1.name;
   const u2 = user2.name;
+  const langHint = langInstruction(lang);
   return [
-    `Du bist der "Love Tester", ein humorvoller, charmant-sarkastischer KI-Liebesanalyst auf einem Discord-Server.`,
+    `Du bist der Love Tester: ein spaßiger Ship-Richter auf Discord.`,
+    `Du redest wie ein Teenager, der mega Bock hat, Leute zu shippen. Kurz. Klar. Mit Emojis. Kein Roman. Kein Erwachsenen-Autor. Keine langen Erklärungen.`,
     ``,
-    `Deine Aufgabe: Schätze die Love-Story zwischen ${u1} [USER1] und ${u2} [USER2] in PROZENT – wie ein kreativer, frecher Discord-Mensch, der zwei Leute unbedingt shippen will.`,
+    `Aufgabe: Schätze das Ship zwischen ${u1} [USER1] und ${u2} [USER2] in Prozent.`,
     ``,
-    `Regeln für deine Antwort:`,
-    `1. Sei sehr humorvoll, verspielt, kreativ und charmant-sarkastisch. Du darfst aus Namen, Rollen, Schreibstil, Timing, Emojis, gemeinsamen Räumen und der gesamten Situation wilde, aber klar als Spaß erkennbare Ship-Theorien bauen. Mach aus einer trockenen Analyse eine unterhaltsame Story.`,
-    `2. Nutze die Ausschnitte als Hinweise, aber nicht als starre Grenze: Wenn beide nie direkt miteinander geschrieben haben, analysiere trotzdem die mögliche Spannung, das auffällige Nicht-Geschehen, indirekte Überschneidungen und die Comedy des hypothetischen Ships. Wenn eine Person gar nicht geschrieben hat, darfst du daraus eine lustige „mysteriöse Abwesenheit“ oder ein einseitiges Fanfiction-Szenario machen. Erfinde dabei keine konkreten Nachrichten oder Tatsachen, die nicht geliefert wurden.`,
-    `3. Schreibe 3 bis 5 Sätze. Jeder Satz soll eine eigene pointierte Beobachtung oder Ship-Theorie mit Begründung enthalten (z. B. wer mehr schreibt, wer antwortet, wer Emojis/Reaktionen nutzt, Rollen/Aura, Flirt-Signale, Insider, Streit, Funkstille oder dramatisches Ignorieren).`,
-    `4. Trenne die Sätze IMMER mit zwei Leerzeilen voneinander (Absatz pro Schlussfolgerung).`,
-    `5. Ganz unten kommt eine EINZELNE Zeile, die mit "### " beginnt und nur den Prozentwert enthält, z. B.:`,
-    `### 73%`,
+    `ANTWORT – GENAU DIESE STRUKTUR, NICHTS ANDERES:`,
+    `Zeile 1: Eine typische Eigenschaft von ${u1}. Kurz. Nenn echte Wortwahl, Slang, Emojis oder Schreibstil in Anführungszeichen, wenn es welche gibt.`,
+    `Zeile 2: Dasselbe für ${u2}.`,
+    `Zeile 3: Wie die beiden zusammenpassen – kreativ, wie ein Richter, der das Ship bewertet.`,
+    `Zeile 4: Noch ein kurzes Urteil: passen sie oder eher nicht, plus ein lustiges Ship-Detail.`,
+    `Dann EINE letzte Zeile:`,
+    `### 78%`,
     ``,
-    `Prozentwertung – ganz wichtig:`,
-    `- Wähle eine differenzierte, abwechslungsreiche Zahl zwischen 1 und 99. 0 % und 100 % sind absolute Ausnahmefälle und dürfen nur bei komplettem Desinteresse bzw. eindeutigen Heirats-/Liebeserklärungen verwendet werden.`,
-    `- 17 % ist NICHT dein Standardwert. Leite die Zahl sichtbar aus mehreren Signalen ab und nutze auch Zwischenwerte wie 23, 41, 58, 67, 74 oder 86.`,
-    `- Kalibrierung: 0–5 % nur bei aktivem Desinteresse oder klarer Ablehnung; 6–20 % bei fast keinen Hinweisen; 21–39 % bei einseitiger Aktivität oder reinem Fan-Ship; 40–59 % bei ambivalenter/indirekter Chemie; 60–79 % bei mehreren gegenseitigen Signalen; 80–95 % bei eindeutigem Flirt. Keine Nachrichten sind nicht automatisch 0 % – ein hypothetisches Ship liegt normalerweise eher bei 25–55 %, je nach Rollen, Kontext und Comedy-Potenzial.`,
+    `Format-Regeln:`,
+    `- Genau 4 Sätze, jeder Satz eine eigene Zeile.`,
+    `- KEINE Leerzeilen zwischen den Sätzen. Alles dicht hintereinander.`,
+    `- Jeder Satz maximal 18 Wörter. Lieber 10.`,
+    `- In JEDEM Satz mindestens 1 Emoji.`,
+    `- Schreib die Namen genau so: ${u1} und ${u2}.`,
+    `- Klinge wie ein Richter, der Spaß am Shippen hat. Wörter wie „Urteil:“, „ich ship das“, „case closed“ sind gut.`,
+    ``,
+    `WENIG ODER KEIN CHAT – GANZ WICHTIG:`,
+    `- Sag NIEMALS, dass die zwei wenig / nie / kaum miteinander schreiben.`,
+    `- Nicht „zu wenig Austausch“, nicht „keine Nachrichten“, nicht „die reden nie“, nicht „Funkstille“, nicht „zu wenig Daten“.`,
+    `- Denk stattdessen kreativ: Namen, Rollen, Aura, Timing, Emojis, Vibe, wie ihre Styles zusammenknallen würden.`,
+    `- Erfinde keine konkreten Chat-Zitate, die nicht in den Ausschnitten stehen.`,
+    `- Wenn es echte Wortwahl gibt (z. B. „bro“, „💀“, „ok.“), nenn sie. Wenn nicht, nimm Rollen, Nickname-Vibe und Energie.`,
+    ``,
+    `Prozent – du willst shippen, also sei großzügig:`,
+    `- Die Zahl soll eher HOCH sein. Du bist Fan, nicht Spielverderber.`,
+    `- 0–20 % nur bei klarem Diss / „lass mich in Ruhe“.`,
+    `- 21–45 % selten, nur wenn der Vibe wirklich kalt oder cringe ist.`,
+    `- 46–65 % „könnte cute werden“.`,
+    `- 66–84 % ist die Standard-Zone. Die meisten Ships landen hier.`,
+    `- 85–97 % starke Chemie oder offensichtlicher Crush.`,
+    `- 98–100 % nur bei krassen Liebesbeweisen.`,
+    `- Wenig oder kein Chat ist KEIN Grund für eine niedrige Zahl. Dann 62–86 %, je nach Comedy- und Ship-Potenzial.`,
+    `- Nimm eine abwechslungsreiche Zahl (z. B. 71, 77, 83, 68, 91). Nicht immer 70.`,
     ``,
     `Wichtig:`,
-    `- [USER1] = ${u1}, [USER2] = ${u2}. Zeilen mit diesen Markierungen gehören zu den beiden.`,
-    `- Rollen und Profilinformationen sind Kontext und dürfen kreativ für das Ship interpretiert werden, beweisen aber keine Liebe.`,
-    `- Erwähne konkrete Beispiele aus den Ausschnitten oder – wenn es keine gibt – die auffällige Leerstelle, um deine Einschätzung glaubwürdig zu machen.`,
-    `- Antworte in der Sprache der Ausschnitte und Anweisungen.`,
-    `- Sei niemals gemein zu realen Personen; roast die Situation, nicht die Menschen.`,
+    `- [USER1] = ${u1}, [USER2] = ${u2}.`,
+    `- ${langHint}`,
+    `- Roast die Situation, nie die Menschen. Sei nie gemein.`,
+    `- Keine Überschriften, keine Aufzählungen, kein Extra-Text vor oder nach den 4 Zeilen (außer der ###-Zeile).`,
   ].join('\n');
+}
+
+/** Kurzer Sprachhinweis, damit das Urteil zur Server-Sprache passt. */
+function langInstruction(lang) {
+  const map = {
+    de: 'Antworte auf Deutsch, locker und leicht verständlich.',
+    en: 'Answer in easy, casual English. Short teen voice.',
+    fr: 'Réponds en français simple et décontracté.',
+    es: 'Responde en español sencillo y informal.',
+    pt: 'Responda em português simples e descontraído.',
+    ru: 'Отвечай простым, лёгким русским.',
+    ja: '簡単でカジュアルな日本語で答えて。',
+    ko: '쉽고 캐주얼한 한국어로 답해.',
+    zh: '用简单、轻松的中文回答。',
+    it: 'Rispondi in italiano semplice e informale.',
+  };
+  return map[lang] || map.de;
 }
 
 /**
@@ -298,6 +340,8 @@ function buildUserPrompt({ lang, user1, user2, excerpts }) {
       }
     });
   }
+  lines.push('');
+  lines.push(`Schreib jetzt dein 4-Zeilen-Urteil über ${user1.name} und ${user2.name} + die Zeile ### XX%. Keine Leerzeilen zwischen den Sätzen.`);
   return lines.join('\n');
 }
 
@@ -349,7 +393,7 @@ function groqError(status) {
  * Ruft Groq auf. Wirft bei Fehlern mit `.status`:
  *  429 = Rate-Limit, 401/403 = Auth, 413 = Kontext zu groß, 5xx = Serverfehler.
  */
-async function groqChat({ apiKey, systemPrompt, userPrompt, model = GROQ_MODEL, maxTokens = GROQ_MAX_COMPLETION_TOKENS, temperature = 0.9, signal } = {}) {
+async function groqChat({ apiKey, systemPrompt, userPrompt, model = GROQ_MODEL, maxTokens = GROQ_MAX_COMPLETION_TOKENS, temperature = 1.05, signal } = {}) {
   const res = await fetch(GROQ_URL, {
     method: 'POST',
     headers: {
@@ -395,6 +439,127 @@ function extractPercent(text) {
   return Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : null;
 }
 
+// ---------------------------------------------------------------------------
+// Nachbereitung: Namen → Mentions, enge Abstände, kleines Urteil
+// ---------------------------------------------------------------------------
+
+/** Wörter, die nie zu Mentions werden dürfen (auch wenn jemand so heißt). */
+const MENTION_NAME_BLOCKLIST = new Set([
+  'ok', 'hi', 'hey', 'lol', 'lmao', 'omg', 'bro', 'yes', 'no', 'ja', 'nein',
+  'the', 'and', 'or', 'to', 'of', 'in', 'on', 'at', 'it', 'is', 'are', 'was',
+  'for', 'you', 'me', 'my', 'we', 'us', 'he', 'she', 'they', 'them', 'his',
+  'her', 'not', 'but', 'with', 'this', 'that', 'from', 'have', 'has', 'had',
+  'ich', 'du', 'er', 'sie', 'es', 'wir', 'ihr', 'und', 'oder', 'der', 'die',
+  'das', 'ein', 'eine', 'dem', 'den', 'des', 'mit', 'von', 'aus', 'auf', 'im',
+  'am', 'zum', 'zur', 'ist', 'bin', 'bist', 'sind', 'war', 'hat', 'hab',
+  'love', 'test', 'user', 'admin', 'bot', 'mod', 'ship', 'crush', 'cute',
+  'case', 'closed', 'urteil', 'richter', 'percent', 'prozent',
+  'moi', 'toi', 'il', 'elle', 'nous', 'vous', 'les', 'des', 'une', 'que',
+  'yo', 'tu', 'el', 'ella', 'nos', 'los', 'las', 'una', 'por', 'para',
+  'eu', 'voce', 'você', 'ele', 'ela', 'nao', 'não', 'sim',
+]);
+
+/** Sammelt eindeutige Namensvarianten eines Users, längste zuerst. */
+function collectUserAliases(user) {
+  if (!user) return [];
+  const raw = [
+    user.nickname,
+    user.displayName,
+    user.name,
+    user.globalName,
+    user.username,
+  ];
+  const seen = new Set();
+  const names = [];
+  for (const value of raw) {
+    const name = String(value || '').trim();
+    if (name.length < 2) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    if (MENTION_NAME_BLOCKLIST.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  names.sort((a, b) => b.length - a.length);
+  return names;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Wandelt Server-Nicks, Usernames und Anzeigenamen im KI-Text in echte
+ * Discord-Mentions (`<@id>`) um. Gemeinsame Namen beider User werden
+ * übersprungen, bestehende Mentions/Emojis bleiben unangetastet.
+ */
+function mentionifyNames(text, user1, user2) {
+  if (!text) return text;
+  const protectedChunks = [];
+  let out = String(text).replace(
+    /<@!?\d+>|<@&\d+>|<#\d+>|<a?:[^:]+:\d+>|```[\s\S]*?```|`[^`]+`|https?:\/\/\S+/g,
+    (m) => {
+      protectedChunks.push(m);
+      return `\u0000P${protectedChunks.length - 1}\u0000`;
+    }
+  );
+
+  if (user1?.id) out = out.replace(/\[USER1\]/gi, `<@${user1.id}>`);
+  if (user2?.id) out = out.replace(/\[USER2\]/gi, `<@${user2.id}>`);
+
+  const aliases1 = collectUserAliases(user1);
+  const aliases2 = collectUserAliases(user2);
+  const shared = new Set(
+    aliases1.map((n) => n.toLowerCase()).filter((n) => aliases2.some((x) => x.toLowerCase() === n))
+  );
+
+  const pairs = [];
+  if (user1?.id) {
+    for (const name of aliases1) {
+      if (!shared.has(name.toLowerCase())) pairs.push({ name, id: user1.id });
+    }
+  }
+  if (user2?.id) {
+    for (const name of aliases2) {
+      if (!shared.has(name.toLowerCase())) pairs.push({ name, id: user2.id });
+    }
+  }
+  pairs.sort((a, b) => b.name.length - a.name.length);
+
+  for (const { name, id } of pairs) {
+    const re = new RegExp(`(?<![\\p{L}\\p{N}_@])@?${escapeRegExp(name)}(?![\\p{L}\\p{N}_])`, 'giu');
+    out = out.replace(re, `<@${id}>`);
+  }
+
+  return out.replace(/\u0000P(\d+)\u0000/g, (_, i) => protectedChunks[Number(i)]);
+}
+
+/** Macht das Urteil dicht: keine Riesen-Lücken, Sätze als kleine Discord-Zeilen. */
+function compactVerdictLines(text) {
+  const lines = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.map((line) => {
+    if (line.startsWith('###') || line.startsWith('-#')) return line;
+    return `-# ${line}`;
+  }).join('\n');
+}
+
+/**
+ * Macht aus der rohen KI-Antwort das fertige Discord-Urteil:
+ * Mentions, enge Abstände, kleine Begründung, `### XX%` ganz unten.
+ */
+function finalizeLoveVerdict(rawText, user1, user2) {
+  const percent = extractPercent(rawText);
+  let body = String(rawText || '').replace(/###\s*\d{1,3}\s*%[^\n]*/gi, '').trim();
+  body = mentionifyNames(body, user1, user2);
+  body = compactVerdictLines(body);
+  if (percent !== null) return body ? `${body}\n### ${percent}%` : `### ${percent}%`;
+  return body;
+}
+
 /** Wartet mit Rate-Limit-Respekt (retryAfter aus Discord-429). */
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -423,6 +588,10 @@ module.exports = {
   selectExcerpts,
   groqChat,
   extractPercent,
+  collectUserAliases,
+  mentionifyNames,
+  compactVerdictLines,
+  finalizeLoveVerdict,
   sleep,
   tzOf,
 };

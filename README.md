@@ -18,7 +18,7 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 |---|---|
 | 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons im Container). 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche (**Glückwunsch-Liste kompakt nebeneinander mit Uhrzeit**), **7-Tage-Aufräumregel unter der Liste**, Owner-Admin-Panel im DM. |
 | ⭐ **XP Level Bot** | **RAM-first & Turso-persistiert** – XP pro Wort (Spam-Erkennung krass, 3 XP/Wort, max 30, 30s Cooldown) + **15 XP für Bilder/Videos/Sprachnachrichten**, Level-Kurve 80→1999 XP, täglicher 5%-Basis-Schwund (bei Inaktivität steigend), Voice 25 XP/Min, Top15-Leaderboard **stündlich + bei Level-Ups**, Nicknames `[Lvl X 🥇]` (Top 3, **Rang-Verschiebungen werden zuverlässig nachgezogen**), **Level-Belohnungsrollen via Formular** (`/level_roles`), **`/update_leaderboard` (Admin, 5-Min-Cooldown)**, /rank + /setup (2 Kanäle) + Adminpanel. |
-| 💘 **Love Tester Bot** | Schätzt die Liebe zwischen zwei Personen anhand eurer Chatverläufe – **10 Sprachen, humorvolle Groq-Analyse** (`/test_love` mit Datenschutz-Bestätigung & Live-Fortschritt %), `/setup`-Assistent (3 Schritte: Sprache → Kanäle → Groq-Key), nutzt **dieselbe Turso-DB wie der XP-Bot**, Admin-Panel + /help wie die anderen Bots. |
+| 💘 **Love Tester Bot** | Schätzt die Liebe zwischen zwei Personen anhand eurer Chatverläufe – **10 Sprachen, teen-tauglicher Ship-Richter** (`/test_love` mit Datenschutz-Bestätigung & Live-Fortschritt %), `/setup`-Assistent (3 Schritte: Sprache → Kanäle → Groq-Key), nutzt **dieselbe Turso-DB wie der XP-Bot**, Admin-Panel + /help wie die anderen Bots. |
 | 🛠️ **Multi-Bot-Hoster** | Loader, der alle Bots im `bots/`-Ordner automatisch startet (nur die mit gesetztem Token), plus Health-Server für UptimeRobot. |
 
 ## 🗂️ Projektstruktur
@@ -253,6 +253,7 @@ Details siehe [`bots/love-tester-bot/README.md`](bots/love-tester-bot/README.md)
 - **Fehler-Resilienz**: Groq-Limit, API-Fehler, Discord-Rate-Limits →
   „Erneut versuchen“ / „Weiter analysieren“ / „Abbrechen“, Fortschritt bleibt erhalten.
 - **Datenbank**: dieselbe Turso-DB wie der XP-Bot (eigene Tabellen, kaum Daten).
+- `/help` + `/admin_set_bot_profile` + `/adminpanel` �
 - `/help` + `/admin_set_bot_profile` + `/adminpanel` – wie bei den anderen Bots.
 
 ---

@@ -224,8 +224,8 @@ function progressBar(pct, segments = 12) {
 /** Ergebnis-Container: KI-Text (enthält die „### XX %“-Zeile) + Footer. */
 function buildResult({ lang, token, aiText, user1, user2 }) {
   const container = new ContainerBuilder();
-  const participants = user1 && user2 ? `${participantLine(user1, user2)}\n\n` : '';
-  const body = `${t('loveResultTitle', lang)}\n\n${participants}${aiText}\n${t('loveResultFooter', lang)}`;
+  const participants = user1 && user2 ? `${participantLine(user1, user2)}\n` : '';
+  const body = `${t('loveResultTitle', lang)}\n${participants}${aiText}${t('loveResultFooter', lang)}`;
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(body));
   return container;
 }
