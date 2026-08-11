@@ -396,6 +396,46 @@ test('love-store.setCommandIds ERSTZT die komplette Liste (keine verwaisten IDs 
   assert.equal(store.getCommandId('test_love'), '333');
 });
 
+test('Guild-Command-IDs ersetzen ebenfalls die komplette Liste', () => {
+  const { createLoveStore } = require('../bots/love-tester-bot/src/store');
+  const store = createLoveStore({ env: () => '' });
+  store.setGuildCommandIds('dev', { setup: '111', adminpanel: 'STALE' });
+  store.setGuildCommandIds('dev', { setup: '222' });
+  assert.deepEqual(store.getGuildCommandIds('dev'), { setup: '222' });
+});
+
+test('registerCommands wiederholt bei unvollständiger Discord-Antwort und bestätigt erst danach', async () => {
+  const { registerCommands } = require('../bots/love-tester-bot/src/commands');
+  let putCalls = 0;
+  let lastRoute = null;
+  const fakeRest = {
+    put: async (route, { body }) => {
+      putCalls += 1;
+      lastRoute = route;
+      if (putCalls === 1) return [];
+      return (body || []).map((command) => ({ id: `id-${command.name}`, name: command.name }));
+    },
+  };
+  const ctx = {
+    commandsRegistered: false,
+    token: 'test-token',
+    rest: fakeRest,
+    client: { user: { id: 'app1' }, guilds: { cache: new Map() } },
+    logger: { info() {}, warn() {}, error() {} },
+    commandIds: {},
+    guildCommandIds: new Map(),
+  };
+
+  const ok = await registerCommands(ctx, { retryDelays: [0, 0] });
+  assert.equal(ok, true);
+  assert.equal(ctx.commandsRegistered, true);
+  assert.equal(putCalls, 2, 'die unvollständige Antwort muss einen Retry auslösen');
+  assert.equal(ctx.commandIds.test_love, 'id-test_love');
+  assert.equal(ctx.commandIdsVerifiedScope, 'global');
+  assert.equal(ctx.commandIdsVerifiedAt > 0, true);
+  assert.equal(lastRoute, '/applications/app1/commands');
+});
+
 test('Command-Selbstheilung holt eine fehlgeschlagene Initial-Registrierung nach', async () => {
   const { startCommandSelfHealing } = require('../bots/love-tester-bot/src/scheduler');
   let putCalls = 0;

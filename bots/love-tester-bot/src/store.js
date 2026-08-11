@@ -191,7 +191,10 @@ function createLoveStore({ logger, env } = {}) {
   function getAllGuildCommandIds() { return Object.fromEntries([...guildCommandIds.entries()]); }
   function setGuildCommandIds(guildId, ids) {
     if (guildId && ids && typeof ids === 'object') {
-      guildCommandIds.set(guildId, { ...(guildCommandIds.get(guildId) || {}), ...ids });
+      // Discords GET/PUT-Antwort ist die vollständige Liste für diese Gilde.
+      // Nicht mergen: sonst bleiben gelöschte Commands als tote Snowflakes
+      // erhalten und werden später in /help als verwaiste Mentions verwendet.
+      guildCommandIds.set(guildId, { ...ids });
       dirtyMetadata = true;
       try { saveToFile(); } catch {}
     }

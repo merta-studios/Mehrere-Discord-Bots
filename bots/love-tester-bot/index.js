@@ -81,6 +81,10 @@ module.exports = {
       commandIds: store.getCommandIds ? store.getCommandIds() : {},
       commandIdScope: store.getCommandIdScope ? store.getCommandIdScope() : null,
       guildCommandIds: new Map(),
+      // Wird bewusst vor dem ersten Ready-Event auf false gesetzt. So kann die
+      // Selbstheilung auch dann einspringen, wenn die erste Registrierung
+      // wegen eines unerwarteten Fehlers gar keinen Rückgabewert liefert.
+      commandsRegistered: false,
       panelSessions: new Map(),
       setupSessions: new Map(), // token -> {token, userId, guildId, step, lang, channels, groqKey}
       loveSessions: new Map(), // token -> Analyse-Session
@@ -111,17 +115,24 @@ module.exports = {
     let stopSelfHealing = null;
 
     client.once(Events.ClientReady, async () => {
-      updatePresence();
       try {
+        updatePresence();
         await registerCommands(ctx);
       } catch (err) {
+        // registerCommands behandelt REST-Fehler selbst. Dieser Fallback ist
+        // trotzdem wichtig: auch Fehler beim Erzeugen des Payloads oder beim
+        // Zugriff auf den Client dürfen die Selbstheilung nicht verhindern.
+        ctx.commandsRegistered = false;
         logger.error('[love-tester-bot] Initial-Command-Registrierung fehlgeschlagen:', err.message);
+      } finally {
+        // Erst nach dem Initialversuch starten, damit die Retry-Schleife nicht
+        // parallel zum ersten PUT läuft. Sie holt auch unerwartete Fehler nach.
+        stopSelfHealing = startCommandSelfHealing({ ctx });
       }
-      stopSelfHealing = startCommandSelfHealing({ ctx });
       logger.info(
         `[love-tester-bot] Bereit auf ${client.guilds.cache.size} Server(n) – ` +
         `${store.getAllGuilds().filter((g) => g.setupComplete).length} Love-Setups aktiv` +
-        (ctx.commandsRegistered === false ? ' (Commands noch nicht registriert – Selbstheilung aktiv)' : '')
+        (ctx.commandsRegistered !== true ? ' (Commands noch nicht registriert – Selbstheilung aktiv)' : '')
       );
     });
 
