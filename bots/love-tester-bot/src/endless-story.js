@@ -287,13 +287,21 @@ async function storyChannelCmd(ctx, interaction) {
   }
 
   const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  // Das Modal zuerst bauen: discord.js validiert dabei u. a. das harte
+  // 100-Zeichen-Limit für Platzhalter. So bleibt bei einem Baufehler keine
+  // unbenutzbare Session zurück.
+  const modal = buildStoryModal(token);
   ctx.setupSessions.set(`story_modal_${token}`, {
     guildId: interaction.guildId,
     channelId: channel.id,
     userId: interaction.user.id,
   });
+  return interaction.showModal(modal);
+}
 
-  const modal = new ModalBuilder()
+/** Baut das Startformular innerhalb aller Discord-String-Limits. */
+function buildStoryModal(token) {
+  return new ModalBuilder()
     .setCustomId(`love_story_modal_${token}`)
     .setTitle('Endless Story — Startsituation')
     .addComponents(
@@ -305,7 +313,8 @@ async function storyChannelCmd(ctx, interaction) {
           .setRequired(true)
           .setMinLength(10)
           .setMaxLength(1500)
-          .setPlaceholder('z.B. Du stehst um 7 Uhr in der Bäckerei. Vor dir kauft dein Mathelehrer das letzte Croissant. Er dreht sich um und schaut dich direkt an …')
+          // Discord erlaubt bei Textfeldern höchstens 100 Zeichen.
+          .setPlaceholder('z.B. Du bist in der Bäckerei. Dein Mathelehrer kauft das letzte Croissant und schaut dich an …')
       ),
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
@@ -338,7 +347,6 @@ async function storyChannelCmd(ctx, interaction) {
           .setPlaceholder('Du tust so, als ob du ihn nicht erkennst, und rennst raus.')
       )
     );
-  return interaction.showModal(modal);
 }
 
 async function handleStoryModal(ctx, interaction) {
@@ -499,6 +507,7 @@ module.exports = {
   handleStoryButton,
   handleStoryModal,
   attachMessageHandler,
+  buildStoryModal,
   buildSituationPayload,
   parseAiResponse,
   flattenText,
