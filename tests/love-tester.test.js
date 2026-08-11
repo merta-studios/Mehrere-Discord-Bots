@@ -409,7 +409,7 @@ test('Endless-Story-Startformular hält alle Discord-String-Limits ein', () => {
   }
 });
 
-test('Endless-Story-Situationsnachricht enthält keine Spoiler-Tags (graue Box)', () => {
+test('Endless-Story-Situationsnachricht enthält keine Spoiler-Tags (graue Box) und nutzt ### Format', () => {
   const { buildSituationPayload } = require('../bots/love-tester-bot/src/endless-story');
   const payload = buildSituationPayload({
     situation: 'Du bist im Zauberwald und triffst eine Katze.',
@@ -418,8 +418,56 @@ test('Endless-Story-Situationsnachricht enthält keine Spoiler-Tags (graue Box)'
   });
   const container = payload.components[0].toJSON();
   const textDisplay = container.components[0];
-  assert.equal(textDisplay.content, '# 📖 Endless Story — Zug 2\n\nDu bist im Zauberwald und triffst eine Katze.');
+  assert.equal(textDisplay.content, '# 📖 Endless Story — Zug 2\n\n### Du bist im Zauberwald und triffst eine Katze.');
   assert.equal(textDisplay.content.includes('||'), false, 'Darf keine Spoiler-Tags (graue Box) enthalten');
+});
+
+test('Endless-Story: History-Limit beträgt 10 Situationen und Optionen', () => {
+  const { STORY_HISTORY_LIMIT, buildStoryUserPrompt } = require('../bots/love-tester-bot/src/endless-story');
+  assert.equal(STORY_HISTORY_LIMIT, 10, 'STORY_HISTORY_LIMIT muss 10 sein');
+
+  const history = Array.from({ length: 10 }, (_, i) => ({
+    situation: `Szene ${i + 1}`,
+    options: [`Opt A${i}`, `Opt B${i}`, `Opt C${i}`],
+    chosenOption: `Opt A${i}`,
+  }));
+  const prompt = buildStoryUserPrompt({ history, chosenOptionText: 'Opt A9' });
+  assert.ok(prompt.includes('Zug 1: Situation: Szene 1'), 'Erster Zug der 10er-History im Prompt');
+  assert.ok(prompt.includes('Zug 10: Situation: Szene 10'), 'Zehnter Zug im Prompt');
+  assert.ok(prompt.includes('Optionen: Opt A0 | Opt B0 | Opt C0'), 'Optionen werden im Prompt aufgeführt');
+  assert.ok(prompt.includes('→ Gewählt: Opt A0'), 'Gewählte Option im Prompt aufgeführt');
+});
+
+test('Endless-Story: Bearbeitete Nachricht (entschieden) enthält Mention und Hinweis wer entschieden hat', () => {
+  const { buildSituationPayload } = require('../bots/love-tester-bot/src/endless-story');
+  const payload = buildSituationPayload({
+    situation: 'Du bist im Zauberwald und triffst eine Katze.',
+    options: ['Option A', 'Option B', 'Option C'],
+    turn: 2,
+    disabled: true,
+    chosenIndex: 1,
+    decidedBy: '123456789',
+  });
+  const container = payload.components[0].toJSON();
+  const textDisplay = container.components[0];
+  assert.equal(
+    textDisplay.content,
+    '# 📖 Endless Story — Zug 2\n\n### Du bist im Zauberwald und triffst eine Katze.\n\n<@123456789> hat die nächste Option schon entschieden.'
+  );
+
+  const payloadUserObj = buildSituationPayload({
+    situation: 'Du bist im Zauberwald und triffst eine Katze.',
+    options: ['Option A', 'Option B', 'Option C'],
+    turn: 3,
+    disabled: true,
+    chosenIndex: 0,
+    decidedBy: { id: '999888777' },
+  });
+  const containerObj = payloadUserObj.components[0].toJSON();
+  assert.ok(
+    containerObj.components[0].content.includes('<@999888777> hat die nächste Option schon entschieden.'),
+    'Erkennt auch User-Objekte mit .id sauber als Mention'
+  );
 });
 
 // ---------------------------------------------------------------------------
