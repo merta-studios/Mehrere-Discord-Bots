@@ -235,13 +235,59 @@ test('Bonus-Drop: geplanter Slot zur Fälligkeit sendet Belohnung mit XP-Zahl & 
   assert.equal(h.sentMessages.length, 1, 'kein Doppel-Drop für denselben Slot');
 });
 
-test('Bonus-Drop: ohne Leaderboard-Setup (pausiertes System) kommt nichts', async () => {
+test('Bonus-Drop: ohne jeglichen Zielkanal kommt nichts', async () => {
   const h = makeBonusHarness();
   h.cfg.leaderboardChannelId = null;
+  h.cfg.mainChannelId = null;
   const day = todayKey('de');
   const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
   await h.dropper.checkScheduled(h.cfg, h.guild, dateWithTzMinute(plan[0]));
   assert.equal(h.sentMessages.length, 0);
+});
+
+test('Bonus-Drop: ohne Hauptkanal fällt auf den Leaderboard-Kanal zurück', async () => {
+  const h = makeBonusHarness();
+  h.cfg.mainChannelId = null;
+  const day = todayKey('de');
+  const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
+  await h.dropper.checkScheduled(h.cfg, h.guild, dateWithTzMinute(plan[0]));
+  assert.equal(h.sentMessages.length, 1, 'Fallback-Kanal muss den Drop senden');
+});
+
+test('Bonus-Drop: abgelaufener persistierter Drop blockiert neue Termine nicht', async () => {
+  const h = makeBonusHarness();
+  const day = todayKey('de');
+  const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
+  h.cfg.bonusState = {
+    dayKey: day,
+    planVersion: 2,
+    firedSlots: [],
+    activeDrop: {
+      dropId: 'stale',
+      guildId: 'g1',
+      channelId: 'main1',
+      messageId: 'old',
+      xp: 20,
+      lang: 'de',
+      createdAt: Date.now() - BONUS_CLAIM_MS - 5_000,
+    },
+  };
+  await h.dropper.checkScheduled(h.cfg, h.guild, dateWithTzMinute(plan[0]));
+  assert.equal(h.sentMessages.length, 1, 'nach abgelaufenem Alt-Drop muss ein neuer gesendet werden');
+});
+
+test('Bonus-Drop: Plan-Migration nach Anzahl darf den Tag nicht leer fegen', async () => {
+  const h = makeBonusHarness();
+  const day = todayKey('de');
+  const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
+  h.cfg.bonusState = {
+    dayKey: day,
+    planVersion: 1,
+    firedSlots: [1, 2, 3, 4], // alte Minuten, nicht im neuen Plan
+    activeDrop: null,
+  };
+  await h.dropper.checkScheduled(h.cfg, h.guild, dateWithTzMinute(plan[0]));
+  assert.equal(h.sentMessages.length, 1, 'neue Slots bleiben nach Versionssprung sendbar');
 });
 
 test('Bonus-Drop: nur ein offener Drop pro Server gleichzeitig', async () => {
