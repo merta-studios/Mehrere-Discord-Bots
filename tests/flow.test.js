@@ -567,6 +567,57 @@ test('Gratulieren: erste Gratulation fügt Feld hinzu, Wiederholung wird blockie
   assert.match(replyText, /bereits/i);
 });
 
+test('Gratulieren: alte Nachricht (Klartext-Marker, nur Mentions) ohne Doppel-Glückwunsch', async () => {
+  const h = makeHarness();
+  const uid = 'bday1';
+  const dateKey = '2026-12-31';
+
+  // Alte Nachricht: Marker als Klartext, Glückwünsche nur als sichtbare
+  // Mentions (keine unsichtbaren Blobs) – wie vor dem Fix im Feld.
+  const msg = {
+    components: [
+      {
+        type: 17,
+        components: [
+          {
+            type: 10,
+            content:
+              '# 🎂 Alles Gute zum Geburtstag!\n\n<bday1> hat heute Geburtstag – gratuliere!\nbday-congrats:2026-12-31:bday1\n### 🎉 Glückwünsche (1)\n<@u2>',
+          },
+        ],
+      },
+    ],
+    id: 'congrats_alt',
+    createdTimestamp: Date.now(),
+    delete: async () => {},
+  };
+
+  const makeWish = (interactorId) =>
+    h.makeInteraction({
+      customId: `bday_congrats_${uid}_${dateKey}`,
+      user: { id: interactorId, username: interactorId },
+      message: msg,
+      update: async (p) => {
+        msg.components = p.components.map((c) => (c.toJSON ? c.toJSON() : c));
+      },
+    });
+
+  // u3 gratuliert → u2 bleibt erhalten (nichts geht verloren)
+  await handleInteraction(h.ctx, makeWish('u3'));
+  let msgText = extractAllText(msg);
+  assert.match(msgText, /Glückwünsche \(2\)/, 'zählt u2 + u3');
+  assert.ok(msgText.includes('<@u2>') && msgText.includes('<@u3>'), 'beide Erwähnungen da');
+
+  // u2 gratuliert erneut → blockiert (kein Doppel-Eintrag trotz fehlender Blobs)
+  await handleInteraction(h.ctx, makeWish('u2'));
+  msgText = extractAllText(msg);
+  assert.match(msgText, /Glückwünsche \(2\)/, 'Liste unverändert');
+  assert.equal((msgText.match(/<@u2>/g) || []).length, 1, 'u2 genau einmal');
+  // Rebuild ist unsichtbar: kein sichtbares „wish:“ mehr
+  assert.ok(!msgText.includes('wish:'), 'kein sichtbarer wish:-Marker nach Rebuild');
+  assert.ok(!msgText.includes('bday-congrats:'), 'kein sichtbarer bday-congrats:-Marker');
+});
+
 test('Leere Formular-Felder → Lösch-Bestätigung → Geburtstag wird gelöscht', async () => {
   const h = makeHarness();
   const good = dateIn(20);

@@ -4,6 +4,11 @@
  * Modals (Formulare) und Select-Menüs (Admin-Panel).
  *
  * Verwendet moderne Container & Layout-Komponenten (Components V2).
+ *
+ * Glückwunsch-/Interessenten-Listen werden aus den wirklich unsichtbaren
+ * Zero-Width-Markern (zw-marker.js) UND den sichtbaren Erwähnungen
+ * gelesen und vereinigt – dedupliziert, verlustfrei, ohne sichtbares
+ * „wish:/int:“-Textformat.
  */
 
 const { MessageFlags } = require('discord.js');
@@ -22,6 +27,7 @@ const {
   buildEventCongratsEmbed,
   decodeEventName,
   normalizeWishEntries,
+  decodeHidden,
   smallContainer,
 } = require('./embed-builder');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
@@ -29,18 +35,46 @@ const { componentsV2Payload } = require('./message-payload');
 
 /**
  * Liest die Glückwunsch-/Interessenten-Einträge (id + Uhrzeit) aus den
- * unsichtbaren Markern einer Nachricht:
- *   \u200Bwish:<userId>:<ts>\u200B  bzw.  \u200Bint:<userId>:<ts>\u200B
- * Gibt [] zurück, wenn keine Marker vorhanden sind (alte Nachrichten).
+ * Markern einer Nachricht. Unterstützt BOTH:
+ * - neue, wirklich unsichtbare Zero-Width-Blobs (siehe zw-marker.js)
+ * - alte Klartext-Marker („\u200Bwish:<userId>:<ts>\u200B“) zur Migration
+ * Dedupliziert nach ID (erster Treffer gewinnt).
  */
 function parseMarkedEntries(text, prefix) {
   const out = [];
+  const seen = new Set();
   const re = new RegExp(`${prefix}:(\\d+):(\\d+)`, 'g');
-  let m;
-  while ((m = re.exec(text))) {
-    out.push({ id: m[1], ts: Number(m[2]) });
+  const sources = [text || '', ...decodeHidden(text || '')];
+  for (const src of sources) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(src))) {
+      if (!seen.has(m[1])) {
+        seen.add(m[1]);
+        out.push({ id: m[1], ts: Number(m[2]) });
+      }
+    }
   }
   return out;
+}
+
+/**
+ * Vereinigt Marker-Einträge (mit Uhrzeit) und sichtbare Erwähnungen
+ * (ohne Uhrzeit) zu EINER deduplizierten Liste. So geht beim
+ * Wieder-Auslesen nichts verloren (auch wenn Marker fehlen/abgeschnitten
+ * sind) und kein Nutzer kann doppelt auftauchen. Marker-Einträge
+ * gewinnen (sie bringen die Uhrzeit mit), die Reihenfolge der Liste
+ * bleibt stabil (Erst-Vorkommen).
+ */
+function mergeListEntries(marked, mentionedIds) {
+  const byId = new Map();
+  for (const w of marked) {
+    if (!byId.has(w.id)) byId.set(w.id, { id: w.id, ts: w.ts || null });
+  }
+  for (const id of mentionedIds) {
+    if (!byId.has(id)) byId.set(id, { id, ts: null });
+  }
+  return [...byId.values()];
 }
 
 /**
@@ -351,15 +385,20 @@ async function congrats(ctx, interaction, id) {
     );
   }
 
-  const rawText = extractAllText(interaction.message);
+  const rawText = extractAllText(interaction.message) || '';
 
-  // Glückwünsche aus den unsichtbaren Markern lesen (id + Uhrzeit).
-  // Fallback für alte Nachrichten ohne Marker: Mentions ohne Uhrzeit.
-  let wishes = parseMarkedEntries(rawText, 'wish');
-  if (!wishes.length) {
-    const allMentions = [...rawText.matchAll(/<@!?([^>]+)>/g)].map((m) => m[1]);
-    wishes = [...new Set(allMentions.filter((uid) => uid !== birthdayUserId))].map((id) => ({ id, ts: null }));
-  }
+  // Glückwünsche aus den (unsichtbaren) Markern lesen (id + Uhrzeit) und
+  // mit den sichtbaren Erwähnungen vereinigen – dedupliziert, nichts geht
+  // verloren (alte Nachrichten, abgeschnittene Marker, …), kein Doppel-Eintrag.
+  const marked = parseMarkedEntries(rawText, 'wish');
+  const mentionedIds = [
+    ...new Set(
+      [...rawText.matchAll(/<@!?([^>]+)>/g)]
+        .map((m) => m[1])
+        .filter((uid) => uid !== birthdayUserId) // Geburtstagskind zählt nicht
+    ),
+  ];
+  const wishes = mergeListEntries(marked, mentionedIds);
 
   if (wishes.some((w) => w.id === clickerId)) {
     return interaction.reply(
@@ -564,8 +603,12 @@ async function eventInterest(ctx, interaction) {
   const lang = entry?.lang || langFromDiscord(interaction.locale);
   const clickerId = interaction.user.id;
 
-  const rawText = extractAllText(interaction.message);
-  const marker = rawText.match(/bday-event:(\d{4}-\d{2}-\d{2}):([0-9a-f]+)/i);
+  const rawText = extractAllText(interaction.message) || '';
+  const hidden = decodeHidden(rawText);
+  // Event-Marker auslesen – neue Nachrichten: Zero-Width-Blob, alte: Klartext.
+  const eventRe = /bday-event:(\d{4}-\d{2}-\d{2}):([0-9a-f]+)/i;
+  const marker =
+    rawText.match(eventRe) || hidden.map((s) => s.match(eventRe)).find((m) => m) || null;
   const name = marker ? decodeEventName(marker[2]) : null;
   if (!marker || !name) {
     return interaction.reply(
@@ -582,12 +625,14 @@ async function eventInterest(ctx, interaction) {
     );
   }
 
-  // Interessenten aus den unsichtbaren Markern lesen (id + Uhrzeit).
-  // Fallback für alte Nachrichten ohne Marker: Mentions ohne Uhrzeit.
-  let interested = parseMarkedEntries(rawText, 'int');
-  if (!interested.length) {
-    interested = [...new Set([...rawText.matchAll(/<@!?([^>]+)>/g)].map((mm) => mm[1]))].map((id) => ({ id, ts: null }));
-  }
+  // Interessenten aus den (unsichtbaren) Markern lesen (id + Uhrzeit) und
+  // mit den sichtbaren Erwähnungen vereinigen – dedupliziert, nichts geht
+  // verloren, kein Doppel-Eintrag möglich.
+  const marked = parseMarkedEntries(rawText, 'int');
+  const mentionedIds = [
+    ...new Set([...rawText.matchAll(/<@!?([^>]+)>/g)].map((mm) => mm[1])),
+  ];
+  const interested = mergeListEntries(marked, mentionedIds);
 
   if (interested.some((w) => w.id === clickerId)) {
     return interaction.reply(

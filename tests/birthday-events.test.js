@@ -22,6 +22,7 @@ const {
   buildEventCongratsEmbed,
   encodeEventName,
   decodeEventName,
+  decodeHidden,
 } = require('../bots/birthday-bot/src/embed-builder');
 const { tzParts, sanitizeEventName, todayKey } = require('../bots/birthday-bot/src/logic');
 const { t } = require('../bots/birthday-bot/src/languages');
@@ -310,11 +311,16 @@ test('birthdayCheck: Event um 0 Uhr posten und danach aus der Liste löschen', a
 
   await h.ctx.store.birthdayCheck(h.entry);
 
-  const eventPosts = h.channel.sent.filter((m) => JSON.stringify(m.components).includes('bday-event:'));
+  // Der Event-Marker ist heute ein unsichtbarer Zero-Width-Blob → dekodieren
+  const isEventPost = (m) =>
+    decodeHidden(extractAllText(m)).some((s) => s.includes('bday-event:'));
+  const eventPosts = h.channel.sent.filter(isEventPost);
   assert.equal(eventPosts.length, 1, 'genau ein Event-Post');
   const postText = extractAllText(eventPosts[0]);
   assert.ok(postText.includes('🚀 Heute findet ein Event statt!'));
   assert.ok(postText.includes('**Release-Party**'));
+  // Im sichtbaren Text steht kein „bday-event:“-Klartext mehr
+  assert.ok(!postText.includes('bday-event:'), 'Marker ist unsichtbar');
   assert.equal(h.entry.events.length, 1, 'gefälliges Event wird GELÖSCHT…');
   assert.equal(h.entry.events[0].name, 'Später', '… das andere bleibt stehen');
 });
@@ -324,16 +330,23 @@ test('birthdayCheck: sendet nichts doppelt, entfernt fälliges Event trotzdem', 
   const now = tzParts('Europe/Berlin');
   h.entry.events = [{ event: true, name: 'Nachtmarkt', day: now.day, month: now.month }];
   const dateKey = `${now.year}-${String(now.month).padStart(2, '0')}-${String(now.day).padStart(2, '0')}`;
-  // Marker schon im Verlauf → wurde heute schon gepostet
+  // Marker schon im Verlauf → wurde heute schon gepostet (hier: moderner
+  // unsichtbarer Zero-Width-Blob, wie ihn buildEventCongratsEmbed erzeugt)
+  const { buildEventCongratsEmbed, encodeHidden } = require('../bots/birthday-bot/src/embed-builder');
   h.channel.sent.push({
     id: 'alt',
-    components: [{ content: `bday-event:${dateKey}:${encodeEventName('Nachtmarkt')}` }],
+    components: [
+      buildEventCongratsEmbed({ name: 'Nachtmarkt', lang: 'de', dateKey, interested: [] }).container.toJSON(),
+    ],
+    content: encodeHidden(`bday-event:${dateKey}:${encodeEventName('Nachtmarkt')}`),
   });
   h.channel.listMsg.components = [
     buildListEmbed({ birthdays: [], events: h.entry.events, lang: 'de' }).toJSON(),
   ];
   await h.ctx.store.birthdayCheck(h.entry);
-  const posts = h.channel.sent.filter((m) => m.id !== 'alt' && JSON.stringify(m.components).includes('bday-event:'));
+  const isEventPost = (m) =>
+    decodeHidden(extractAllText(m)).some((s) => s.includes('bday-event:'));
+  const posts = h.channel.sent.filter((m) => m.id !== 'alt' && isEventPost(m));
   assert.equal(posts.length, 0, 'kein Doppel-Post');
   assert.equal(h.entry.events.length, 0, 'aber trotzdem aus der Liste entfernt');
 });
@@ -371,6 +384,60 @@ test('Interesse melden: erster Klick trägt ein, Doppel-Klick wird blockiert', a
   await handleInteraction(h.ctx, makeInterest('u2'));
   text = extractAllText(msg);
   assert.ok(text.includes('Interessenten (2)'), 'kein Doppel-Eintrag');
+});
+
+test('Interesse melden: alte Nachricht ohne unsichtbare Marker blockt Doppel-Klick', async () => {
+  const h = makeHarness();
+  // Alte Event-Nachricht: Marker als Klartext, Interessenten NUR als
+  // sichtbare Mentions – der Bot muss trotzdem verlustfrei einlesen und
+  // doppelte Einträge verhindern (Regression: Doppel-Einträge im Feld).
+  const msg = {
+    components: [
+      {
+        type: 17,
+        components: [
+          {
+            type: 10,
+            content:
+              '# 🚀 Heute findet ein Event statt!\n\nHeute findet das Event **Alt-Fest** statt! Habt ihr Interesse?\nbday-event:2026-08-20:416c742d46657374\n### 🙋 Interessenten (2)\n<@u2>\n<@u3>',
+          },
+        ],
+      },
+    ],
+    createdTimestamp: Date.now(),
+    delete: async () => {},
+  };
+
+  const updates = [];
+  const makeInterest = (uid) =>
+    h.makeInteraction({
+      customId: 'bday_event_interest',
+      user: { id: uid, username: uid },
+      message: msg,
+      update: async (p) => {
+        updates.push(p);
+        msg.components = p.components.map((c) => (c.toJSON ? c.toJSON() : c));
+      },
+    });
+
+  // u4 klickt → wird ergänzt, u2/u3 bleiben erhalten (nichts geht verloren)
+  await handleInteraction(h.ctx, makeInterest('u4'));
+  let text = extractAllText(msg);
+  assert.ok(text.includes('Interessenten (3)'), 'zählt alle drei');
+  assert.ok(text.includes('<@u2>') && text.includes('<@u3>') && text.includes('<@u4>'), 'alle da');
+
+  // u2 klickt (er stand NUR als sichtbare Erwähnung in der alten Nachricht)
+  await handleInteraction(h.ctx, makeInterest('u2'));
+  text = extractAllText(msg);
+  assert.equal(updates.length, 1, 'Nachricht wurde beim Doppel-Klick nicht editiert');
+  assert.equal(h.replies.length, 1, 'Doppel-Klick wird mit Hinweis beantwortet');
+  assert.ok(text.includes('Interessenten (3)'), 'Liste unverändert: u2 NICHT doppelt');
+  assert.equal((text.match(/<@u2>/g) || []).length, 1, 'u2 steht genau einmal drin');
+
+  // Nach dem Rebuild ist der Marker unsichtbar (kein sichtbares „int:“)
+  assert.ok(!text.includes('int:'), 'kein sichtbarer int:-Marker nach Rebuild');
+  const hidden = decodeHidden(text).join('\n');
+  assert.ok(hidden.includes('int:u4:'), 'neue Einträge liegen als unsichtbarer Marker vor');
 });
 
 // ---------------------------------------------------------------------------

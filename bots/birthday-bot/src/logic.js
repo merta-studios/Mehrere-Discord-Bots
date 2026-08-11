@@ -5,6 +5,7 @@
  */
 
 const { LANGS, tzOf } = require('./languages');
+const { ZW_ALPHABET } = require('./zw-marker');
 
 function pad(n) {
   return String(n).padStart(2, '0');
@@ -133,7 +134,7 @@ const EVENT_NAME_MAX = 45;
 function sanitizeEventName(raw) {
   if (typeof raw !== 'string') return null;
   const name = raw
-    .replace(/[​‌‍﻿]/g, '') // Zero-Width-Zeichen entfernen
+    .replace(new RegExp(`[${ZW_ALPHABET}]`, 'g'), '') // Zero-Width-Zeichen entfernen
     .replace(/[\r\n\t]+/g, ' ') // Zeilenumbrüche würden das Listen-Parsing brechen
     .replace(/[*|@`~]/g, '') // Format-/Zeilen-Brecher & Pings entfernen
     .replace(/🚀/g, '') // altes Event-Marker-Emoji entfernen
