@@ -216,15 +216,17 @@ test('cleanContent: Server-Emojis, Mentions, Rollen, Kanäle, Timestamps', () =>
 // Prompts & Budget
 // ---------------------------------------------------------------------------
 
-test('buildSystemPrompt: Ship-Richter, 4 kurze Sätze, keine Chat-Klage, hohe Prozent', () => {
+test('buildSystemPrompt: Charakter-Fokus, 5 Sätze, fehlende Interaktion nicht bewerten', () => {
   const p = buildSystemPrompt('de', { name: 'Mia' }, { name: 'Lukas' });
   assert.ok(p.includes('Mia'), 'USER1-Name fehlt');
   assert.ok(p.includes('Lukas'), 'USER2-Name fehlt');
   assert.ok(p.includes('### '), 'Prozent-Zeilen-Vorgabe fehlt');
-  assert.ok(/Genau 4 Sätze|4 kurze Sätze|4 Sätze/i.test(p), '4-Satz-Struktur fehlt');
+  assert.ok(/Genau 5 Sätze|5 begründete Sätze/i.test(p), '5-Satz-Struktur fehlt');
   assert.ok(/Teenager|teen/i.test(p), 'Teen-Ton fehlt');
-  assert.ok(/niemals|NIEMALS|nicht.*Austausch|reden nie/i.test(p), 'Regel gegen Chat-Klage fehlt');
-  assert.ok(/66–84|62–86|großzügig/i.test(p), 'hohe Prozent-Kalibrierung fehlt');
+  assert.ok(/Charakter/i.test(p), 'Charakter-Fokus fehlt');
+  assert.ok(/Erwähne NIEMALS fehlende|wenig \/ nie \/ kaum miteinander/i.test(p), 'Regel gegen Interaktions-Klage fehlt');
+  assert.ok(/Bewerte fehlende Interaktion niemals negativ/i.test(p), 'Regel gegen Abwertung fehlt');
+  assert.ok(/66–84|62–86|großzügig/i.test(p), 'Prozent-Kalibrierung fehlt');
   assert.ok(!/zwei Leerzeilen/i.test(p), 'alte Riesen-Abstände dürfen nicht mehr gefordert werden');
 });
 
@@ -307,21 +309,59 @@ test('mentionifyNames: gemeinsame Namen werden nicht geraten', () => {
   assert.equal(out, 'Alex ist chaotic.');
 });
 
-test('compactVerdictLines: entfernt Riesen-Abstände und macht Sätze klein', () => {
-  const out = compactVerdictLines('Satz eins 💀\n\n\nSatz zwei 😐\n\nSatz drei 💘');
-  assert.equal(out, '-# Satz eins 💀\n-# Satz zwei 😐\n-# Satz drei 💘');
+test('Ladebildschirm: echte Scan-Zahlen, keine Fake-Witze', () => {
+  const { buildProgress, buildResult, progressBar } = require('../bots/love-tester-bot/src/embed-builder');
+  const { extractAllText } = require('../bots/xp-level-bot/src/embed-builder');
+  const user1 = { id: '11', displayName: 'Mia' };
+  const user2 = { id: '22', displayName: 'Lukas' };
+  const progress = extractAllText(buildProgress({
+    lang: 'de',
+    token: 'tok',
+    pct: 48,
+    phase: t('analysingScan', 'de'),
+    user1,
+    user2,
+    scanned: 247,
+    channelCount: 3,
+    excerpts: 8,
+  }));
+  assert.ok(progress.includes('247 Nachrichten'), progress);
+  assert.ok(progress.includes('3 Kanäle'), progress);
+  assert.ok(progress.includes('8 Ausschnitte'), progress);
+  assert.ok(progress.includes('Nachrichten werden gelesen'), progress);
+  assert.ok(!/Glaskugel|Liebes-Sensor|heimliche Blicke|Sterne/i.test(progress), progress);
+  assert.ok(progressBar(50).includes('█'), progressBar(50));
+  assert.ok(progressBar(50).includes('░'), progressBar(50));
+
+  const result = extractAllText(buildResult({
+    lang: 'de',
+    token: 'tok',
+    aiText: 'Mia wirkt chaotic.\n\nLukas wirkt ruhig.\n\n# 81%',
+    user1,
+    user2,
+  }));
+  assert.ok(result.includes('# Ergebnis'), result);
+  assert.ok(result.includes('# 81%'), result);
+  assert.ok(!/Nur zum Spaß|Liebe ist keine Prozentzahl/i.test(result), result);
+  assert.ok(!result.includes('-#'), result);
 });
 
-test('finalizeLoveVerdict: Mentions + dichte Sätze + Prozent unten', () => {
+test('compactVerdictLines: normale Schrift und eine Leerzeile zwischen den Sätzen', () => {
+  const out = compactVerdictLines('Satz eins 💀\n\n\nSatz zwei 😐\n\nSatz drei 💘');
+  assert.equal(out, 'Satz eins 💀\n\nSatz zwei 😐\n\nSatz drei 💘');
+});
+
+test('finalizeLoveVerdict: Mentions + normale Schrift + Prozent als große Überschrift', () => {
   const user1 = { id: '11', name: 'Mia', username: 'mia', nickname: 'Mia', displayName: 'Mia' };
   const user2 = { id: '22', name: 'Lukas', username: 'lukas', nickname: 'Lukas', displayName: 'Lukas' };
   const raw = 'Mia ist chaotic 💀\n\n\nLukas ist dry 😐\n\nDie knallen.\n\n### 81%';
   const out = finalizeLoveVerdict(raw, user1, user2);
-  assert.ok(!out.includes('\n\n'), out);
+  assert.ok(out.includes('\n\n'), out);
   assert.ok(out.includes('<@11>'), out);
   assert.ok(out.includes('<@22>'), out);
-  assert.ok(out.includes('-# '), out);
-  assert.ok(out.endsWith('### 81%'), out);
+  assert.ok(!out.includes('-# '), out);
+  assert.ok(out.endsWith('# 81%'), out);
+  assert.ok(!out.includes('### 81%'), out);
   assert.ok(!/Mia ist/.test(out), out);
 });
 
@@ -333,6 +373,7 @@ test('Sprachdatei: alle wichtigen Keys in allen 10 Sprachen vorhanden', () => {
   const keys = [
     'setupStepTitle', 'setupStep1Desc', 'setupStep2Desc', 'setupStep3Desc',
     'loveConfirmBody', 'btnAccept', 'btnDecline', 'analysingPhases',
+    'analysingScan', 'analysingPrepare', 'analysingStats',
     'loveResultTitle', 'errGroqRateLimit', 'errGroqAuth', 'errNoMessages',
     'btnRetry', 'btnContinue', 'excerptHeader', 'msgRepliedTo', 'msgImage',
     'helpTitle', 'helpSetup', 'helpTestLove', 'errGeneric',

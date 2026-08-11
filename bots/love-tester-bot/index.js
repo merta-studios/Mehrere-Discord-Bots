@@ -10,8 +10,8 @@
  *  - /setup (nur Admins): 3-Schritte-Wizard – Sprache → Kanäle → Groq-API-Key,
  *    mit Zurück/Weiter/Bestätigen/Abbrechen und guter Anleitung
  *  - /test_love [user1] [user2] (alle): Datenschutz-Bestätigung (öffentlich,
- *    Buttons nur für den Sender) → humorvolle Analyse mit Live-Fortschritt %
- *    → kurzes Ship-Urteil mit Mentions und „### XX %“-Zeile
+ *    Buttons nur für den Sender) → echte Analyse mit Live-Fortschritt %
+ *    → Ergebnis mit Mentions und großer Prozentzeile
  *  - Scan: max. 500 Nachrichten über alle eingerichteten Kanäle; Ausschnitte
  *    mit 4 Nachrichten davor + Kern (max. 3 Fremde dazwischen) + Rest danach
  *  - Medien/Format-Umwandlung: Bilder, Videos, Sprachnachrichten, Antworten,

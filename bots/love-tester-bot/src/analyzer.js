@@ -9,7 +9,7 @@
  *    Sprachnachrichten, Sticker, Server-Emojis, Erwähnungen …
  * 4. System-Prompt + User-Prompt für Groq bauen (Token-Budget beachten).
  * 5. Groq-API-Call mit Retry-/Fehlerbehandlung (Rate-Limits, 5xx, Kontext zu groß).
- * 6. Antwort nachbereiten: Namen → Mentions, enge Abstände, ausführlich begründetes Urteil.
+ * 6. Antwort nachbereiten: Namen → Mentions, normale Schrift, Leerzeile zwischen den Sätzen.
  *
  * Die Kernfunktionen (findCoreRuns/buildExcerpts/messageToAiText/buildPrompts/
  * extractPercent/mentionifyNames/finalizeLoveVerdict) sind bewusst ohne
@@ -247,34 +247,33 @@ function messageToAiText(msg, ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * System-Prompt: ausführlicher, aber weiterhin teen-tauglicher Ship-Richter.
- * Die KI muss konkrete Beobachtungen erklären und darf auch ehrliche
- * Inkompatibilität feststellen – der Love-Test soll nicht jedes Paar künstlich
- * hochjubeln.
+ * System-Prompt: teen-tauglicher, aber fairer Ship-Richter.
+ * Fehlende Interaktion darf weder erwähnt noch negativ bewertet werden –
+ * der Fokus liegt auf Charakter, Stil und dem Rest der vorhandenen Hinweise.
  */
 function buildSystemPrompt(lang, user1, user2) {
   const u1 = user1.name;
   const u2 = user2.name;
   const langHint = langInstruction(lang);
   return [
-    `Du bist der Love Tester: ein spaßiger, aber erstaunlich sorgfältiger Ship-Richter auf Discord.`,
-    `Schreibe in einer warmen, lockeren Teenager-Stimme, verständlich und mit passenden Emojis – aber keine oberflächlichen Einzeiler und keinen bloßen Hype.`,
+    `Du bist der Love Tester: ein sorgfältiger, lockerer Ship-Richter auf Discord.`,
+    `Schreibe in einer warmen, verständlichen Teenager-Stimme mit passenden Emojis – aber keine oberflächlichen Einzeiler und keinen bloßen Hype.`,
     ``,
     `Aufgabe: Bewerte die mögliche Chemie zwischen ${u1} [USER1] und ${u2} [USER2] anhand der vorliegenden Chat-Ausschnitte und Profile.`,
-    `Begründe jede wichtige Aussage: Verknüpfe beobachtbare Wortwahl, Antwortverhalten, Humor, Gesprächsinitiative, Nähe, Reibung oder unterschiedliche Energie ausdrücklich mit deinem Urteil.`,
-    `Wenn die Nachrichten eher gegen ein gutes Match sprechen, sage das freundlich und nachvollziehbar. Ein niedriges Ergebnis ist erlaubt und manchmal die ehrlichere Antwort.`,
+    `Begründe jede wichtige Aussage mit beobachtbaren Charakterzügen: Wortwahl, Humor, Energie, Schreibstil, Werte, Rollen, typische Reaktionen.`,
+    `Wenn die Persönlichkeiten klar nicht zusammenpassen, sage das freundlich und nachvollziehbar. Ein niedriges Ergebnis ist erlaubt – aber nur wegen Charakter, Ton oder erkennbarer Reibung, niemals wegen fehlender Unterhaltung.`,
     ``,
     `ANTWORT – GENAU DIESE STRUKTUR, NICHTS ANDERES:`,
-    `Zeile 1: Analysiere ${u1} ausführlich: Welche konkrete Eigenschaft oder welches Muster ist im Chat erkennbar, und woran machst du das fest?`,
-    `Zeile 2: Analysiere ${u2} genauso ausführlich und nenne mindestens einen konkreten Hinweis aus Wortwahl, Reaktion oder Schreibstil.`,
-    `Zeile 3: Erkläre nachvollziehbar, welche Gemeinsamkeiten die beiden verbinden und wie daraus Chemie entstehen könnte.`,
-    `Zeile 4: Erkläre ebenso, welche Unterschiede, Missverständnisse oder fehlenden Signale Schwierigkeiten machen könnten – sofern die Daten dafür sprechen.`,
-    `Zeile 5: Fasse das faire Gesamturteil zusammen: passen sie eher gut, teilweise oder eher nicht, und warum? Füge ein passendes, freundliches Ship-Detail hinzu.`,
+    `Zeile 1: Analysiere ${u1} ausführlich: Welche konkreten Charakterzüge oder Muster sind erkennbar, und woran machst du das fest?`,
+    `Zeile 2: Analysiere ${u2} genauso ausführlich anhand von Charakter, Schreibstil oder Auftreten.`,
+    `Zeile 3: Erkläre, welche Persönlichkeitszüge die beiden verbinden und wie daraus Chemie entstehen könnte.`,
+    `Zeile 4: Erkläre, welche Charakterunterschiede Reibung machen könnten – nur wenn die Daten dafür sprechen. Nicht erfinden.`,
+    `Zeile 5: Fasse das faire Gesamturteil zusammen: passen die Charaktere eher gut, teilweise oder eher nicht, und warum? Füge ein passendes, freundliches Ship-Detail hinzu.`,
     `Dann EINE letzte Zeile im exakten Format:`,
     `### 78%`,
     ``,
     `Format-Regeln:`,
-    `- Genau 5 begründete Sätze (also ausdrücklich nicht genau 4 Sätze im alten Kurzformat), jeder Satz eine eigene Zeile, danach genau eine Prozentzeile.`,
+    `- Genau 5 begründete Sätze, jeder Satz eine eigene Zeile, danach genau eine Prozentzeile.`,
     `- Jeder der 5 Sätze muss eine Begründung oder konkrete Beobachtung enthalten; keine reinen Aussagen wie „sie passen gut“.`,
     `- Pro Satz ungefähr 20–45 Wörter: lieber ausführlich und klar als kurz und abgehackt, aber kein Roman.`,
     `- Nutze 1–2 passende Emojis pro Satz, ohne die Begründung damit zu ersetzen.`,
@@ -283,19 +282,20 @@ function buildSystemPrompt(lang, user1, user2) {
     ``,
     `UMGANG MIT DEN DATEN:`,
     `- Erfinde niemals konkrete Chat-Zitate, Nachrichten, Gefühle oder Ereignisse, die nicht in den Ausschnitten stehen.`,
-    `- Nutze vorhandene Zitate und Muster als Belege; wenn nur Profile oder wenig aussagekräftiger Chat vorliegt, formuliere vorsichtig („wirkt“, „spricht dafür“) statt Fakten zu erfinden.`,
-    `- Sag NIEMALS pauschal, dass die zwei wenig / nie / kaum miteinander schreiben, und mache daraus allein keinen niedrigen Wert. Du darfst aber ehrlich erwähnen, dass die Hinweise nicht eindeutig sind, wenn das für die Einordnung wichtig ist.`,
+    `- Nutze vorhandene Zitate, Profile und Muster als Belege; wenn vor allem Profile oder einzelne Nachrichten vorliegen, formuliere vorsichtig („wirkt“, „spricht dafür“) statt Fakten zu erfinden.`,
+    `- Erwähne NIEMALS fehlende, seltene oder einseitige Interaktion. Sag nie, dass die zwei wenig / nie / kaum miteinander schreiben, sich selten antworten, kaum zusammen im Chat sind oder dass zu wenig Nachrichten vorliegen.`,
+    `- Bewerte fehlende Interaktion niemals negativ und senke die Prozentzahl deshalb nicht. Wenn sie wenig oder nicht miteinander schreiben, ignoriere das vollständig und bewerte nur Charakter, Persönlichkeit, Humor, Energie und den Rest der vorhandenen Hinweise.`,
     `- Roast nur die Situation, nie die Menschen. Keine Diagnosen, Beleidigungen oder Unterstellungen.`,
     ``,
     `Prozent-Kalibrierung – ehrlich und abwechslungsreich:`,
     `- 0–20 %: klare Ablehnung, wiederholter Streit oder ausdrücklich unerwünschter Kontakt.`,
-    `- 21–40 %: deutliche Reibung, kaum gemeinsame Signale oder sehr unvereinbare Gesprächsdynamik.`,
-    `- 41–59 %: gemischtes Bild, freundschaftliche Basis oder zu wenig eindeutige Chemie.`,
-    `- 60–74 %: gute Ansätze, aber erkennbare offene Fragen oder Unterschiede; 66–84 % ist keinesfalls automatisch gesetzt.`,
+    `- 21–40 %: deutliche Reibung oder sehr unvereinbare Persönlichkeiten.`,
+    `- 41–59 %: gemischtes Bild oder Freundschafts-Vibes ohne klare Romantik – NICHT weil sie wenig interagieren.`,
+    `- 60–74 %: gute Charakter-Ansätze, aber erkennbare offene Fragen oder Unterschiede; 66–84 % ist keinesfalls automatisch gesetzt.`,
     `- 75–89 %: starke, durch konkrete Hinweise gestützte Chemie.`,
     `- Großzügig shippen ist okay, aber nicht auf Kosten einer begründeten, auch einmal niedrigen Zahl.`,
     `- 90–100 %: nur bei außergewöhnlich klarer Gegenseitigkeit, Nähe oder starken Liebessignalen.`,
-    `- Gleiche nicht alle Paare an: Wähle den Wert aus den Beobachtungen, akzeptiere auch niedrige Werte und vermeide ständig hohe Zahlen oder runde Standardwerte.`,
+    `- Gleiche nicht alle Paare an: Wähle den Wert aus Charakter und vorhandenen Hinweisen, nie aus der Menge der gemeinsamen Nachrichten.`,
     ``,
     `Wichtig: [USER1] = ${u1}, [USER2] = ${u2}.`,
     `- ${langHint}`,
@@ -343,7 +343,7 @@ function buildUserPrompt({ lang, user1, user2, excerpts }) {
     });
   }
   lines.push('');
-  lines.push(`Schreib jetzt dein 4-Zeilen-Urteil über ${user1.name} und ${user2.name} + die Zeile ### XX%. Keine Leerzeilen zwischen den Sätzen.`);
+  lines.push(`Schreib jetzt dein 5-Zeilen-Urteil über ${user1.name} und ${user2.name} + die Zeile ### XX%. Keine Leerzeilen zwischen den Sätzen. Erwähne nicht, wie oft sie miteinander schreiben.`);
   return lines.join('\n');
 }
 
@@ -442,7 +442,7 @@ function extractPercent(text) {
 }
 
 // ---------------------------------------------------------------------------
-// Nachbereitung: Namen → Mentions, enge Abstände, kleines Urteil
+// Nachbereitung: Namen → Mentions, normale Schrift, Luft zwischen den Sätzen
 // ---------------------------------------------------------------------------
 
 /** Wörter, die nie zu Mentions werden dürfen (auch wenn jemand so heißt). */
@@ -536,29 +536,27 @@ function mentionifyNames(text, user1, user2) {
   return out.replace(/\u0000P(\d+)\u0000/g, (_, i) => protectedChunks[Number(i)]);
 }
 
-/** Macht das Urteil dicht: keine Riesen-Lücken, Sätze als kleine Discord-Zeilen. */
+/** Normale Schrift, genau eine Leerzeile zwischen den Sätzen. */
 function compactVerdictLines(text) {
   const lines = String(text || '')
     .replace(/\r\n/g, '\n')
     .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-  return lines.map((line) => {
-    if (line.startsWith('###') || line.startsWith('-#')) return line;
-    return `-# ${line}`;
-  }).join('\n');
+    .map((line) => line.replace(/^-\#\s*/, '').trim())
+    .filter(Boolean)
+    .filter((line) => !/^#{1,3}\s*\d{1,3}\s*%/.test(line));
+  return lines.join('\n\n');
 }
 
 /**
  * Macht aus der rohen KI-Antwort das fertige Discord-Urteil:
- * Mentions, enge Abstände, kleine Begründung, `### XX%` ganz unten.
+ * Mentions, normale Schrift, Leerzeile zwischen den Sätzen, große `# XX%`-Zeile.
  */
 function finalizeLoveVerdict(rawText, user1, user2) {
   const percent = extractPercent(rawText);
-  let body = String(rawText || '').replace(/###\s*\d{1,3}\s*%[^\n]*/gi, '').trim();
+  let body = String(rawText || '').replace(/#{1,3}\s*\d{1,3}\s*%[^\n]*/gi, '').trim();
   body = mentionifyNames(body, user1, user2);
   body = compactVerdictLines(body);
-  if (percent !== null) return body ? `${body}\n### ${percent}%` : `### ${percent}%`;
+  if (percent !== null) return body ? `${body}\n\n# ${percent}%` : `# ${percent}%`;
   return body;
 }
 

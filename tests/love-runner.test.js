@@ -149,12 +149,13 @@ test('runAnalysis: Scan → Ausschnitte → Groq → Ergebnis mit ### XX %', asy
 
   const final = ctx._messages.get('msg1').payload;
   const text = extractAllText(final);
-  assert.ok(text.includes('### 87%'), `Prozentzeile fehlt: ${text}`);
-  assert.ok(text.includes('-# <@11>'), `User1-Mention im Urteil fehlt: ${text}`);
-  assert.ok(text.includes('-# <@22>'), `User2-Mention im Urteil fehlt: ${text}`);
-  assert.ok(!/\n\n.*\n\n/.test(text.replace(/-# /g, '')), `Urteil ist nicht dicht genug: ${text}`);
-  assert.ok(text.includes('-# '), `kleine Begründungszeilen fehlen: ${text}`);
-  assert.ok(text.includes('Love') || text.includes('Urteil'), text);
+  assert.ok(/#\s*87%/.test(text), `Prozentzeile fehlt: ${text}`);
+  assert.ok(text.includes('<@11>'), `User1-Mention im Urteil fehlt: ${text}`);
+  assert.ok(text.includes('<@22>'), `User2-Mention im Urteil fehlt: ${text}`);
+  assert.ok(!text.includes('-#'), `kleine Schrift darf nicht mehr verwendet werden: ${text}`);
+  assert.ok(/\n\n/.test(text), `Leerzeile zwischen den Sätzen fehlt: ${text}`);
+  assert.ok(/Ergebnis/i.test(text), text);
+  assert.ok(!/Nur zum Spaß|Liebe ist keine Prozentzahl/i.test(text), `Footer sollte weg sein: ${text}`);
   assert.equal(session.status, 'done');
   ctx._restore();
 });
@@ -263,6 +264,6 @@ test('continueAnalysis: scannt weitere Nachrichten (ältere) nach', async () => 
   assert.equal(session.channelState.get('c1').before, 'done', 'Kanal ist jetzt erschöpft');
   assert.equal(session.canContinue, false, 'nichts mehr zu holen');
   const text = extractAllText(ctx._messages.get('msg4').payload);
-  assert.ok(text.includes('### 50%'), text);
+  assert.ok(/#\s*50%/.test(text), text);
   ctx._restore();
 });

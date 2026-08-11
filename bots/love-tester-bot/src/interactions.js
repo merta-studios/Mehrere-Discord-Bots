@@ -244,9 +244,7 @@ async function handleLoveButton(ctx, interaction) {
       session.messageId = interaction.message.id;
       // Erste Bearbeitung über update() (ersetzt die Bestätigungs-Buttons)
       await interaction.deferUpdate().catch(() => {});
-      await interaction.editReply(
-        componentsV2Payload([require('./embed-builder').buildProgress({ lang, token, pct: 0, phase: t('loveAccepted', lang), user1: session.user1, user2: session.user2 })])
-      );
+      await interaction.editReply(require('./runner').progressPayload(session, 0, 'scan'));
       void runAnalysis(ctx, session);
       return null;
     }
@@ -269,9 +267,7 @@ async function handleLoveButton(ctx, interaction) {
         return interaction.reply(componentsV2Payload([smallContainer(null, t('loveBusy', lang))], { ephemeral: true }));
       }
       await interaction.deferUpdate().catch(() => {});
-      await interaction.editReply(
-        componentsV2Payload([require('./embed-builder').buildProgress({ lang, token, pct: 90, phase: t('analysingFinal', lang), user1: session.user1, user2: session.user2 })])
-      );
+      await interaction.editReply(require('./runner').progressPayload(session, 90, 'final'));
       session.status = 'running';
       void (async () => {
         // Retry = Groq erneut mit dem bereits gebauten Prompt befragen
@@ -303,9 +299,7 @@ async function handleLoveButton(ctx, interaction) {
         return interaction.reply(componentsV2Payload([smallContainer(null, t('loveNoMore', lang))], { ephemeral: true }));
       }
       await interaction.deferUpdate().catch(() => {});
-      await interaction.editReply(
-        componentsV2Payload([require('./embed-builder').buildProgress({ lang, token, pct: 90, phase: t('analysingFinal', lang), user1: session.user1, user2: session.user2 })])
-      );
+      await interaction.editReply(require('./runner').progressPayload(session, Math.min(90, session.lastPct > 0 ? session.lastPct : 10), 'scan'));
       void continueAnalysis(ctx, session);
       return null;
     }
