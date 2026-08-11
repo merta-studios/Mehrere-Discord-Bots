@@ -46,10 +46,13 @@ steckt in den Komponenten selbst.
 - **Täglich um 0 Uhr** (Sprach-Zeitzone): Geburtstagskinder bekommen einen
   Gruß-Container mit „🎉 Gratulieren“-Button; Glückwünsche und
   Anzahl stehen direkt im Container (keine Doppel-Glückwünsche).
-  Die Glückwünsche und Event-Interessenten stehen **kompakt nebeneinander**
-  (Platzsparer) und zeigen jeweils die **Uhrzeit** des Gratulierens bzw.
-  Interesse-Meldens (unsichtbare Marker `wish:`/`int:` im Container speichern
-  die komplette Liste inkl. Zeitstempel – weiterhin ohne DB).
+  Die Glückwünsche und Event-Interessenten stehen **untereinander**
+  (eine Zeile pro Person) und zeigen jeweils die **Uhrzeit** des
+  Gratulierens bzw. Interesse-Meldens. Die komplette Liste inkl.
+  Zeitstempel wird als **wirklich unsichtbarer Zero-Width-Marker** im
+  Container gespeichert (nur unsichtbare Unicode-Zeichen – kein
+  sichtbarer `wish:`/`int:`-Text mehr – weiterhin ohne DB). Ein Nutzer
+  kann sich pro Gruß/Event nur **einmal** eintragen.
   Gratulieren ist nur in den **nächsten 24 Stunden** nach dem Gruß möglich.
 - **7-Tage-Aufräumregel** unter der Liste: Geburtstags-Grüße & Event-Posts
   bleiben **7 Tage** stehen. Danach werden sie gelöscht – samt **aller
@@ -74,6 +77,7 @@ bots/birthday-bot/
     ├── languages.js      # ★ EINE Sprachdatei: alle Texte in 10 Sprachen
     ├── logic.js          # Datumslogik: Zeitzonen, 7-Tage-Regel, Monatsreihenfolge
     ├── embed-builder.js  # baut & liest die Listen-Container (die „Datenbank“)
+    ├── zw-marker.js      # wirklich unsichtbare Marker (Zero-Width-Kodierung)
     ├── store.js          # Registry, Channel-Scan, Refresh, Tages-Check
     ├── scheduler.js      # stündliches Refresh + 0-Uhr-Prüfung
     ├── commands.js       # Slash-Command-Definitionen & Handler

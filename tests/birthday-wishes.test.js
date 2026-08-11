@@ -1,8 +1,9 @@
 /**
- * Tests für die neuen Geburtstags-Glückwunsch-/Event-Interessenten-Funktionen:
- * - Mentions NEBENEINANDER statt untereinander (Platzsparer)
+ * Tests für die Geburtstags-Glückwunsch-/Event-Interessenten-Funktionen:
+ * - Mentions UNTEREINANDER (eine Person pro Zeile, nicht mehr nebeneinander)
  * - Uhrzeit des Gratulierens/Interesse-Meldens wird angezeigt
- * - Unsichtbare Marker (wish:/int:) für die komplette Liste → Roundtrip
+ * - Marker sind WIRKLICH unsichtbar: als Zero-Width-Blobs kodiert
+ *   (kein sichtbares „wish:/int:“ im Text) → Roundtrip
  */
 
 const { test } = require('node:test');
@@ -15,13 +16,14 @@ const {
   normalizeWishEntries,
   wishListText,
   formatWishTime,
+  decodeHidden,
 } = require('../bots/birthday-bot/src/embed-builder');
 
 function containerText(container) {
   return extractAllText(container.toJSON());
 }
 
-test('Glückwünsche: Mentions nebeneinander (nicht untereinander) mit Uhrzeit', () => {
+test('Glückwünsche: Mentions untereinander (eine Zeile pro Person) mit Uhrzeit', () => {
   const { container } = buildCongratsEmbed({
     member: { id: 'bday1' },
     lang: 'de',
@@ -43,15 +45,47 @@ test('Glückwünsche: Mentions nebeneinander (nicht untereinander) mit Uhrzeit',
   // Zähler stimmt
   assert.ok(text.includes('Glückwünsche (5)'), text);
 
-  // Zeilenumbruch-Sparer: 5 Einträge müssen auf ≤ 2 Zeilen passen (vorher: 5 Zeilen)
-  const section = text.split('Glückwünsche (5)')[1].split('\u200B')[0];
+  // UNTEREINANDER: 5 Einträge = 5 Zeilen (vorher: nebeneinander, max. 2 Zeilen)
+  const section = text.split('Glückwünsche (5)')[1];
   const lines = section.split('\n').filter((l) => l.trim());
-  assert.ok(lines.length <= 2, `erwartet max. 2 Zeilen, bekam ${lines.length}: ${JSON.stringify(lines)}`);
+  assert.equal(lines.length, 5, `erwartet 5 Zeilen, bekam ${lines.length}: ${JSON.stringify(lines)}`);
+  // Jede Zeile enthält genau eine Erwähnung
+  for (const line of lines) {
+    const mentions = line.match(/<@!?([^>]+)>/g) || [];
+    assert.equal(mentions.length, 1, `Zeile enthält nicht genau eine Erwähnung: ${line}`);
+  }
 
-  // Uhrzeiten sichtbar (z. B. 10:13 für 1700000000000 in Europe/Berlin = 11:13? – egal, nur Format prüfen)
+  // Uhrzeiten sichtbar (nur Format prüfen)
   const time1 = formatWishTime(1700000000000, 'de');
   assert.match(time1, /^\d{1,2}:\d{2}$/, `Uhrzeit-Format falsch: ${time1}`);
   assert.ok(text.includes(time1), `Uhrzeit ${time1} fehlt im Text`);
+});
+
+test('Glückwünsche: im sichtbaren Text steht KEIN „wish:“/„int:“/„bday-…“-Klartext mehr', () => {
+  const wishes = [
+    { id: '111111111111111111', ts: 1700000000000 },
+    { id: '222222222222222222', ts: 1700003600000 },
+  ];
+  const { container } = buildCongratsEmbed({
+    member: { id: '333333333333333333' },
+    lang: 'de',
+    dateKey: '2026-12-31',
+    wishes,
+  });
+  const text = containerText(container);
+
+  // Genau die Beschwerde aus dem Feld: kein sichtbares „int:“ / „wish:“ + Zahlen
+  assert.ok(!text.includes('wish:'), `sichtbarer wish:-Marker: ${text}`);
+  assert.ok(!text.includes('int:'), `sichtbarer int:-Marker: ${text}`);
+  assert.ok(!text.includes('bday-congrats:'), `sichtbarer bday-congrats:-Marker: ${text}`);
+  assert.ok(!text.includes('bday-event:'), `sichtbarer bday-event:-Marker: ${text}`);
+  assert.ok(!text.includes('bday::v1::'), `sichtbarer Listen-Marker: ${text}`);
+
+  // Aber der Bot kann die Daten aus den unsichtbaren Blobs lesen
+  const decoded = decodeHidden(text).join('\n');
+  assert.ok(decoded.includes('bday-congrats:2026-12-31:333333333333333333'), 'Gruß-Marker fehlt');
+  assert.ok(decoded.includes('wish:111111111111111111:1700000000000'), 'Marker u1 fehlt');
+  assert.ok(decoded.includes('wish:222222222222222222:1700003600000'), 'Marker u2 fehlt');
 });
 
 test('Glückwünsche: Marker enthalten komplette Liste inkl. Uhrzeit (Roundtrip)', () => {
@@ -66,15 +100,13 @@ test('Glückwünsche: Marker enthalten komplette Liste inkl. Uhrzeit (Roundtrip)
     wishes,
   });
   const text = containerText(container);
-  // Marker für beide Einträge
-  assert.ok(text.includes('wish:111111111111111111:1700000000000'), 'Marker u1 fehlt');
-  assert.ok(text.includes('wish:222222222222222222:1700003600000'), 'Marker u2 fehlt');
 
-  // Roundtrip: Marker wieder auslesen (Discord-Snowflakes sind numerisch)
+  // Roundtrip: Marker aus den unsichtbaren Blobs wieder auslesen
+  const decoded = decodeHidden(text).join('\n');
   const re = /wish:(\d+):(\d+)/g;
   const parsed = [];
   let m;
-  while ((m = re.exec(text))) parsed.push({ id: m[1], ts: Number(m[2]) });
+  while ((m = re.exec(decoded))) parsed.push({ id: m[1], ts: Number(m[2]) });
   assert.deepEqual(parsed, wishes);
 });
 
@@ -91,9 +123,11 @@ test('Glückwünsche: alte Listen ohne Marker (nur Mentions) bleiben kompatibel'
   assert.ok(text.includes('Glückwünsche (2)'));
   // Keine Marker, da keine Zeitstempel vorhanden
   assert.ok(!text.includes('wish:u1:'), 'ohne Zeitstempel kein Marker');
+  // Und auch kein sichtbares Marker-Format
+  assert.ok(!text.includes('wish:'), 'kein sichtbarer wish:-Text');
 });
 
-test('Event-Interessenten: nebeneinander + Uhrzeit + int-Marker', () => {
+test('Event-Interessenten: untereinander + Uhrzeit + unsichtbare int-Marker', () => {
   const { container } = buildEventCongratsEmbed({
     name: 'Sommerfest',
     lang: 'de',
@@ -106,24 +140,47 @@ test('Event-Interessenten: nebeneinander + Uhrzeit + int-Marker', () => {
   });
   const text = containerText(container);
   assert.ok(text.includes('Interessenten (3)'), text);
-  assert.ok(text.includes('int:u1:1700000000000'), 'int-Marker u1 fehlt');
-  assert.ok(text.includes('int:u2:1700003600000'), 'int-Marker u2 fehlt');
-  assert.ok(!text.includes('int:u3:'), 'ohne Zeit kein Marker');
+  assert.ok(text.includes('<@u1>') && text.includes('<@u2>') && text.includes('<@u3>'));
 
-  // Nebeneinander: max. 2 Zeilen für 3 Einträge
-  const section = text.split('Interessenten (3)')[1].split('\u200B')[0];
+  // Im sichtbaren Text steht kein „int:“-Klartext mehr (Nutzer-Beschwerde)
+  assert.ok(!text.includes('int:'), `sichtbarer int:-Marker: ${text}`);
+  assert.ok(!text.includes('bday-event:'), `sichtbarer bday-event:-Marker: ${text}`);
+
+  // Der Bot liest sie aus den unsichtbaren Blobs
+  const decoded = decodeHidden(text).join('\n');
+  assert.ok(decoded.includes('int:u1:1700000000000'), 'int-Marker u1 fehlt');
+  assert.ok(decoded.includes('int:u2:1700003600000'), 'int-Marker u2 fehlt');
+  assert.ok(!decoded.includes('int:u3:'), 'ohne Zeit kein Marker');
+  assert.ok(decoded.includes(`bday-event:2026-08-20:${'536f6d6d657266657374'}`), 'Event-Marker fehlt');
+
+  // UNTEREINANDER: 3 Einträge = 3 Zeilen
+  const section = text.split('Interessenten (3)')[1];
   const lines = section.split('\n').filter((l) => l.trim());
-  assert.ok(lines.length <= 2, `erwartet max. 2 Zeilen, bekam ${lines.length}`);
+  assert.equal(lines.length, 3, `erwartet 3 Zeilen, bekam ${lines.length}`);
 });
 
-test('wishListText: chunkt in Zeilen zu je 4 Einträgen', () => {
+test('wishListText: jede Person auf einer eigenen Zeile', () => {
   const entries = normalizeWishEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({ id: `u${n}`, ts: 1700000000000 })));
   const text = wishListText(entries, 'de');
   const lines = text.split('\n');
-  assert.equal(lines.length, 3); // 4 + 4 + 1
-  assert.ok(lines[0].includes('<@u1>') && lines[0].includes('<@u4>'), 'Zeile 1 enthält u1..u4');
-  assert.ok(!lines[0].includes('<@u5>'), 'Zeile 1 endet bei u4');
-  assert.ok(lines[2].includes('<@u9>'), 'Zeile 3 enthält u9');
+  assert.equal(lines.length, 9, '9 Einträge = 9 Zeilen');
+  assert.ok(lines[0].includes('<@u1>'), 'Zeile 1 enthält u1');
+  assert.ok(!lines[0].includes('<@u2>'), 'Zeile 1 enthält nicht u2');
+  assert.ok(lines[8].includes('<@u9>'), 'Zeile 9 enthält u9');
+});
+
+test('normalizeWishEntries: dedupliziert nach ID (kein Doppel-Eintrag möglich)', () => {
+  const entries = normalizeWishEntries([
+    { id: 'u1', ts: 1700000000000 },
+    { id: 'u1', ts: 1700003600000 }, // Doppel-Eintrag (z. B. fehlerhafte Quelle)
+    'u1', // und nochmal als alter String-Stil
+    { id: 'u2', ts: null },
+    'u2',
+  ]);
+  assert.deepEqual(entries, [
+    { id: 'u1', ts: 1700000000000 },
+    { id: 'u2', ts: null },
+  ]);
 });
 
 test('formatWishTime: nutzt die Zeitzone der Sprache', () => {

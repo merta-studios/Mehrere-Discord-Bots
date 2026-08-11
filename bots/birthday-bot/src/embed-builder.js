@@ -10,6 +10,10 @@
  * - Buttons und ActionRows direkt im Container integriert
  * - Titel „🎂 Geburtstage“ oben direkt beim Datumstext
  * - Kein störender Footer / Timestamp am Ende der Liste
+ *
+ * Marker (Listen-Sprache, Glückwünsche, Interessenten) sind als
+ * Zero-Width-Blobs kodiert (siehe zw-marker.js) – für Nutzer komplett
+ * unsichtbar, aber vom Bot jederzeit auslesbar.
  */
 
 const {
@@ -35,6 +39,7 @@ const {
   formatToday,
 } = require('./languages');
 const { pad, tzParts, daysUntilNext } = require('./logic');
+const { encodeHidden, decodeHidden } = require('./zw-marker');
 
 const COLORS = {
   list: null, confirm: null, success: null, error: null, congrats: null, help: null, panel: null,
@@ -98,12 +103,13 @@ function buildListEmbed({ birthdays = [], events = [], lang = 'de', now = new Da
   const container = new ContainerBuilder();
 
   // Header: Titel + Datumstext zusammen oben, plus unsichtbarer Sprach-Marker
+  // (komplett aus Zero-Width-Zeichen kodiert → für Nutzer unsichtbar)
   const marker = birthdayRoleId ? `${LIST_MARKER}${lang}:${birthdayRoleId}` : `${LIST_MARKER}${lang}`;
   const headerLines = [
     `# ${t('listTitle', lang)}`,
     `## 📅 ${formatToday(lang, now)}`,
     t('listTagline', lang),
-    `\u200B${marker}\u200B`,
+    encodeHidden(marker),
   ];
   container.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(headerLines.join('\n'))
@@ -202,7 +208,12 @@ function parseListEmbed(msg) {
   if (!msg) return null;
   const text = extractAllText(msg);
 
-  const marker = text.match(/bday::v1::([a-z]{2,5})(?::(\d+))?/i);
+  // Neue Listen: Sprach-Marker ist als unsichtbarer Zero-Width-Blob kodiert.
+  // Alte Listen (und Fremd-Nachrichten) tragen ihn als Klartext.
+  const hidden = decodeHidden(text).join('\n');
+  const haystack = `${text}\n${hidden}`;
+
+  const marker = haystack.match(/bday::v1::([a-z]{2,5})(?::(\d+))?/i);
   const lang = marker ? marker[1].toLowerCase() : 'en';
   const birthdayRoleId = marker && marker[2] ? marker[2] : null;
 
@@ -340,7 +351,7 @@ function buildSevenDayErrorEmbed(lang, day, month) {
 }
 
 // ---------------------------------------------------------------------------
-// Glückwunsch-/Interessenten-Listen: kompakt nebeneinander + Uhrzeit
+// Glückwunsch-/Interessenten-Listen: untereinander + Uhrzeit
 // ---------------------------------------------------------------------------
 
 /**
@@ -348,14 +359,23 @@ function buildSevenDayErrorEmbed(lang, day, month) {
  * Listen (nur User-ID-Strings) als auch neue Einträge mit Zeitstempel:
  *   "123"                -> { id: "123", ts: null }
  *   { id: "123", ts: n } -> { id: "123", ts: n }
+ *
+ * Dedupliziert nach ID (der erste Eintrag gewinnt) – so kann ein Nutzer
+ * niemals doppelt in der Liste auftauchen, selbst wenn die Quelle
+ * (Marker + sichtbare Erwähnungen) einen Doppel-Eintrag enthält.
  */
 function normalizeWishEntries(entries) {
+  const seen = new Set();
   return (entries || [])
     .map((w) => {
       if (typeof w === 'string') return { id: w, ts: null };
       return { id: String(w.id ?? w.userId ?? ''), ts: w.ts || null };
     })
-    .filter((w) => w.id);
+    .filter((w) => {
+      if (!w.id || seen.has(w.id)) return false;
+      seen.add(w.id);
+      return true;
+    });
 }
 
 /** Uhrzeit („14:32“) im Format + Zeitzone der Listensprache. */
@@ -375,32 +395,42 @@ function formatWishTime(ts, lang) {
 }
 
 /**
- * Baut die kompakte, platzsparende Listen-Zeile: Mentions NEBENEINANDER
- * (nicht mehr untereinander), jeweils mit Uhrzeit des Klicks:
- *   @Mia · 14:32  @Tom · 14:41  @Lisa · 15:03
+ * Baut die Listen-Zeilen: jede Person UNTEREINANDER auf einer eigenen
+ * Zeile, jeweils mit Uhrzeit des Klicks:
+ *   @Mia · 14:32
+ *   @Tom · 14:41
+ *   @Lisa · 15:03
  */
-function wishListText(entries, lang, perLine = 4) {
-  const lines = [];
-  for (let i = 0; i < entries.length; i += perLine) {
-    const chunk = entries.slice(i, i + perLine);
-    lines.push(
-      chunk
-        .map((w) => (w.ts ? `<@${w.id}> · ${formatWishTime(w.ts, lang)}` : `<@${w.id}>`))
-        .join('  ')
-    );
-  }
-  return lines.join('\n');
+function wishListText(entries, lang) {
+  return entries
+    .map((w) => (w.ts ? `<@${w.id}> · ${formatWishTime(w.ts, lang)}` : `<@${w.id}>`))
+    .join('\n');
 }
 
 /**
- * Unsichtbare Marker für ALLE Einträge (auch über maxShown hinaus), damit
- * der Bot die komplette Liste samt Uhrzeiten jederzeit wieder auslesen kann:
- *   \u200Bwish:<userId>:<ts>\u200B  bzw.  \u200Bint:<userId>:<ts>\u200B
+ * Baut die WIRKLICH unsichtbaren Marker für ALLE Einträge (auch über die
+ * sichtbaren hinaus): Die komplette Liste samt Uhrzeiten wird als
+ * Zero-Width-Blob kodiert (kein sichtbarer Text wie früher „wish:…/int:…“).
+ *
+ * Rückgabe: Array von Zeichenketten, die NUR aus Zero-Width-Zeichen
+ * bestehen. Jeder Eintrag beginnt an einer Eintrags-Grenze, damit jeder
+ * Teil für sich dekodierbar ist. Mehrere Teile entstehen nur, wenn die
+ * Liste sehr lang wird (TextDisplay-Limit 4000 Zeichen).
  */
-function wishMarkerText(entries, prefix) {
-  return entries
-    .map((w) => (w.ts ? `\u200B${prefix}:${w.id}:${w.ts}\u200B` : ''))
-    .join('');
+function wishMarkerText(entries, prefix, chunkPayloadChars = 1700) {
+  const chunks = [];
+  let current = '';
+  for (const w of entries) {
+    if (!w.ts) continue;
+    const marker = `${prefix}:${w.id}:${w.ts}`;
+    if (current && current.length + marker.length > chunkPayloadChars) {
+      chunks.push(encodeHidden(current));
+      current = '';
+    }
+    current += marker;
+  }
+  if (current) chunks.push(encodeHidden(current));
+  return chunks;
 }
 
 // ---------------------------------------------------------------------------
@@ -411,14 +441,14 @@ function wishMarkerText(entries, prefix) {
  * Geburtstags-Container mit Titel, Erwähnung, Glückwünschen, Trennlinie
  * und „Gratulieren“-Button direkt im Container.
  *
- * Glückwünsche: Mentions nebeneinander (Platzsparer), mit Uhrzeit des
- * Gratulierens. Die komplette Liste inkl. Uhrzeiten steckt als unsichtbarer
- * Marker im Container (das ist die „Datenbank“).
+ * Glückwünsche: Mentions UNTEREINANDER, mit Uhrzeit des Gratulierens.
+ * Die komplette Liste inkl. Uhrzeiten steckt als unsichtbarer
+ * Zero-Width-Blob im Container (das ist die „Datenbank“).
  */
 function buildCongratsEmbed({ member, lang, dateKey, wishes = [] }) {
   const container = new ContainerBuilder();
 
-  const header = `# ${t('bdayCongratsTitle', lang)}\n\n${t('bdayCongratsBody', lang, { user: `<@${member.id}>` })}\n\u200Bbday-congrats:${dateKey}:${member.id}\u200B`;
+  const header = `# ${t('bdayCongratsTitle', lang)}\n\n${t('bdayCongratsBody', lang, { user: `<@${member.id}>` })}\n${encodeHidden(`bday-congrats:${dateKey}:${member.id}`)}`;
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(header));
 
   const all = normalizeWishEntries(wishes);
@@ -429,10 +459,15 @@ function buildCongratsEmbed({ member, lang, dateKey, wishes = [] }) {
     if (all.length > maxShown) {
       wishesText += `\n${t('congratsMore', lang, { count: all.length - maxShown })}`;
     }
-    // Unsichtbare Marker für die komplette Liste (Zähler & Uhrzeiten bleiben korrekt)
-    wishesText += wishMarkerText(all, 'wish');
+    // Unsichtbare Zero-Width-Marker für die komplette Liste (Zähler,
+    // Uhrzeiten & Doppel-Klick-Schutz bleiben korrekt)
+    const chunks = wishMarkerText(all, 'wish');
+    if (chunks.length) wishesText += chunks[0];
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(wishesText));
+    for (const chunk of chunks.slice(1)) {
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(chunk));
+    }
   }
 
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
@@ -532,13 +567,13 @@ function eventConfirmationRow(lang) {
 /**
  * Die tägliche Event-Nachricht um 0 Uhr – wie der Geburtstags-Gruß, aber mit
  * Event-Titel, „Interessenten“-Abschnitt und „Interessant! 😂“-Button.
- * Interessenten: Mentions nebeneinander, mit Uhrzeit des Klicks.
+ * Interessenten: Mentions UNTEREINANDER, mit Uhrzeit des Klicks.
  */
 function buildEventCongratsEmbed({ name, lang, dateKey, interested = [] }) {
   const container = new ContainerBuilder();
 
   const hex = encodeEventName(name);
-  const header = `# ${t('eventCongratsTitle', lang)}\n\n${t('eventCongratsBody', lang, { name: `**${name}**` })}\n\u200Bbday-event:${dateKey}:${hex}\u200B`;
+  const header = `# ${t('eventCongratsTitle', lang)}\n\n${t('eventCongratsBody', lang, { name: `**${name}**` })}\n${encodeHidden(`bday-event:${dateKey}:${hex}`)}`;
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(header));
 
   const all = normalizeWishEntries(interested);
@@ -549,10 +584,15 @@ function buildEventCongratsEmbed({ name, lang, dateKey, interested = [] }) {
     if (all.length > maxShown) {
       text += `\n${t('congratsMore', lang, { count: all.length - maxShown })}`;
     }
-    // Unsichtbare Marker für die komplette Liste (Zähler & Uhrzeiten bleiben korrekt)
-    text += wishMarkerText(all, 'int');
+    // Unsichtbare Zero-Width-Marker für die komplette Liste (Zähler,
+    // Uhrzeiten & Doppel-Klick-Schutz bleiben korrekt)
+    const chunks = wishMarkerText(all, 'int');
+    if (chunks.length) text += chunks[0];
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
+    for (const chunk of chunks.slice(1)) {
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(chunk));
+    }
   }
 
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
@@ -633,6 +673,8 @@ module.exports = {
   formatWishTime,
   wishListText,
   wishMarkerText,
+  encodeHidden,
+  decodeHidden,
   smallContainer,
   smallEmbed,
 };

@@ -25,6 +25,8 @@ const {
   buildCongratsEmbed,
   buildEventCongratsEmbed,
   encodeEventName,
+  extractAllText,
+  decodeHidden,
   LIST_MARKER,
 } = require('./embed-builder');
 const { tzParts, todayKey, pad } = require('./logic');
@@ -110,16 +112,20 @@ function createStore({ client, logger }) {
     ).values()) {
       try {
         const messages = await channel.messages.fetch({ limit: 30 });
-        const found = messages.find(
-          (m) =>
-            m.author?.id === client.user.id &&
-            (
-              JSON.stringify(m.components || []).includes('bday::v1::') ||
-              JSON.stringify(m.components || []).includes('bday_add') ||
-              (m.embeds?.[0]?.footer?.text || '').includes(LIST_MARKER) ||
-              (m.embeds?.[0]?.description || '').includes(LIST_MARKER)
-            )
-        );
+        const found = messages.find((m) => {
+          if (m.author?.id !== client.user.id) return false;
+          // Neuer Listen-Marker: als unsichtbarer Zero-Width-Blob kodiert.
+          const text = extractAllText(m);
+          const hidden = decodeHidden(text).join(' ');
+          return (
+            hidden.includes(LIST_MARKER) ||
+            JSON.stringify(m.components || []).includes('bday::v1::') ||
+            JSON.stringify(m.components || []).includes('bday_add') ||
+            text.includes(LIST_MARKER) ||
+            (m.embeds?.[0]?.footer?.text || '').includes(LIST_MARKER) ||
+            (m.embeds?.[0]?.description || '').includes(LIST_MARKER)
+          );
+        });
         if (found) return { channel, message: found };
       } catch {
         /* Channel ohne Zugriff o. Ä. überspringen */
@@ -359,11 +365,17 @@ function createStore({ client, logger }) {
     const recent = await channel.messages.fetch({ limit: 50 }).catch(() => []);
     const recentArr = recent instanceof Map ? [...recent.values()] : [...recent];
     const wasSent = (marker) =>
-      recentArr.some((m) =>
-        JSON.stringify(m.components || []).includes(marker) ||
-        JSON.stringify(m.embeds || []).includes(marker) ||
-        (m.content || '').includes(marker)
-      );
+      recentArr.some((m) => {
+        // Neuer Marker: Zero-Width-Blob (unsichtbar), alte Nachrichten: Klartext.
+        const text = extractAllText(m);
+        return (
+          decodeHidden(text).some((s) => s.includes(marker)) ||
+          text.includes(marker) ||
+          JSON.stringify(m.components || []).includes(marker) ||
+          JSON.stringify(m.embeds || []).includes(marker) ||
+          (m.content || '').includes(marker)
+        );
+      });
 
     for (const b of todays) {
       const marker = `bday-congrats:${dateKey}:${b.userId}`;
@@ -488,7 +500,18 @@ function createStore({ client, logger }) {
     // Abgelaufene Posts: eigene Geburtstags-Grüße / Event-Posts, älter als 7 Tage.
     const isPost = (m) => {
       const s = JSON.stringify(m.components || []);
-      return s.includes('bday-congrats:') || s.includes('bday-event:') || (m.content || '').includes('bday-congrats:') || (m.content || '').includes('bday-event:');
+      const text = extractAllText(m);
+      const hidden = decodeHidden(text).join(' ');
+      return (
+        hidden.includes('bday-congrats:') ||
+        hidden.includes('bday-event:') ||
+        text.includes('bday-congrats:') ||
+        text.includes('bday-event:') ||
+        s.includes('bday-congrats:') ||
+        s.includes('bday-event:') ||
+        (m.content || '').includes('bday-congrats:') ||
+        (m.content || '').includes('bday-event:')
+      );
     };
     const expired = below.filter((m) => isPost(m) && m.createdTimestamp + POST_LIFETIME_MS <= now);
     if (!expired.length) return { deleted: 0, scanned: below.length, hitCap };
