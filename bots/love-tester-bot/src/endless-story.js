@@ -35,7 +35,6 @@ const { groqChat, GROQ_MODEL } = require('./analyzer');
 
 const STORY_BUTTON_COLORS = [ButtonStyle.Danger, ButtonStyle.Success, ButtonStyle.Primary];
 const STORY_PREFIX = 'story_';
-const STORY_MARKER = '\u200Bendless-story:v1\u200B';
 const STORY_HISTORY_LIMIT = 5;
 const MAX_FOREIGN_MESSAGES = 3;
 
@@ -61,11 +60,15 @@ function flattenText(text) {
 
 /** Baut die Container-Payload für eine Situation mit (ggf. deaktivierten) Buttons. */
 function buildSituationPayload({ situation, options, colors, disabled = false, turn = 1, chosenIndex = null }) {
-  const safeSituation = flattenText(situation) || '…';
+  let safeSituation = flattenText(situation) || '…';
+  // Maximal 3–4 Zeilen auf dem Handy → Text hart begrenzen
+  if (safeSituation.length > 280) {
+    safeSituation = safeSituation.slice(0, 277) + '…';
+  }
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(
-      `# 📖 Endless Story — Zug ${turn}\n\n${safeSituation}${STORY_MARKER}`
+      `# 📖 Endless Story — Zug ${turn}\n\n||${safeSituation}||`
     )
   );
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
@@ -137,7 +140,7 @@ function buildStorySystemPrompt(lang = 'de') {
     '',
     'ANTWORTE STRENG IN DIESEM FORMAT (genau diese Blöcke, KEINE Zusatztexte davor/danach):',
     'SITUATION:',
-    '<Kurze Beschreibung der neuen Situation, wie die Geschichte weitergeht. GENAU 2–3 mittellange Sätze (keine kürzeren, keine längeren), spannend & lebendig. Keine Zeilenumbrüche im Fließtext.>',
+    '<Kurze Beschreibung der neuen Situation. MAXIMAL 3–4 ZEILEN auf dem Handy (2 kurze, spannende Sätze, keine Romane!). Keine Zeilenumbrüche im Fließtext.>',
     'OPTION 1: <Eine kurze, klare Handlungsmöglichkeit (max 50 Zeichen).>',
     'OPTION 2: <Eine zweite Handlungsmöglichkeit (max 50 Zeichen).>',
     'OPTION 3: <Eine dritte Handlungsmöglichkeit (max 50 Zeichen).>',
