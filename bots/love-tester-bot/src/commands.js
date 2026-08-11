@@ -93,9 +93,39 @@ function logRegistration(logger, scopeLabel, res) {
   for (const c of list) logger?.info?.(`[love-tester-bot]   /${c.name} -> snowflake ${c.id}`);
 }
 
+/**
+ * Discord antwortet bei einem erfolgreichen PUT mit der vollständigen
+ * Command-Liste. Eine leere/inkomplette Antwort ist kein erfolgreicher
+ * Registrierungszustand: Würden wir sie als Erfolg markieren, würde die
+ * Selbstheilung aufhören, obwohl z. B. `/test_love` noch fehlt.
+ */
+function commandIdsFromResponse(response, expectedCommands) {
+  if (!Array.isArray(response)) {
+    throw new Error('Discord lieferte keine Command-Liste zurück.');
+  }
+
+  const ids = Object.fromEntries(
+    response
+      .filter((command) => command && command.name && command.id)
+      .map((command) => [command.name, command.id])
+  );
+  const missing = expectedCommands.filter((name) => !ids[name]);
+  if (missing.length) {
+    throw new Error(`Discord registrierte nicht alle Commands (fehlend: ${missing.join(', ')}).`);
+  }
+  return ids;
+}
+
 /** Registriert die Slash-Commands (global oder Dev-Gilde, mit Retry + Guild-Cleanup). */
 async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
+  // Jeder neue Lauf beginnt als „nicht sicher registriert“. Nur ein
+  // vollständiger, von Discord bestätigter PUT darf diesen Zustand auf true
+  // setzen. Das ist besonders wichtig für die Self-Healing-Schleife.
+  ctx.commandsRegistered = false;
+  ctx.commandIdsVerifiedScope = null;
+  ctx.commandIdsVerifiedAt = 0;
   const commands = defineCommands().map((c) => c.toJSON());
+  const expectedCommandNames = commands.map((command) => command.name);
   const rest = restFactory ? restFactory(ctx.token) : (ctx.rest || new REST({ version: '10' }).setToken(ctx.token));
   const clientId = ctx.client?.user?.id;
   if (!clientId) {
@@ -113,21 +143,25 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
       if (devGuildId) {
         const route = Routes.applicationGuildCommands(clientId, devGuildId);
         const res = await rest.put(route, { body: commands });
-        const ids = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
+        const ids = commandIdsFromResponse(res, expectedCommandNames);
         ctx.guildCommandIds = ctx.guildCommandIds || new Map();
         ctx.guildCommandIds.set(devGuildId, ids);
         if (ctx.store?.setGuildCommandIds) ctx.store.setGuildCommandIds(devGuildId, ids);
         ctx.commandIdScope = `guild:${devGuildId}`;
         if (ctx.store?.setCommandIdScope) ctx.store.setCommandIdScope(`guild:${devGuildId}`);
+        ctx.commandIdsVerifiedScope = `guild:${devGuildId}`;
+        ctx.commandIdsVerifiedAt = Date.now();
         logRegistration(ctx.logger, `guild ${devGuildId} (Route: ${route})`, res);
       } else {
         const route = Routes.applicationCommands(clientId);
         const res = await rest.put(route, { body: commands });
-        const ids = Object.fromEntries((res || []).map((c) => [c.name, c.id]));
+        const ids = commandIdsFromResponse(res, expectedCommandNames);
         ctx.commandIds = ids;
         if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
         ctx.commandIdScope = 'global';
         if (ctx.store?.setCommandIdScope) ctx.store.setCommandIdScope('global');
+        ctx.commandIdsVerifiedScope = 'global';
+        ctx.commandIdsVerifiedAt = Date.now();
         if (ctx.guildCommandIds instanceof Map) ctx.guildCommandIds.clear();
         if (ctx.store?.clearGuildCommandIds) ctx.store.clearGuildCommandIds();
         logRegistration(ctx.logger, `global (Route: ${route})`, res);

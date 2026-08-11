@@ -30,7 +30,10 @@ function startCommandSelfHealing({ ctx, retryMs = COMMAND_RETRY_EVERY_MS, revMs 
     if (stopped || running) return;
     running = true;
     try {
-      if (ctx.commandsRegistered === false) {
+      // Alles außer dem expliziten Erfolgszustand gilt als unsicher. Das
+      // deckt auch ältere/unerwartete Contexts ab, bei denen das Flag noch
+      // `undefined` ist.
+      if (ctx.commandsRegistered !== true) {
         const { registerCommands } = require('./commands');
         const ok = await registerCommands(ctx);
         if (ok) {
@@ -46,17 +49,26 @@ function startCommandSelfHealing({ ctx, retryMs = COMMAND_RETRY_EVERY_MS, revMs 
     }
   };
 
+  // Nicht erst 15 Minuten warten: ein fehlgeschlagener Initialversuch wird
+  // direkt nach dem Start der Selbstheilung erneut versucht. Der Timer bleibt
+  // unref'ed, weil die Discord-Verbindung den Prozess am Leben hält.
+  const initialTimer = setTimeout(() => void tryRegister(), 0);
+  if (initialTimer.unref) initialTimer.unref();
+
   const retryTimer = setInterval(() => void tryRegister(), retryMs);
   if (retryTimer.unref) retryTimer.unref();
 
   const revTimer = setInterval(() => {
-    // Stößt beim nächsten Retry-Tick einen frischen PUT an.
+    // Nach 24h sofort einen frischen PUT anstoßen statt bis zum nächsten
+    // 15-Minuten-Tick auf veralteten/gelöschten Commands zu bleiben.
     ctx.commandsRegistered = false;
+    void tryRegister();
   }, revMs);
   if (revTimer.unref) revTimer.unref();
 
   return () => {
     stopped = true;
+    clearTimeout(initialTimer);
     clearInterval(retryTimer);
     clearInterval(revTimer);
   };
