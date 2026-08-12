@@ -16,7 +16,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { Routes } = require('discord.js');
 
-const { defineCommands, registerCommands, ensureCommandIds, commandMention, handleChatInput } = require('../bots/xp-level-bot/src/commands');
+const { defineCommands, registerCommands, ensureCommandIds, verifyCommandsLive, commandMention, handleChatInput } = require('../bots/xp-level-bot/src/commands');
 const { createXpStore } = require('../bots/xp-level-bot/src/store');
 
 // Gültige Discord-Locale-Keys für *_localizations (Stand API v10)
@@ -270,7 +270,10 @@ test('commandMention: Guild-IDs NUR auf der Dev-Gilde, sonst zwingend globale ID
   // Auf normalen Servern: NIE Guild-IDs, IMMER die globale ID
   assert.equal(commandMention(ctx, 'level_roles', 'g2'), '</level_roles:global-level>');
   assert.equal(commandMention(ctx, 'help', 'g2'), '</help:global-help>');
-  assert.equal(commandMention(ctx, 'setup', 'g2'), '</setup:store-setup>');
+  // Ungeprüfte Store-IDs werden NICHT mehr gerendert (Fix „Kein Befehl
+  // gefunden“ bei /toggle_nicknames & /sync_nicknames) – nur noch IDs aus dem
+  // RAM, die ensureCommandIds vorher per REST verifiziert hat.
+  assert.equal(commandMention(ctx, 'setup', 'g2'), '/setup');
   assert.equal(commandMention(ctx, 'missing', 'g1'), '/missing');
 });
 
@@ -317,22 +320,29 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
   let replyPayload = null;
   const store = createXpStore({ env: () => '' });
   store.setGuild({ guildId: 'g1', lang: 'de' });
-  store.setCommandIds({
-    setup: '2001',
-    rank: '2002',
-    help: '2003',
-    admin_set_bot_profile: '2004',
-    level_roles: '2005',
-    update_leaderboard: '2006',
-    toggle_nicknames: '2008',
-    sync_nicknames: '2009',
-    adminpanel: '2007',
-  });
 
-  // Simulation Bot-Restart: ctx.commandIds ist anfangs leer, wird aus Store geladen
+  // Simulation Bot-Restart: ctx.commandIds ist anfangs leer und wird per REST
+  // verifiziert/korrigiert geladen (NICHT mehr blind aus dem Store übernommen).
+  const fakeRest = {
+    get: async (route) => {
+      assert.equal(route, Routes.applicationCommands('app1'));
+      return [
+        { id: '2001', name: 'setup' },
+        { id: '2002', name: 'rank' },
+        { id: '2003', name: 'help' },
+        { id: '2004', name: 'admin_set_bot_profile' },
+        { id: '2005', name: 'level_roles' },
+        { id: '2006', name: 'update_leaderboard' },
+        { id: '2008', name: 'toggle_nicknames' },
+        { id: '2009', name: 'sync_nicknames' },
+        { id: '2007', name: 'adminpanel' },
+      ];
+    },
+  };
   const ctx = {
     store,
     token: 'test-token',
+    rest: fakeRest,
     client: { user: { id: 'app1' } },
     commandIds: {},
     guildCommandIds: new Map(),
@@ -701,6 +711,236 @@ test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Sto
   const text = JSON.stringify(replyPayload.components.map((c) => (c.toJSON ? c.toJSON() : c)));
   assert.ok(text.includes('</update_leaderboard:4006>'), '/help muss die frische ID rendern');
   assert.ok(!text.includes('DEAD-BEEF-OLD'), 'verwaiste Store-ID darf nie gerendert werden');
+});
+
+// ---------------------------------------------------------------------------
+// Bugfix-Regressionstests: /toggle_nicknames & /sync_nicknames „Kein Befehl
+// gefunden“ – die Commands waren in /help BLAU (klickbar), Discord kannte die
+// gerenderte Snowflake aber nicht mehr. Ursache: ungeprüfte persistierte
+// Store-IDs (alte Dev-Guild-/Merge-Ära) wurden in Mentions gerendert, und
+// setGuildCommandIds mergte statt zu ersetzen.
+// ---------------------------------------------------------------------------
+
+test('/help rendert bei REST-Ausfall KEINE ungeprüften Store-Chips (Bugfix toggle/sync_nicknames)', async () => {
+  let replyPayload = null;
+  const store = createXpStore({ env: () => '' });
+  store.setGuild({ guildId: 'g1', lang: 'de' });
+  // Produktions-Zustand: 7 echte globale + 2 VERWAISTE IDs aus einer alten
+  // Dev-Guild-Registrierung (per Merge in den globalen Slot gelangt).
+  store.setCommandIds({
+    setup: 'real-1',
+    rank: 'real-2',
+    help: 'real-3',
+    admin_set_bot_profile: 'real-4',
+    level_roles: 'real-5',
+    update_leaderboard: 'real-6',
+    toggle_nicknames: 'STALE-TOGGLE-DEAD',
+    sync_nicknames: 'STALE-SYNC-DEAD',
+    adminpanel: 'real-7',
+  });
+
+  const fakeRest = {
+    get: async () => {
+      throw new Error('503 Service Unavailable');
+    },
+    put: async () => {
+      throw new Error('503 Service Unavailable');
+    },
+  };
+
+  const ctx = {
+    store,
+    token: 'test-token',
+    rest: fakeRest,
+    client: { user: { id: 'app1' } },
+    commandIds: {},
+    guildCommandIds: new Map(),
+  };
+
+  const interaction = {
+    commandName: 'help',
+    guildId: 'g1',
+    locale: 'de',
+    isChatInputCommand: () => true,
+    reply: async (payload) => {
+      replyPayload = payload;
+      return payload;
+    },
+  };
+
+  await handleChatInput(ctx, interaction);
+
+  const text = payloadText(replyPayload);
+  assert.ok(!text.includes('STALE-TOGGLE-DEAD'), 'verwaiste toggle_nicknames-ID darf nie gerendert werden');
+  assert.ok(!text.includes('STALE-SYNC-DEAD'), 'verwaiste sync_nicknames-ID darf nie gerendert werden');
+  assert.ok(!text.includes('</toggle_nicknames:'), 'kein toter blauer Chip für toggle_nicknames');
+  assert.ok(!text.includes('</sync_nicknames:'), 'kein toter blauer Chip für sync_nicknames');
+  // Stattdessen sauberer Text-Fallback
+  assert.ok(text.includes('/toggle_nicknames'), 'Befehlsname bleibt als Text sichtbar');
+  assert.ok(text.includes('/sync_nicknames'), 'Befehlsname bleibt als Text sichtbar');
+});
+
+test('/help heilt Store-Leiche automatisch: fehlende Nickname-Commands werden nachregistriert', async () => {
+  let replyPayload = null;
+  const store = createXpStore({ env: () => '' });
+  store.setGuild({ guildId: 'g1', lang: 'de' });
+  store.setCommandIds({
+    setup: 'real-1',
+    rank: 'real-2',
+    help: 'real-3',
+    admin_set_bot_profile: 'real-4',
+    level_roles: 'real-5',
+    update_leaderboard: 'real-6',
+    toggle_nicknames: 'STALE-TOGGLE-DEAD',
+    sync_nicknames: 'STALE-SYNC-DEAD',
+    adminpanel: 'real-7',
+  });
+
+  let putCount = 0;
+  const fakeRest = {
+    get: async () => [
+      // Discord-Stand ohne die beiden Nickname-Commands (alter Produktiv-Stand)
+      { id: 'real-1', name: 'setup' },
+      { id: 'real-2', name: 'rank' },
+      { id: 'real-3', name: 'help' },
+      { id: 'real-4', name: 'admin_set_bot_profile' },
+      { id: 'real-5', name: 'level_roles' },
+      { id: 'real-6', name: 'update_leaderboard' },
+      { id: 'real-7', name: 'adminpanel' },
+    ],
+    put: async (route, { body }) => {
+      putCount++;
+      // PUT ist die Bulk-Re-Registrierung: Discord vergibt frische Snowflakes
+      return (body || []).map((c) => ({ id: `fresh-${c.name}`, name: c.name }));
+    },
+  };
+
+  const ctx = {
+    store,
+    token: 'test-token',
+    rest: fakeRest,
+    client: { user: { id: 'app1' }, guilds: { cache: new Map() } },
+    commandIds: {},
+    guildCommandIds: new Map(),
+  };
+
+  const interaction = {
+    commandName: 'help',
+    guildId: 'g1',
+    locale: 'de',
+    isChatInputCommand: () => true,
+    reply: async (payload) => {
+      replyPayload = payload;
+      return payload;
+    },
+  };
+
+  await handleChatInput(ctx, interaction);
+
+  assert.ok(putCount >= 1, 'fehlende Commands müssen automatisch nachregistriert werden');
+  const text = payloadText(replyPayload);
+  assert.ok(text.includes('</toggle_nicknames:fresh-toggle_nicknames>'), 'frische toggle_nicknames-ID wird gerendert');
+  assert.ok(text.includes('</sync_nicknames:fresh-sync_nicknames>'), 'frische sync_nicknames-ID wird gerendert');
+  assert.ok(!text.includes('STALE-'), 'keine verwaiste ID im Output');
+  // Store wurde geheilt
+  assert.equal(store.getCommandId('toggle_nicknames'), 'fresh-toggle_nicknames');
+  assert.equal(store.getCommandId('sync_nicknames'), 'fresh-sync_nicknames');
+});
+
+test('/help auf der Dev-Gilde rendert keine ungeprüften Guild-Store-IDs bei REST-Ausfall', async () => {
+  let replyPayload = null;
+  const store = createXpStore({ env: () => '' });
+  store.setGuild({ guildId: 'dev-guild', lang: 'de' });
+  // Verwaiste Guild-IDs aus der Dev-Guild-Ära (sync_nicknames wurde bei
+  // Discord gelöscht und mit neuer Snowflake neu angelegt).
+  store.setGuildCommandIds('dev-guild', {
+    setup: 'dev-real-1',
+    toggle_nicknames: 'STALE-DEV-TOGGLE-DEAD',
+    sync_nicknames: 'STALE-DEV-SYNC-DEAD',
+  });
+
+  const fakeRest = {
+    get: async () => {
+      throw new Error('503');
+    },
+    put: async () => {
+      throw new Error('503');
+    },
+  };
+
+  const ctx = {
+    store,
+    token: 'test-token',
+    rest: fakeRest,
+    devGuildId: 'dev-guild',
+    client: { user: { id: 'app1' } },
+    commandIds: {},
+    guildCommandIds: new Map(),
+  };
+
+  const interaction = {
+    commandName: 'help',
+    guildId: 'dev-guild',
+    locale: 'de',
+    isChatInputCommand: () => true,
+    reply: async (payload) => {
+      replyPayload = payload;
+      return payload;
+    },
+  };
+
+  await handleChatInput(ctx, interaction);
+
+  const text = payloadText(replyPayload);
+  assert.ok(!text.includes('STALE-DEV-TOGGLE-DEAD'), 'verwaiste Dev-Guild-ID darf nie gerendert werden');
+  assert.ok(!text.includes('STALE-DEV-SYNC-DEAD'), 'verwaiste Dev-Guild-ID darf nie gerendert werden');
+});
+
+test('store.setGuildCommandIds ERSETZT die komplette Liste (verwaiste Guild-IDs überleben keinen Merge)', () => {
+  const store = createXpStore({ env: () => '' });
+  store.setGuildCommandIds('g1', { setup: '111', sync_nicknames: 'STALE' });
+  // Frische, vollständige Registrierungsantwort von Discord:
+  store.setGuildCommandIds('g1', { setup: '222', toggle_nicknames: '333' });
+  assert.equal(store.getGuildCommandIds('g1').sync_nicknames, undefined, 'verwaiste Guild-ID darf nicht weiterleben');
+  assert.equal(store.getGuildCommandIds('g1').setup, '222');
+  assert.equal(store.getGuildCommandIds('g1').toggle_nicknames, '333');
+});
+
+test('verifyCommandsLive registriert fehlende Commands nach und loggt das Ergebnis', async () => {
+  const logs = [];
+  const getResponses = [
+    // Erster Check: toggle_nicknames & sync_nicknames fehlen bei Discord
+    [
+      { id: '1', name: 'setup' },
+      { id: '2', name: 'rank' },
+      { id: '3', name: 'help' },
+    ],
+    // Nach der Re-Registrierung: alles da
+    defineCommands().map((c) => {
+      const j = c.toJSON();
+      return { id: `ok-${j.name}`, name: j.name };
+    }),
+  ];
+  let putCount = 0;
+  const fakeRest = {
+    get: async () => getResponses.shift() || [],
+    put: async (route, { body }) => {
+      putCount++;
+      return (body || []).map((c) => ({ id: `ok-${c.name}`, name: c.name }));
+    },
+  };
+  const ctx = makeCtx({
+    rest: fakeRest,
+    logger: { info: (m) => logs.push(m), warn: (m) => logs.push(m), error: (m) => logs.push(m) },
+    client: { user: { id: 'app1' }, guilds: { cache: new Map() } },
+  });
+
+  const ok = await verifyCommandsLive(ctx);
+  assert.equal(ok, true);
+  assert.ok(putCount >= 1, 'fehlende Commands müssen nachregistriert werden');
+  const joined = logs.join('\n');
+  assert.ok(/fehlen/.test(joined), 'Warnung über fehlende Commands muss geloggt werden');
+  assert.ok(/Verifikation OK/.test(joined), 'Erfolg muss geloggt werden');
 });
 
 test('/toggle_nicknames und /sync_nicknames sind valide Admin-Commands mit Setup-Pflicht', () => {

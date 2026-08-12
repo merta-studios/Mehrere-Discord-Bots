@@ -91,7 +91,13 @@ module.exports = {
       devGuildId,
       rest: new REST({ version: '10' }).setToken(token),
       store,
-      commandIds: store.getCommandIds ? store.getCommandIds() : {},
+      // WICHTIG: bewusst NICHT mit Store-IDs vorbefüllen! Ungeprüfte persistierte
+      // Snowflakes (z. B. alte Dev-Guild-IDs im globalen Slot) wurden sonst vor
+      // jeder Verifizierung in /help gerendert und erzeugten die gemeldeten
+      // toten Chips von /toggle_nicknames & /sync_nicknames („Kein Befehl
+      // gefunden“). ensureCommandIds füllt den Slot ausschließlich mit gegen
+      // Discord geprüften oder frisch registrierten IDs.
+      commandIds: {},
       // Scope der gespeicherten Command-IDs: 'global' | 'guild:<id>' | null
       commandIdScope: store.getCommandIdScope ? store.getCommandIdScope() : null,
       guildCommandIds: new Map(),
@@ -115,9 +121,27 @@ module.exports = {
 
     client.once(Events.ClientReady, async () => {
       updatePresence();
+
+      // Laute, sofort sichtbare Warnung: mit gesetztem Dev-Guild-Scope werden
+      // ALLE Commands (inkl. /toggle_nicknames & /sync_nicknames) NUR in dieser
+      // einen Gilde registriert – auf normalen Servern fehlen sie dann und
+      // Discord meldet beim Anklicken „Kein Befehl gefunden“. Häufige Ursache
+      // für genau den gemeldeten Fehler!
+      if (ctx.devGuildId) {
+        logger.warn(
+          `[xp-level-bot] XP_BOT_GUILD_ID ist gesetzt (${ctx.devGuildId}) – die Commands existieren NUR in dieser einen Gilde. ` +
+            'Auf allen anderen Servern erscheinen /toggle_nicknames, /sync_nicknames & Co. NICHT. ' +
+            'Für den Produktivbetrieb die Variable in Render leeren/entfernen, damit global registriert wird!'
+        );
+      }
+
       // Command-Registrierung beim Start zuverlässig ausführen und awaiten
       try {
         await registerCommands(ctx);
+        // Direkt danach prüfen (und laut loggen), ob Discord wirklich ALLE
+        // Commands serviert – fehlende werden dabei sofort nachregistriert.
+        const { verifyCommandsLive } = require('./src/commands');
+        await verifyCommandsLive(ctx);
       } catch (err) {
         logger.error('[xp-level-bot] Initial-Command-Registrierung fehlgeschlagen:', err.message);
       }
