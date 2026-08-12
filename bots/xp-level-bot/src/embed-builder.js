@@ -15,6 +15,7 @@ const {
 
 const { LANGS, t, tzOf, formatToday } = require('./languages');
 const { xpNeeded, getMedal, nextDecayInfo } = require('./logic');
+const { encodeHidden } = require('./zw-marker');
 
 const LEADERBOARD_MARKER = 'xp_leader::v1::';
 
@@ -55,7 +56,7 @@ function buildLeaderboardEmbed({ lang='de', entries=[], now=new Date(), guildNam
   const header = [
     `# ${t('lbTitle', lang)}`,
     t('lbTagline', lang),
-    `\u200B${LEADERBOARD_MARKER}${lang}\u200B`,
+    encodeHidden(`${LEADERBOARD_MARKER}${lang}`),
   ].join('\n');
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(header));
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
@@ -171,12 +172,13 @@ function smallEmbed(_c, title, desc){ return smallContainer(title,desc); }
 
 /**
  * Offener Bonus-Drop: Text nennt die genaue XP-Zahl, der „Einsammeln“-Button
- * ist aktiv. Der Marker `xp-bonus:` dient der Wiedererkennung.
+ * ist aktiv. Es gibt KEINEN sichtbaren Marker mehr – die Wiedererkennung
+ * läuft über die Button-Custom-ID + den persistierten Drop.
  */
 function buildBonusDropEmbed({ lang, xp, dropId }) {
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `# ${t('bonusTitle', lang)}\n\n${t('bonusBody', lang, { xp })}\n\u200Bxp-bonus:${dropId}\u200B`
+    `# ${t('bonusTitle', lang)}\n\n${t('bonusBody', lang, { xp })}`
   ));
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   container.addActionRowComponents(
@@ -190,11 +192,14 @@ function buildBonusDropEmbed({ lang, xp, dropId }) {
   return container;
 }
 
-/** Eingeforderter Drop: Button bleibt sichtbar, aber deaktiviert; Text pingt den Schnellsten. */
+/**
+ * Eingesammelter Drop: Die ursprüngliche Nachricht bleibt stehen – es wird
+ * nur eine Zeile ergänzt, wer eingesammelt hat. Der Button wird deaktiviert.
+ */
 function buildBonusClaimedEmbed({ lang, xp, claimerId, dropId }) {
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `# ${t('bonusClaimedTitle', lang)}\n\n${t('bonusClaimedBody', lang, { user: `<@${claimerId}>`, xp })}\n\u200Bxp-bonus:${dropId}\u200B`
+    `# ${t('bonusTitle', lang)}\n\n${t('bonusBody', lang, { xp })}\n\n${t('bonusClaimedLine', lang, { user: `<@${claimerId}>` })}`
   ));
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   container.addActionRowComponents(
@@ -213,7 +218,7 @@ function buildBonusClaimedEmbed({ lang, xp, claimerId, dropId }) {
 function buildBonusExpiredEmbed({ lang, xp, dropId }) {
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `# ${t('bonusExpiredTitle', lang)}\n\n${t('bonusExpiredBody', lang, { xp })}\n\u200Bxp-bonus:${dropId}\u200B`
+    `# ${t('bonusExpiredTitle', lang)}\n\n${t('bonusExpiredBody', lang, { xp })}`
   ));
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   container.addActionRowComponents(

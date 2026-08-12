@@ -19,6 +19,7 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 | 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons im Container). 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche (**Glückwunsch-Liste kompakt nebeneinander mit Uhrzeit**), **7-Tage-Aufräumregel unter der Liste**, Owner-Admin-Panel im DM. |
 | ⭐ **XP Level Bot** | **RAM-first & Turso-persistiert** – XP pro Wort (Spam-Erkennung krass, 3 XP/Wort, max 30, 30s Cooldown) + **15 XP für Bilder/Videos/Sprachnachrichten**, Level-Kurve 80→1999 XP, täglicher 5%-Basis-Schwund (bei Inaktivität steigend), Voice 25 XP/Min, Top15-Leaderboard **stündlich + bei Level-Ups**, Nicknames `[Lvl X 🥇]` (Top 3, **an/aus per `/toggle_nicknames`**, **`/sync_nicknames` mit Ladebalken**), **Level-Belohnungsrollen via Formular** (`/level_roles`), **`/update_leaderboard` (Admin, 5-Min-Cooldown)**, /rank + /setup (2 Kanäle) + Adminpanel. |
 | 🎭 **Self Roles Bot** | Rollen zum Selbstbedienen – **komplett ohne Datenbank** (Konfiguration steckt unsichtbar in der Nachricht). `/create_self_role [channel]` → Formular (große Textbox + Titel) → **Bearbeitungs-/Bestätigungs-Nachricht** mit Kanal, Titel, Beschreibung (immer einzeilig) und Rollenliste. **2–20 Rollen** pro Nachricht, **max. 10 Nachrichten** pro Server, Rollen werden **erst beim Absenden** erstellt (ganz unten, erwähnbar). Buttons in Grau mit **live aktualisierter Anzahl** – auch bei manueller Rollenvergabe. `/edit_self_role`, Einzel- oder Mehrfachauswahl, 10 Sprachen, Admin-Panel + /help wie die anderen Bots. |
+| ✅ **Verify Bot** | Regeln & Verifizierung – **komplett ohne Datenbank** (alles steckt unsichtbar in der Nachricht). `/create_verify_rules` + `/create_classic_rules` (Formular mit großer Textbox, Bild/Banner per Anhang), grüner Verifizier-Button (UNVERIFIED → VERIFIED + Log-Kanal), `/set_verify_form` (keine Prüfung / Prüfung mit Annehmen-Ablehnen / Prüfung mit eigenem Formular), `/set_language`, 10 Sprachen, Admin-Panel + /help + Profilbild-Command wie die anderen Bots. |
 | 🛠️ **Multi-Bot-Hoster** | Loader, der alle Bots im `bots/`-Ordner automatisch startet (nur die mit gesetztem Token), plus Health-Server für UptimeRobot. |
 
 ## 🗂️ Projektstruktur
@@ -41,6 +42,9 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 │   └── self-roles-bot/       # 🎭 Self-Roles-Bot (ohne Datenbank, wie der Birthday-Bot)
 │       ├── index.js
 │       └── src/              # Editor, Store, Zähler-Sync, 10 Sprachen
+│   └── verify-bot/           # ✅ Verify-Bot (ohne Datenbank – Regeln & Verifizierung)
+│       ├── index.js
+│       └── src/              # Editor, Formular-Editor, Store, 10 Sprachen
 │
 ├── tests/                    # Tests (npm test) – ohne Discord-Verbindung
 ├── render.yaml               # Render-Blueprint (Deployment-Config)
@@ -87,6 +91,9 @@ In `.env` eintragen:
 | `SELF_ROLES_BOT_TOKEN` | Token des Self-Roles-Bots (**braucht keine Datenbank!**) |
 | `SELF_ROLES_BOT_OWNER_ID` | optional: Owner fürs Self-Roles-`/adminpanel` (Fallback: Birthday-Owner) |
 | `SELF_ROLES_BOT_GUILD_ID` | optional: Dev-Server für sofortige Self-Roles-Command-Registrierung |
+| `VERIFY_BOT_TOKEN` | Token des Verify-Bots (**braucht keine Datenbank!**) |
+| `VERIFY_BOT_OWNER_ID` | optional: Owner fürs Verify-`/adminpanel` (Fallback: Birthday-Owner) |
+| `VERIFY_BOT_GUILD_ID` | optional: Dev-Server für sofortige Verify-Command-Registrierung |
 | `PORT` | Port für den Health-Server (Standard 10000) |
 
 **Deine Discord-ID findest du so:** Discord → Einstellungen → Erweitert → „Entwicklermodus“
@@ -269,6 +276,37 @@ Details siehe [`bots/self-roles-bot/README.md`](bots/self-roles-bot/README.md):
 - **Robust**: Locks pro Nachricht, Timeout-Schutz, Fallback-Parser aus den
   Buttons, Recovery beim ersten Klick nach einem Neustart – **nie** ein stummes
   „Interaktion fehlgeschlagen“.
+- `/help` + `/admin_set_bot_profile` + `/adminpanel` – wie bei den anderen Bots.
+
+---
+
+## ✅ Verify Bot – alle Funktionen
+
+Details siehe [`bots/verify-bot/README.md`](bots/verify-bot/README.md):
+
+- **Komplett ohne Datenbank** – Modus, Rollen, Log-Kanal, Prüf-Modus,
+  Formularfelder und Bild-/Banner-URL stecken als unsichtbarer
+  Zero-Width-Blob in der Nachricht selbst. Neustarts egal (Self-Healing).
+- **`/create_verify_rules [channel] [logging] [unverified] [verified]`** (nur
+  Admins): Formular mit **großer Textbox** für die Regeln + Button-Name.
+  Existieren schon Regeln, ist das Formular **vorbefüllt**. Beim Absenden
+  werden alte Regeln **überall auf dem Server gelöscht**.
+- **`/create_classic_rules [channel]`** (nur Admins): gleiche Regeln, aber
+  klassisch – ohne Button, ohne Rollen.
+- **Bild & Banner ohne URL**: im Editor per Anhang hochladen – Bild oben
+  rechts (Thumbnail), Banner oben (Media-Gallery). Beides optional.
+- **Grüner Verifizier-Button**: entfernt `UNVERIFIED`, gibt `VERIFIED` und
+  loggt im Log-Kanal für Admins. Wer schon verifiziert ist (Rollenabgleich),
+  wird nicht erneut geloggt. Verifizieren geht **nur mit der UNVERIFIED-Rolle**.
+- **`/set_verify_form`** (nur Admins, nur wenn Verify-Regeln existieren):
+  - *Keine Überprüfung* – direkt verifizieren.
+  - *Überprüfung ohne Formular* – Anfrage im Log-Kanal mit **Annehmen/Ablehnen**
+    (nur Admins). Ablehnen öffnet ein Grund-Formular; der Nutzer wird **anonym**
+    benachrichtigt und kann es erneut versuchen. Keine zweite Anfrage, solange
+    eine offen ist.
+  - *Überprüfung mit Formular* – eigener **Formular-Editor** (Frage, Platzhalter,
+    vorausgefüllter Wert, kurzes/großes Textfeld, Pflichtfeld).
+- **`/set_language [sprache]`** – Sprache pro Server (10 Sprachen).
 - `/help` + `/admin_set_bot_profile` + `/adminpanel` – wie bei den anderen Bots.
 
 ---

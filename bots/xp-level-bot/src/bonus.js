@@ -106,7 +106,7 @@ function classicBonusPayload({ title, body, dropId, lang, disabled = false }) {
     embeds: [
       new EmbedBuilder()
         .setTitle(title)
-        .setDescription(`${body}\n\u200Bxp-bonus:${dropId}\u200B`),
+        .setDescription(body),
     ],
     components: [new ActionRowBuilder().addComponents(claimButton(lang, dropId, { disabled }))],
   };
@@ -337,7 +337,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     }
     try {
       return await channel.send({
-        content: `# ${t('bonusTitle', lang)}\n${t('bonusBody', lang, { xp })}\n\u200Bxp-bonus:${dropId}\u200B`,
+        content: `# ${t('bonusTitle', lang)}\n${t('bonusBody', lang, { xp })}`,
         components: [new ActionRowBuilder().addComponents(claimButton(lang, dropId))],
       });
     } catch (err) {
@@ -424,9 +424,11 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
       );
     }
     const classic = classicBonusPayload({
-      title: t(kind === 'claimed' ? 'bonusClaimedTitle' : 'bonusExpiredTitle', lang),
+      // Nach dem Einsammeln bleibt die ursprüngliche Nachricht stehen –
+      // nur eine Zeile „wer hat gesammelt“ wird ergänzt (kein Komplett-Umbau).
+      title: t(kind === 'claimed' ? 'bonusTitle' : 'bonusExpiredTitle', lang),
       body: kind === 'claimed'
-        ? t('bonusClaimedBody', lang, { user: `<@${claimerId}>`, xp })
+        ? `${t('bonusBody', lang, { xp })}\n\n${t('bonusClaimedLine', lang, { user: `<@${claimerId}>` })}`
         : t('bonusExpiredBody', lang, { xp }),
       dropId,
       lang,
@@ -471,10 +473,10 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
       const lang = storedCfg?.lang || 'en';
       try {
         return await interaction.reply(
-          componentsV2Payload([smallContainer(null, t('bonusGone', lang))], { ephemeral: false })
+          componentsV2Payload([smallContainer(null, t('bonusGone', lang))], { ephemeral: true })
         );
       } catch {
-        return interaction.reply({ content: t('bonusGone', lang) }).catch(() => {});
+        return interaction.reply({ content: t('bonusGone', lang), ephemeral: true }).catch(() => {});
       }
     }
 
@@ -502,8 +504,8 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     } catch {
       await interaction.update(
         classicBonusPayload({
-          title: t('bonusClaimedTitle', lang),
-          body: t('bonusClaimedBody', lang, { user: `<@${interaction.user.id}>`, xp: drop.xp }),
+          title: t('bonusTitle', lang),
+          body: `${t('bonusBody', lang, { xp: drop.xp })}\n\n${t('bonusClaimedLine', lang, { user: `<@${interaction.user.id}>` })}`,
           dropId,
           lang,
           disabled: true,
@@ -512,10 +514,11 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
         ctx.logger.warn?.(`[xp-level-bot] Bonus-Claim Update fehlgeschlagen: ${err?.message || err}`);
       });
     }
+    // Nur der Klicker sieht die Bestätigung – nicht der ganze Server.
     await interaction
       .followUp(
         componentsV2Payload([smallContainer(null, t('bonusClaimedYou', lang, { xp: drop.xp }))], {
-          ephemeral: false,
+          ephemeral: true,
         })
       )
       .catch(() => {});

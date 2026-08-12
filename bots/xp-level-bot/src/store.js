@@ -7,6 +7,10 @@
 const fs = require('fs');
 const path = require('path');
 
+const { extractAllText } = require('./embed-builder');
+const { decodeHidden } = require('./zw-marker');
+const LEADERBOARD_MARKER = 'xp_leader::v1::';
+
 function createXpStore({ logger, env } = {}) {
   const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, lang, leaderboardMessageId, lastDailyDecay, nicknamesEnabled}
   const users = new Map(); // guildId -> Map(userId -> {guildId,userId,level,xp,lastXpGain})
@@ -550,7 +554,6 @@ function createXpStore({ logger, env } = {}) {
   // For scanning leaderboard message like birthday bot
   async function findLeaderboardMessage(guild, client) {
     const { ChannelType } = require('discord.js');
-    const marker = 'xp_leader::v1::';
     let channels;
     try { channels = await guild.channels.fetch(); } catch { return null; }
     for (const channel of channels.filter(c => c.type === ChannelType.GuildText && c.viewable).values()) {
@@ -559,7 +562,11 @@ function createXpStore({ logger, env } = {}) {
         // sehr aktiven Kanälen zuverlässig gefunden wird (sie wandert nach
         // unten, je mehr neue Nachrichten dazukommen)
         const messages = await channel.messages.fetch({ limit: 100 });
-        const found = messages.find(m => m.author?.id === client.user.id && JSON.stringify(m.components||[]).includes(marker));
+        const found = messages.find((m) => {
+          if (m.author?.id !== client.user.id) return false;
+          const text = extractAllText(m);
+          return decodeHidden(text).some((p) => p.includes(LEADERBOARD_MARKER));
+        });
         if (found) return { channel, message: found };
       } catch {}
     }
