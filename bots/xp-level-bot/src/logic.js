@@ -336,6 +336,10 @@ function stripLvlTag(name) {
   return String(name).replace(/^\[Lvl\s*\d+[^\]]*\]\s*/u, '').trim();
 }
 
+function hasLvlTag(name) {
+  return /^\[Lvl\s*\d+[^\]]*\]/u.test(String(name || ''));
+}
+
 // ---------------------------------------------------------------------------
 // Level-Belohnungsrollen – Eingabe-Parsing & Namens-Format (testbar, pur)
 // ---------------------------------------------------------------------------
@@ -588,6 +592,7 @@ module.exports = {
   applyDailyDecay,
   formatNickname,
   stripLvlTag,
+  hasLvlTag,
   getMedal,
   shouldGrantVoiceXp,
   isVoiceEligible,

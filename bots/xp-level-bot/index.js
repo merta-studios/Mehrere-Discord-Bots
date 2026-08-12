@@ -22,6 +22,8 @@
  *  - Leaderboard stündlich + bei Level-Up/Down (max alle 10 Min), Container V2,
  *    Top15, kurzer Decay-Hinweis, Zeit+TZ, Self-Healing über Marker
  *  - /rank für alle, /help, /admin_set_bot_profile, /adminpanel (Owner DM)
+ *  - /toggle_nicknames (Admin, nach /setup): Level-Tags in Nicknames an/aus (Standard: an)
+ *  - /sync_nicknames (Admin, nach /setup): alle Mitglieder-Nicknames mit Ladeanzeige abgleichen
  *  - Nicknames: [Lvl X 🥇] Name (Top3 Medaillen), bei Erfolg sofort, 32 Zeichen
  *  - Bei Verlassen: Daten löschen
  *  - Turso: RAM-first, Dirty-Tracking, Batch-Flush bei SIGTERM + alle 5min Backup

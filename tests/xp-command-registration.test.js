@@ -1,6 +1,6 @@
 /**
  * Tests für die Slash-Command-Registrierung und den /help Command des XP-Bots:
- * 1. Discord-API-Validierung aller 7 Commands (inkl. /level_roles & /update_leaderboard)
+ * 1. Discord-API-Validierung aller 9 Commands (inkl. /toggle_nicknames & /sync_nicknames)
  * 2. Saubere globale Registrierung ohne Dev-Gilden-Verwechslung + Shadowing-Cleanup
  * 3. Spezifische Dev-Gilden-Registrierung bei gesetzter XP_BOT_GUILD_ID
  * 4. Whitespace-Toleranz bei Env-Variablen
@@ -103,9 +103,16 @@ function makeCtx(overrides = {}) {
   };
 }
 
-test('alle 7 Command-JSONs sind Discord-API-valide (inkl. /level_roles & /update_leaderboard)', () => {
+const ALL_CMD_NAMES = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'adminpanel'];
+
+function fakeCommandList(idFor = (name) => `id-${name}`) {
+  const idFn = typeof idFor === 'function' ? idFor : (name) => `${idFor}${name}`;
+  return ALL_CMD_NAMES.map((name) => ({ id: idFn(name), name }));
+}
+
+test('alle 9 Command-JSONs sind Discord-API-valide (inkl. /toggle_nicknames & /sync_nicknames)', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 7);
+  assert.equal(cmds.length, 9);
   for (const c of cmds) {
     assert.deepEqual(validateCommand(c), [], `Command "${c.name}" würde von Discord abgelehnt`);
   }
@@ -129,7 +136,7 @@ test('registerCommands registriert global (inkl. /level_roles) und räumt alte G
   assert.equal(calls[0].route, Routes.applicationCommands('app1'));
   const names = calls[0].body.map((c) => c.name);
   assert.ok(names.includes('level_roles'), `/level_roles fehlt im Registrierungs-Payload! Enthalten: ${names.join(', ')}`);
-  assert.deepEqual(names, ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'adminpanel']);
+  assert.deepEqual(names, ALL_CMD_NAMES);
 
   // Zweiter Call: alte Guild-Commands auf g1 geleert ({ body: [] }), damit kein Shadowing entsteht
   assert.equal(calls[1].route, Routes.applicationGuildCommands('app1', 'g1'));
@@ -232,6 +239,8 @@ test('ensureCommandIds lädt IDs von Discord REST GET nach wenn RAM und Store le
         { id: '1004', name: 'admin_set_bot_profile' },
         { id: '1005', name: 'level_roles' },
         { id: '1006', name: 'update_leaderboard' },
+        { id: '1008', name: 'toggle_nicknames' },
+        { id: '1009', name: 'sync_nicknames' },
         { id: '1007', name: 'adminpanel' },
       ];
     },
@@ -314,6 +323,10 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
     help: '2003',
     admin_set_bot_profile: '2004',
     level_roles: '2005',
+    update_leaderboard: '2006',
+    toggle_nicknames: '2008',
+    sync_nicknames: '2009',
+    adminpanel: '2007',
   });
 
   // Simulation Bot-Restart: ctx.commandIds ist anfangs leer, wird aus Store geladen
@@ -343,6 +356,8 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
   assert.ok(text.includes('</rank:2002>'), 'rank muss klickbar sein');
   assert.ok(text.includes('</admin_set_bot_profile:2004>'), 'admin_set_bot_profile muss klickbar sein');
   assert.ok(text.includes('</level_roles:2005>'), 'level_roles muss klickbar sein');
+  assert.ok(text.includes('</toggle_nicknames:2008>'), 'toggle_nicknames muss klickbar sein');
+  assert.ok(text.includes('</sync_nicknames:2009>'), 'sync_nicknames muss klickbar sein');
   assert.ok(text.includes('</help:2003>'), 'help muss klickbar sein');
   // Keine unklickbaren reinen Text-Befehle wie "**/level_roles**" ohne ID
   assert.ok(!text.includes('**`/level_roles`**') && !text.includes('**/level_roles**\n'), 'darf kein Text-Fallback sein');
@@ -442,6 +457,8 @@ test('ensureCommandIds lädt auf normalen Servern GLOBALE Commands, auch wenn De
         { id: '4004', name: 'admin_set_bot_profile' },
         { id: '4005', name: 'level_roles' },
         { id: '4006', name: 'update_leaderboard' },
+        { id: '4008', name: 'toggle_nicknames' },
+        { id: '4009', name: 'sync_nicknames' },
         { id: '4007', name: 'adminpanel' },
       ];
     },
@@ -469,6 +486,8 @@ test('ensureCommandIds lädt auf der Dev-Gilde die Guild-Commands und verschmutz
         { id: '5004', name: 'admin_set_bot_profile' },
         { id: '5005', name: 'level_roles' },
         { id: '5006', name: 'update_leaderboard' },
+        { id: '5008', name: 'toggle_nicknames' },
+        { id: '5009', name: 'sync_nicknames' },
         { id: '5007', name: 'adminpanel' },
       ];
     },
@@ -555,6 +574,8 @@ test('ensureCommandIds korrigiert verwaiste Store-Snowflakes gegen Discord REST 
     admin_set_bot_profile: '1004',
     level_roles: '1005',
     update_leaderboard: 'DEAD-BEEF-OLD', // ← verwaiste ID aus früherer Registrierung
+    toggle_nicknames: '1008',
+    sync_nicknames: '1009',
     adminpanel: '1007',
   });
 
@@ -570,6 +591,8 @@ test('ensureCommandIds korrigiert verwaiste Store-Snowflakes gegen Discord REST 
         { id: '1004', name: 'admin_set_bot_profile' },
         { id: '1005', name: 'level_roles' },
         { id: '2006', name: 'update_leaderboard' },
+        { id: '1008', name: 'toggle_nicknames' },
+        { id: '1009', name: 'sync_nicknames' },
         { id: '1007', name: 'adminpanel' },
       ];
     },
@@ -596,6 +619,8 @@ test('verifizierte IDs werden innerhalb der TTL aus dem Memory genutzt (kein RES
         { id: '4', name: 'admin_set_bot_profile' },
         { id: '5', name: 'level_roles' },
         { id: '6', name: 'update_leaderboard' },
+        { id: '8', name: 'toggle_nicknames' },
+        { id: '9', name: 'sync_nicknames' },
         { id: '7', name: 'adminpanel' },
       ];
     },
@@ -632,6 +657,8 @@ test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Sto
     admin_set_bot_profile: '3004',
     level_roles: '3005',
     update_leaderboard: 'DEAD-BEEF-OLD', // ← verwaist (der gemeldete Bug)
+    toggle_nicknames: '3008',
+    sync_nicknames: '3009',
     adminpanel: '3007',
   });
 
@@ -643,6 +670,8 @@ test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Sto
       { id: '3004', name: 'admin_set_bot_profile' },
       { id: '3005', name: 'level_roles' },
       { id: '4006', name: 'update_leaderboard' }, // frische Snowflake von Discord
+      { id: '3008', name: 'toggle_nicknames' },
+      { id: '3009', name: 'sync_nicknames' },
       { id: '3007', name: 'adminpanel' },
     ],
   };
@@ -672,4 +701,119 @@ test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Sto
   const text = JSON.stringify(replyPayload.components.map((c) => (c.toJSON ? c.toJSON() : c)));
   assert.ok(text.includes('</update_leaderboard:4006>'), '/help muss die frische ID rendern');
   assert.ok(!text.includes('DEAD-BEEF-OLD'), 'verwaiste Store-ID darf nie gerendert werden');
+});
+
+test('/toggle_nicknames und /sync_nicknames sind valide Admin-Commands mit Setup-Pflicht', () => {
+  const cmds = defineCommands().map((c) => c.toJSON());
+  const toggle = cmds.find((c) => c.name === 'toggle_nicknames');
+  const sync = cmds.find((c) => c.name === 'sync_nicknames');
+  assert.ok(toggle, '/toggle_nicknames muss definiert sein');
+  assert.ok(sync, '/sync_nicknames muss definiert sein');
+  assert.equal(toggle.default_member_permissions, '8');
+  assert.equal(sync.default_member_permissions, '8');
+  assert.deepEqual(validateCommand(toggle), []);
+  assert.deepEqual(validateCommand(sync), []);
+  const enabled = (toggle.options || []).find((o) => o.name === 'enabled');
+  assert.ok(enabled, 'Boolean-Option enabled muss existieren');
+  assert.equal(enabled.required, true);
+  assert.equal(enabled.type, 5, 'Discord Boolean-Option ist Typ 5');
+});
+
+function payloadText(payload) {
+  return JSON.stringify(payload?.components?.map((c) => (c.toJSON ? c.toJSON() : c)) || payload);
+}
+
+function makeAdminInteraction({ commandName, options = {}, guild, perms = true }) {
+  const replies = [];
+  const edits = [];
+  const interaction = {
+    commandName,
+    guildId: 'g1',
+    guild,
+    locale: 'de',
+    inGuild: () => true,
+    memberPermissions: { has: () => perms },
+    options: {
+      getBoolean: (name) => options[name],
+    },
+    deferred: false,
+    replied: false,
+    reply: async (payload) => {
+      replies.push(payload);
+      interaction.replied = true;
+      return payload;
+    },
+    deferReply: async () => {
+      interaction.deferred = true;
+    },
+    editReply: async (payload) => {
+      edits.push(payload);
+      return payload;
+    },
+    replies,
+    edits,
+  };
+  return interaction;
+}
+
+test('/toggle_nicknames braucht Setup und speichert den Schalter', async () => {
+  const store = createXpStore({ env: () => '' });
+  const ctx = { store, logger: { info() {}, warn() {}, error() {} } };
+
+  const noSetup = makeAdminInteraction({ commandName: 'toggle_nicknames', options: { enabled: false } });
+  await handleChatInput(ctx, noSetup);
+  assert.match(payloadText(noSetup.replies[0]), /noch kein XP-System|Bitte nutze zuerst/i);
+
+  store.setGuild({ guildId: 'g1', leaderboardChannelId: 'lb', mainChannelId: 'main', lang: 'de' });
+  const denied = makeAdminInteraction({ commandName: 'toggle_nicknames', options: { enabled: false }, perms: false });
+  await handleChatInput(ctx, denied);
+  assert.match(payloadText(denied.replies[0]), /Administrator/);
+
+  const off = makeAdminInteraction({ commandName: 'toggle_nicknames', options: { enabled: false } });
+  await handleChatInput(ctx, off);
+  assert.equal(store.getGuild('g1').nicknamesEnabled, false);
+  assert.match(payloadText(off.replies[0]), /aus/i);
+
+  const on = makeAdminInteraction({ commandName: 'toggle_nicknames', options: { enabled: true } });
+  await handleChatInput(ctx, on);
+  assert.equal(store.getGuild('g1').nicknamesEnabled, true);
+  assert.match(payloadText(on.replies[0]), /an/i);
+});
+
+test('/sync_nicknames braucht Setup, deferrt den Ladebildschirm und gleicht Nicknames ab', async () => {
+  const store = createXpStore({ env: () => '' });
+  const noSetup = makeAdminInteraction({ commandName: 'sync_nicknames' });
+  await handleChatInput({ store, logger: { info() {}, warn() {}, error() {} } }, noSetup);
+  assert.match(payloadText(noSetup.replies[0]), /noch kein XP-System|Bitte nutze zuerst/i);
+  assert.equal(noSetup.deferred, false);
+
+  store.setGuild({ guildId: 'g1', leaderboardChannelId: 'lb', mainChannelId: 'main', lang: 'de', nicknamesEnabled: true });
+  store.setUser({ guildId: 'g1', userId: 'a', level: 4, xp: 10 });
+
+  const members = new Map();
+  const alice = {
+    id: 'a',
+    nickname: 'Alice',
+    displayName: 'Alice',
+    user: { username: 'Alice' },
+    roles: { highest: { position: 1 } },
+    setNickname: async (nick) => { alice.nickname = nick; },
+  };
+  members.set('a', alice);
+  const guild = {
+    id: 'g1',
+    ownerId: 'owner',
+    members: {
+      me: { id: 'bot', permissions: { has: () => true }, roles: { highest: { position: 100 } } },
+      fetch: async () => members,
+    },
+  };
+  const interaction = makeAdminInteraction({ commandName: 'sync_nicknames', guild });
+  await handleChatInput({ store, logger: { info() {}, warn() {}, error() {} } }, interaction);
+
+  assert.equal(interaction.deferred, true, 'Discord-Ladebildschirm (defer) muss erscheinen');
+  assert.ok(interaction.edits.length >= 1, 'Fortschritt/Ergebnis wird in die Command-Antwort geschrieben');
+  assert.equal(alice.nickname, '[Lvl 4 🥇] Alice');
+  const last = payloadText(interaction.edits[interaction.edits.length - 1]);
+  assert.match(last, /fertig|Sync/i);
 });

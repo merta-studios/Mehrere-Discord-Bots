@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 
 function createXpStore({ logger, env } = {}) {
-  const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, lang, leaderboardMessageId, lastDailyDecay}
+  const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, lang, leaderboardMessageId, lastDailyDecay, nicknamesEnabled}
   const users = new Map(); // guildId -> Map(userId -> {guildId,userId,level,xp,lastXpGain})
   let commandIds = {}; // cmdName -> id  (NUR globale Command-IDs!)
   const guildCommandIds = new Map(); // guildId -> { [cmdName]: id } (nur Dev-Gilde)
@@ -72,7 +72,8 @@ function createXpStore({ logger, env } = {}) {
       level_role_ids TEXT,
       bonus_state TEXT,
       last_leaderboard_refresh INTEGER,
-      last_hourly_leaderboard_refresh INTEGER
+      last_hourly_leaderboard_refresh INTEGER,
+      nicknames_enabled INTEGER
     );`);
     // Migration für Bestands-Tabellen. Allgemeiner und stündlicher
     // Leaderboard-Zeitstempel sind absichtlich getrennt: Level-Ups dürfen den
@@ -84,6 +85,7 @@ function createXpStore({ logger, env } = {}) {
       'bonus_state TEXT',
       'last_leaderboard_refresh INTEGER',
       'last_hourly_leaderboard_refresh INTEGER',
+      'nicknames_enabled INTEGER',
     ]) {
       try { await db.execute(`ALTER TABLE guild_configs ADD COLUMN ${col}`); } catch {}
     }
@@ -114,6 +116,12 @@ function createXpStore({ logger, env } = {}) {
     try { return JSON.parse(value); } catch { return fallback; }
   }
 
+  /** Standard: an. Nur ein explizites false/0 schaltet die Tags aus. */
+  function parseNicknamesEnabled(value) {
+    if (value === false || value === 0 || value === '0' || value === 'false') return false;
+    return true;
+  }
+
   async function loadFromDb() {
     if (!db) return;
     const gRes = await db.execute('SELECT * FROM guild_configs');
@@ -134,6 +142,7 @@ function createXpStore({ logger, env } = {}) {
         lastHourlyLeaderboardRefresh: row.last_hourly_leaderboard_refresh
           ? Number(row.last_hourly_leaderboard_refresh)
           : null,
+        nicknamesEnabled: parseNicknamesEnabled(row.nicknames_enabled),
       });
     }
     const uRes = await db.execute('SELECT * FROM user_levels');

@@ -1,6 +1,7 @@
 /**
  * Slash-Commands XP Bot – Definition, Registrierung & Handler
- * Commands: /setup, /rank, /help, /admin_set_bot_profile, /level_roles, /adminpanel
+ * Commands: /setup, /rank, /help, /admin_set_bot_profile, /level_roles,
+ *           /update_leaderboard, /toggle_nicknames, /sync_nicknames, /adminpanel
  */
 
 const {
@@ -76,6 +77,23 @@ function defineCommands() {
       .setName('update_leaderboard')
       .setDescription('Aktualisiert das Leaderboard sofort (5 Min. Cooldown)')
       .setDescriptionLocalizations(pick('updateLeaderboardHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    new SlashCommandBuilder()
+      .setName('toggle_nicknames')
+      .setDescription('Schaltet Level-Tags in Nicknames an oder aus. Nur Admins, erst nach /setup.')
+      .setDescriptionLocalizations(pick('toggleNicknamesHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addBooleanOption((o) => o
+        .setName('enabled')
+        .setDescription('An = Tags setzen, Aus = keine Tags mehr')
+        .setDescriptionLocalizations(pick('toggleNicknamesEnabledDesc'))
+        .setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('sync_nicknames')
+      .setDescription('Gleicht alle Server-Nicknames mit den Level-Tags ab. Nur Admins, nach /setup.')
+      .setDescriptionLocalizations(pick('syncNicknamesHelp'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
     new SlashCommandBuilder()
@@ -234,7 +252,7 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
 const COMMAND_ID_VERIFY_TTL_MS = 5 * 60 * 1000;
 
 async function ensureCommandIds(ctx, guildId = null) {
-  const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'adminpanel'];
+  const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'adminpanel'];
   const hasAll = (obj) => obj && typeof obj === 'object' && needed.every((name) => Boolean(obj[name]));
 
   const devGuildId = normalizeGuildId(ctx.devGuildId);
@@ -380,6 +398,10 @@ async function handleChatInput(ctx, interaction) {
       return handleLevelRolesCommand(ctx, interaction);
     case 'update_leaderboard':
       return updateLeaderboardCmd(ctx, interaction);
+    case 'toggle_nicknames':
+      return toggleNicknamesCmd(ctx, interaction);
+    case 'sync_nicknames':
+      return syncNicknamesCmd(ctx, interaction);
     case 'adminpanel':
       return openPanel(ctx, interaction);
     default:
@@ -462,6 +484,7 @@ async function setupCmd(ctx, interaction) {
     lastLeaderboardRefresh: createdAt,
     lastLeaderboardUpdate: createdAt,
     lastHourlyLeaderboardRefresh: createdAt,
+    nicknamesEnabled: existing?.nicknamesEnabled !== false,
   };
   ctx.store.setGuild(cfg);
   await ctx.store.flush();
@@ -515,6 +538,10 @@ async function helpCmd(ctx, interaction) {
       `**${commandMention(ctx, 'level_roles', interaction.guildId)}**\n${t('levelRolesHelp', lang)}`,
       '',
       `**${commandMention(ctx, 'update_leaderboard', interaction.guildId)}**\n${t('updateLeaderboardHelp', lang)}`,
+      '',
+      `**${commandMention(ctx, 'toggle_nicknames', interaction.guildId)}**\n${t('toggleNicknamesHelp', lang)}`,
+      '',
+      `**${commandMention(ctx, 'sync_nicknames', interaction.guildId)}**\n${t('syncNicknamesHelp', lang)}`,
       '',
       `**${commandMention(ctx, 'help', interaction.guildId)}**\n${t('helpHelp', lang)}`,
     ].join('\n'))
@@ -610,6 +637,129 @@ async function updateLeaderboardCmd(ctx, interaction) {
   }
   return interaction.editReply(
     componentsV2Payload([smallContainer(null, t('updateLeaderboardFailed', lang))])
+  );
+}
+
+/**
+ * Gemeinsame Gates für Admin-Commands, die /setup voraussetzen.
+ * Gibt entweder `{ error: payload }` oder `{ cfg, lang, guildId }` zurück.
+ */
+function requireAdminSetup(ctx, interaction) {
+  if (!interaction.inGuild?.() && !interaction.guildId) {
+    return { error: componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }) };
+  }
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    return { error: componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }) };
+  }
+  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
+  const cfg = ctx.store.getGuild(guildId);
+  const lang = cfg?.lang || langFromDiscord(interaction.locale);
+  if (!perms?.has(PermissionFlagsBits.Administrator)) {
+    return { error: componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }) };
+  }
+  if (!cfg || !cfg.leaderboardChannelId) {
+    return { error: componentsV2Payload([smallContainer(null, t('errNoSetup', lang))], { ephemeral: true }) };
+  }
+  return { cfg, lang, guildId };
+}
+
+function progressBar(done, total, size = 12) {
+  if (!total) return '░'.repeat(size);
+  const filled = Math.max(0, Math.min(size, Math.round((done / total) * size)));
+  return '█'.repeat(filled) + '░'.repeat(size - filled);
+}
+
+function formatSyncProgress(lang, stats) {
+  const percent = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
+  return t('syncNicknamesProgress', lang, {
+    bar: progressBar(stats.done, stats.total),
+    percent,
+    done: stats.done,
+    total: stats.total,
+    updated: stats.updated,
+    unchanged: stats.unchanged,
+    failed: stats.failed,
+  });
+}
+
+function formatSyncDone(lang, stats) {
+  return t('syncNicknamesDone', lang, {
+    mode: stats.enabled ? t('syncNicknamesModeOn', lang) : t('syncNicknamesModeOff', lang),
+    total: stats.total,
+    updated: stats.updated,
+    unchanged: stats.unchanged,
+    failed: stats.failed,
+  });
+}
+
+/**
+ * /toggle_nicknames enabled:<bool> – Admin: Nickname-Tags an/aus.
+ * Standard ist an. Nur nach einmaligem /setup änderbar.
+ */
+async function toggleNicknamesCmd(ctx, interaction) {
+  const gate = requireAdminSetup(ctx, interaction);
+  if (gate.error) return interaction.reply(gate.error);
+
+  const enabled = interaction.options.getBoolean('enabled') === true;
+  gate.cfg.nicknamesEnabled = enabled;
+  ctx.store.setGuild(gate.cfg);
+  await ctx.store.flush();
+
+  const msg = enabled ? t('toggleNicknamesOn', gate.lang) : t('toggleNicknamesOff', gate.lang);
+  return interaction.reply(componentsV2Payload([smallContainer(null, msg)], { ephemeral: true }));
+}
+
+/**
+ * /sync_nicknames – Admin: alle Mitglieder durchgehen und Tags setzen oder entfernen.
+ * Zeigt sofort den Discord-Ladebildschirm (defer) und danach einen Fortschrittsbalken,
+ * weil große Server viele Nickname-Updates brauchen können.
+ */
+async function syncNicknamesCmd(ctx, interaction) {
+  const gate = requireAdminSetup(ctx, interaction);
+  if (gate.error) return interaction.reply(gate.error);
+
+  const { isSyncRunning, withSyncLock, syncAllNicknames } = require('./nicknames');
+  if (isSyncRunning(gate.guildId)) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('syncNicknamesAlreadyRunning', gate.lang))], { ephemeral: true })
+    );
+  }
+
+  // Sofort deferren → Discord zeigt in der Command-Übersicht den Ladebildschirm.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  let guild = interaction.guild;
+  if (!guild) {
+    guild = ctx.client?.guilds?.cache?.get(gate.guildId)
+      || (await ctx.client?.guilds?.fetch?.(gate.guildId).catch(() => null));
+  }
+  if (!guild) {
+    return interaction.editReply(componentsV2Payload([smallContainer(null, t('errGeneric', gate.lang))]));
+  }
+
+  await interaction.editReply(
+    componentsV2Payload([smallContainer(null, t('syncNicknamesFetching', gate.lang))])
+  ).catch(() => {});
+
+  const result = await withSyncLock(guild.id, () =>
+    syncAllNicknames(ctx, guild, gate.lang, {
+      onProgress: async (stats) => {
+        await interaction.editReply(
+          componentsV2Payload([smallContainer(null, formatSyncProgress(gate.lang, stats))])
+        ).catch(() => {});
+      },
+    })
+  );
+
+  if (result?.alreadyRunning) {
+    return interaction.editReply(
+      componentsV2Payload([smallContainer(null, t('syncNicknamesAlreadyRunning', gate.lang))])
+    );
+  }
+
+  return interaction.editReply(
+    componentsV2Payload([smallContainer(null, formatSyncDone(gate.lang, result))])
   );
 }
 
