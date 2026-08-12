@@ -916,6 +916,18 @@ const T = {
     zh: '📖 帮助与命令 – XP 等级机器人',
     it: '📖 Aiuto e comandi – XP Level Bot',
   },
+  helpBonus: {
+    de: 'Zwischendurch fallen im Haupt-Chat Bonus-Geschenke (20–40 XP). Wer zuerst auf **Einsammeln** klickt, gewinnt!',
+    en: 'Bonus gifts (20–40 XP) drop in the main chat. First to hit **Claim** wins!',
+    fr: 'Des bonus (20–40 XP) tombent dans le chat principal. Le premier à cliquer sur **Récupérer** gagne !',
+    es: 'Caen regalos extra (20–40 XP) en el chat principal. ¡El primero en pulsar **Recoger** gana!',
+    pt: 'Presentes bônus (20–40 XP) caem no chat principal. Quem clicar primeiro em **Coletar** ganha!',
+    ru: 'В основном чате выпадают бонусы (20–40 XP). Кто первым нажмёт **Забрать**, тот и выиграл!',
+    ja: 'メインチャットにボーナス（20–40 XP）が落ちるよ。**受け取る**を最初に押した人の勝ち！',
+    ko: '메인 채팅에 보너스(20–40 XP)가 떨어져요. **받기**를 먼저 누른 사람이 가져가요!',
+    zh: '主频道会掉落额外奖励（20–40 XP）。谁先点 **领取** 谁就赢！',
+    it: 'Nel chat principale cadono bonus (20–40 XP). Chi clicca prima su **Riscuoti** vince!',
+  },
   helpDesc: {
     de: 'Hier findest du alle Befehle des XP-Bots – werde zum Chat-Champion! 👇✨',
     en: 'Here are all the XP bot’s commands – become the chat champion! 👇✨',

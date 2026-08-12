@@ -536,6 +536,8 @@ async function helpCmd(ctx, interaction) {
       `# ${t('helpTitle', lang)}`,
       t('helpDesc', lang),
       '',
+      `🎁 ${t('helpBonus', lang)}`,
+      '',
       `**${commandMention(ctx, 'setup', interaction.guildId)}**\n${t('helpSetup', lang)}`,
       '',
       `**${commandMention(ctx, 'rank', interaction.guildId)}**\n${t('helpRank', lang)}`,

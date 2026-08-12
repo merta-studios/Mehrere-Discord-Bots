@@ -2,15 +2,28 @@
  * Geplante XP-Belohnungen im Haupt-Chat.
  *
  * Pro Server entstehen täglich 2–4 deterministische Termine (Server-ID +
- * lokales Datum). Der Scheduler prüft unabhängig vom Leaderboard minütlich.
- * Überfällige Termine werden nicht mehr nach wenigen Minuten für immer
- * verworfen: Nach Schlaf/Deployment wird der jüngste verpasste Termin einmalig
- * nachgeholt; ältere Rückstände werden als übersprungen markiert, damit keine
- * Geschenk-Flut entsteht.
+ * lokales Datum). Geprüft wird an ZWEI Stellen, damit ein hängender
+ * Ready-Handler oder ein toter setInterval die Drops nicht wieder verschluckt:
+ *   1. eigener Minuten-Scheduler (unabhängig vom Leaderboard)
+ *   2. jede echte Chat-Nachricht (gedrosselt) – genau dann sind Leute online
+ *      und können „schnell sein“
  *
- * Ein offener Drop wird vollständig in `bonusState.activeDrop` persistiert.
- * Dadurch funktioniert sein Button auch nach einem Bot-/Render-Neustart weiter.
+ * Überfällige Termine: der jüngste wird nachgeholt, ältere ohne Spam
+ * abgeschlossen. firedSlots ohne lastSentAt gelten als unzuverlässig und
+ * werden verworfen (genau das hat nach dem letzten „Fix“ den ganzen Tag
+ * leer gefegt).
+ *
+ * Senden: zuerst Components V2, bei Ablehnung klassisches Embed + Button,
+ * zuletzt Plain-Text + Button. Ein offener Drop bleibt in
+ * `bonusState.activeDrop` und überlebt Restarts.
  */
+
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require('discord.js');
 
 const {
   rollBonusXp,
@@ -31,7 +44,10 @@ const {
 const { componentsV2Payload } = require('./message-payload');
 
 const BONUS_CLAIM_PREFIX = 'xp_bonus_claim_';
-const BONUS_PLAN_VERSION = 2; // v2: alle Slots liegen eindeutig im selben Kalendertag
+// v3: firedSlots älterer Versionen sind untrusted (wurden als „gesendet“
+// markiert, ohne dass je eine Nachricht im Chat landete).
+const BONUS_PLAN_VERSION = 3;
+const BONUS_ACTIVITY_KICK_MS = 10_000;
 
 function randomDropId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -71,11 +87,38 @@ function dropIsExpired(drop, nowMs = Date.now()) {
   return nowMs - created >= BONUS_CLAIM_MS;
 }
 
+function prettySlot(minute) {
+  const m = asMinute(minute);
+  if (m === null) return '?';
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+
+function claimButton(lang, dropId, { disabled = false } = {}) {
+  return new ButtonBuilder()
+    .setCustomId(`${BONUS_CLAIM_PREFIX}${dropId}`)
+    .setStyle(ButtonStyle.Success)
+    .setLabel(t('bonusBtn', lang))
+    .setDisabled(disabled);
+}
+
+function classicBonusPayload({ title, body, dropId, lang, disabled = false }) {
+  return {
+    embeds: [
+      new EmbedBuilder()
+        .setTitle(title)
+        .setDescription(`${body}\n\u200Bxp-bonus:${dropId}\u200B`),
+    ],
+    components: [new ActionRowBuilder().addComponents(claimButton(lang, dropId, { disabled }))],
+  };
+}
+
 function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random }) {
   // guildId -> { activeDrop }
   const states = new Map();
   // dropId -> vollständig hydrierter Drop für den Button-Handler
   const drops = new Map();
+  // guildId -> letzter Activity-Kick (damit Chatten den Scheduler ergänzt)
+  const lastActivityKick = new Map();
 
   function stateFor(guildId) {
     let state = states.get(guildId);
@@ -86,12 +129,18 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     return state;
   }
 
-  /** Persistierter Tageszustand; einen noch gültigen offenen Drop bewahren. */
+  /** Persistierter Tageszustand; nur einen noch GÜLTIGEN offenen Drop bewahren. */
   function dayState(cfg, dayKey) {
     let state = cfg.bonusState;
     if (!state || state.dayKey !== dayKey) {
-      const open = state?.activeDrop || null;
-      state = { dayKey, planVersion: BONUS_PLAN_VERSION, firedSlots: [], activeDrop: open };
+      const open = state?.activeDrop && !dropIsExpired(state.activeDrop) ? state.activeDrop : null;
+      state = {
+        dayKey,
+        planVersion: BONUS_PLAN_VERSION,
+        firedSlots: [],
+        activeDrop: open,
+        lastSentAt: 0,
+      };
       cfg.bonusState = state;
       ctx.store.setGuild(cfg);
     }
@@ -104,8 +153,10 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
       dayKey: todayKey(cfg.lang || 'de'),
       planVersion: BONUS_PLAN_VERSION,
       firedSlots: [],
+      lastSentAt: 0,
     };
     state.activeDrop = drop ? serializedDrop(drop) : null;
+    if (drop) state.lastSentAt = Date.now();
     cfg.bonusState = state;
     ctx.store.setGuild(cfg);
     void ctx.store.flush().catch(() => {});
@@ -149,8 +200,26 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     return drop;
   }
 
+  function unstickFiredSlots(daySt, cfg, guild) {
+    const untrustedVersion = daySt.planVersion !== BONUS_PLAN_VERSION;
+    const untrustedSlots = !daySt.lastSentAt && daySt.firedSlots.length > 0;
+    if (!untrustedVersion && !untrustedSlots) return false;
+    ctx.logger.warn?.(
+      `[xp-level-bot] Bonus-Plan ${guild?.name || cfg.guildId}: untrusted firedSlots ` +
+        `(v${daySt.planVersion ?? '?'} → v${BONUS_PLAN_VERSION}, lastSentAt=${daySt.lastSentAt || 0}, ` +
+        `slots=${JSON.stringify(daySt.firedSlots)}) – setze zurück`
+    );
+    daySt.firedSlots = [];
+    daySt.planVersion = BONUS_PLAN_VERSION;
+    daySt.lastSentAt = 0;
+    cfg.bonusState = daySt;
+    ctx.store.setGuild(cfg);
+    void ctx.store.flush().catch(() => {});
+    return true;
+  }
+
   /**
-   * Minütlicher Scheduler-Einstieg. Der jüngste fällige/verpasste Slot wird
+   * Scheduler- und Chat-Einstieg. Der jüngste fällige/verpasste Slot wird
    * gesendet. Sind mehrere Termine wegen Downtime überfällig, wird nur der
    * jüngste nachgeholt und der ältere Rückstand ohne Spam abgeschlossen.
    */
@@ -174,17 +243,24 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     if (runtimeState.activeDrop && !dropIsExpired(runtimeState.activeDrop)) return false;
 
     const plan = planDailyBonusSlots(cfg.guildId, dayKey, seededRngForDay(cfg.guildId, dayKey));
-    if (daySt.planVersion !== BONUS_PLAN_VERSION) {
-      // Nur exakt gleiche Minuten behalten. Eine reine Längen-Abbildung hat
-      // komplette Tage als „schon gesendet“ markiert, ohne dass ein Drop
-      // sichtbar wurde.
-      daySt.firedSlots = plan.filter((slot) => hasSlot(daySt.firedSlots, slot));
-      daySt.planVersion = BONUS_PLAN_VERSION;
+    unstickFiredSlots(daySt, cfg, guild);
+
+    const minuteOfDay = currentMinuteOfDay(lang, now);
+    if (!Number.isFinite(minuteOfDay)) {
+      ctx.logger.warn?.(
+        `[xp-level-bot] Bonus: ungültige Ortszeit für ${guild?.name || cfg.guildId} (lang=${lang})`
+      );
+      return false;
+    }
+    if (!daySt.loggedPlan) {
+      ctx.logger.info?.(
+        `[xp-level-bot] Bonus-Plan ${guild?.name || cfg.guildId} ${dayKey}: ` +
+          `${plan.map(prettySlot).join(', ') || '–'} (jetzt ${prettySlot(minuteOfDay)})`
+      );
+      daySt.loggedPlan = true;
       cfg.bonusState = daySt;
       ctx.store.setGuild(cfg);
-      void ctx.store.flush().catch(() => {});
     }
-    const minuteOfDay = currentMinuteOfDay(lang, now);
     const ready = plan
       .filter((slot) => slot <= minuteOfDay && !hasSlot(daySt.firedSlots, slot))
       .sort((a, b) => a - b);
@@ -195,6 +271,22 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     const due = ready[ready.length - 1];
     const skipped = ready.slice(0, -1);
     return sendDrop(cfg, guild, daySt, due, skipped);
+  }
+
+  /**
+   * Von messageCreate: prüft fällige Drops, sobald wirklich jemand schreibt.
+   * Gedrosselt, damit ein aktiver Chat den Discord-Rate-Limit nicht sprengt.
+   */
+  function kickFromActivity(cfg, guild, now = new Date()) {
+    if (!cfg?.guildId) return Promise.resolve(false);
+    const ts = Date.now();
+    const last = lastActivityKick.get(cfg.guildId) || 0;
+    if (ts - last < BONUS_ACTIVITY_KICK_MS) return Promise.resolve(false);
+    lastActivityKick.set(cfg.guildId, ts);
+    return checkScheduled(cfg, guild, now).catch((err) => {
+      ctx.logger.warn?.(`[xp-level-bot] Bonus-Kick fehlgeschlagen: ${err?.message || err}`);
+      return false;
+    });
   }
 
   async function fetchTextChannel(channelId, guild) {
@@ -220,22 +312,51 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     return fetchTextChannel(cfg.leaderboardChannelId, guild);
   }
 
+  async function sendBonusMessage(channel, { lang, xp, dropId, guildName }) {
+    const label = guildName || channel?.id || '?';
+    try {
+      return await channel.send(componentsV2Payload([buildBonusDropEmbed({ lang, xp, dropId })]));
+    } catch (err) {
+      ctx.logger.warn?.(
+        `[xp-level-bot] Bonus V2-Send fehlgeschlagen (${label}): ${err?.message || err} – versuche klassisches Embed`
+      );
+    }
+    try {
+      return await channel.send(
+        classicBonusPayload({
+          title: t('bonusTitle', lang),
+          body: t('bonusBody', lang, { xp }),
+          dropId,
+          lang,
+        })
+      );
+    } catch (err) {
+      ctx.logger.warn?.(
+        `[xp-level-bot] Bonus Embed-Send fehlgeschlagen (${label}): ${err?.message || err} – versuche Plain-Text`
+      );
+    }
+    try {
+      return await channel.send({
+        content: `# ${t('bonusTitle', lang)}\n${t('bonusBody', lang, { xp })}\n\u200Bxp-bonus:${dropId}\u200B`,
+        components: [new ActionRowBuilder().addComponents(claimButton(lang, dropId))],
+      });
+    } catch (err) {
+      ctx.logger.warn?.(`[xp-level-bot] Bonus-Drop Send komplett fehlgeschlagen (${label}): ${err?.message || err}`);
+      return null;
+    }
+  }
+
   async function sendDrop(cfg, guild, daySt, slot, skippedSlots = []) {
     const lang = cfg.lang || 'de';
     const channel = await resolveMainChannel(cfg, guild);
     if (!channel) {
-      ctx.logger.warn(`[xp-level-bot] Bonus-Hauptkanal ${cfg.mainChannelId} in ${guild.name} nicht erreichbar`);
+      ctx.logger.warn(`[xp-level-bot] Bonus-Hauptkanal ${cfg.mainChannelId} in ${guild?.name || cfg.guildId} nicht erreichbar`);
       return false;
     }
 
     const xp = rollBonusXp(rng);
     const dropId = randomDropId();
-    const sent = await channel
-      .send(componentsV2Payload([buildBonusDropEmbed({ lang, xp, dropId })]))
-      .catch((err) => {
-        ctx.logger.warn(`[xp-level-bot] Bonus-Drop Send fehlgeschlagen (${guild.name}): ${err?.message || err}`);
-        return null;
-      });
+    const sent = await sendBonusMessage(channel, { lang, xp, dropId, guildName: guild?.name });
     if (!sent) return false;
 
     const drop = {
@@ -255,8 +376,9 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     drops.set(dropId, drop);
 
     // Erst nach erfolgreichem Discord-Send abschließen. So werden Sendefehler
-    // beim nächsten Minutentick automatisch erneut versucht.
+    // beim nächsten Tick / der nächsten Nachricht automatisch erneut versucht.
     daySt.firedSlots = normalizeFiredSlots([...daySt.firedSlots, ...skippedSlots, slot]);
+    daySt.planVersion = BONUS_PLAN_VERSION;
     cfg.bonusState = daySt;
     persistOpenDrop(cfg, drop);
 
@@ -264,7 +386,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
       ? `, Nachholung; ${skippedSlots.length} älter übersprungen`
       : '';
     ctx.logger.info(
-      `[xp-level-bot] Bonus-Drop in ${guild.name}: ${xp} XP, Slot ${slot} (${daySt.dayKey}${catchup})`
+      `[xp-level-bot] Bonus-Drop in ${guild?.name || cfg.guildId}: ${xp} XP, Slot ${prettySlot(slot)} (${daySt.dayKey}${catchup})`
     );
     return true;
   }
@@ -289,6 +411,34 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     clearPersistedDrop(drop);
   }
 
+  async function editDropMessage(message, { kind, lang, xp, dropId, claimerId }) {
+    const v2 = kind === 'claimed'
+      ? buildBonusClaimedEmbed({ lang, xp, claimerId, dropId })
+      : buildBonusExpiredEmbed({ lang, xp, dropId });
+    try {
+      await message.edit(componentsV2Payload([v2]));
+      return;
+    } catch (err) {
+      ctx.logger.warn?.(
+        `[xp-level-bot] Bonus-${kind} V2-Edit fehlgeschlagen: ${err?.message || err} – versuche klassisches Embed`
+      );
+    }
+    const classic = classicBonusPayload({
+      title: t(kind === 'claimed' ? 'bonusClaimedTitle' : 'bonusExpiredTitle', lang),
+      body: kind === 'claimed'
+        ? t('bonusClaimedBody', lang, { user: `<@${claimerId}>`, xp })
+        : t('bonusExpiredBody', lang, { xp }),
+      dropId,
+      lang,
+      disabled: true,
+    });
+    try {
+      await message.edit(classic);
+    } catch (err) {
+      ctx.logger.warn?.(`[xp-level-bot] Bonus-${kind} Edit komplett fehlgeschlagen: ${err?.message || err}`);
+    }
+  }
+
   /** Drop ohne Gewinner verfallen lassen und den Button deaktivieren. */
   async function expireDrop(dropId) {
     const drop = drops.get(dropId);
@@ -297,9 +447,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     try {
       const message = drop.message || (await fetchDropMessage(drop));
       if (message) {
-        await message.edit(
-          componentsV2Payload([buildBonusExpiredEmbed({ lang: drop.lang, xp: drop.xp, dropId })])
-        );
+        await editDropMessage(message, { kind: 'expired', lang: drop.lang, xp: drop.xp, dropId });
       }
     } catch (err) {
       ctx.logger.warn?.(`[xp-level-bot] Bonus-Verfallsnachricht ${dropId} konnte nicht editiert werden: ${err?.message || err}`);
@@ -321,9 +469,13 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     if (!drop || drop.claimedBy || Date.now() - drop.createdAt >= BONUS_CLAIM_MS) {
       if (drop && !drop.claimedBy) await expireDrop(drop.dropId);
       const lang = storedCfg?.lang || 'en';
-      return interaction.reply(
-        componentsV2Payload([smallContainer(null, t('bonusGone', lang))], { ephemeral: false })
-      );
+      try {
+        return await interaction.reply(
+          componentsV2Payload([smallContainer(null, t('bonusGone', lang))], { ephemeral: false })
+        );
+      } catch {
+        return interaction.reply({ content: t('bonusGone', lang) }).catch(() => {});
+      }
     }
 
     // Vor dem ersten await setzen: Im JS-Event-Loop kann kein zweiter Handler gewinnen.
@@ -341,11 +493,25 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     ctx.store.setUser(user);
     const levelFlush = res.leveled ? ctx.store.flush().catch(() => {}) : null;
 
-    await interaction.update(
-      componentsV2Payload([
-        buildBonusClaimedEmbed({ lang, xp: drop.xp, claimerId: interaction.user.id, dropId }),
-      ])
-    );
+    try {
+      await interaction.update(
+        componentsV2Payload([
+          buildBonusClaimedEmbed({ lang, xp: drop.xp, claimerId: interaction.user.id, dropId }),
+        ])
+      );
+    } catch {
+      await interaction.update(
+        classicBonusPayload({
+          title: t('bonusClaimedTitle', lang),
+          body: t('bonusClaimedBody', lang, { user: `<@${interaction.user.id}>`, xp: drop.xp }),
+          dropId,
+          lang,
+          disabled: true,
+        })
+      ).catch((err) => {
+        ctx.logger.warn?.(`[xp-level-bot] Bonus-Claim Update fehlgeschlagen: ${err?.message || err}`);
+      });
+    }
     await interaction
       .followUp(
         componentsV2Payload([smallContainer(null, t('bonusClaimedYou', lang, { xp: drop.xp }))], {
@@ -374,6 +540,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
 
   return {
     checkScheduled,
+    kickFromActivity,
     handleClaim,
     expireDrop,
     restorePersistedDrop,
@@ -382,4 +549,4 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
   };
 }
 
-module.exports = { createBonusDropper, BONUS_CLAIM_PREFIX };
+module.exports = { createBonusDropper, BONUS_CLAIM_PREFIX, BONUS_PLAN_VERSION, BONUS_ACTIVITY_KICK_MS };

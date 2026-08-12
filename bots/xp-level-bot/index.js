@@ -11,10 +11,10 @@
  *  - Level-Rollen: /level_roles (Admin-Formular) erstellt/sortiert Belohnungsrollen,
  *    Sync bei Level Up/Down (mehrere Rollen, nie entfernen)
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
- *  - Bonus-Drops: Geplant & zeitgesteuert – 2–4 feste Termine pro Tag (06:00–23:59
- *    Ortszeit, mind. 1h Abstand, pro Server unterschiedlich & stabil) senden eine
- *    XP-Belohnung (20–40 XP) mit „Einsammeln“-Button; der erste Klick gewinnt,
- *    der Drop ist 1 Stunde gültig und überlebt Restarts. Einsammeln setzt den Decay wieder auf 5%
+ *  - Bonus-Drops: Geplant 2–4×/Tag (06:00–23:59 Ortszeit) PLUS Nachholung beim
+ *    Chatten, falls ein Termin verpasst wurde. 20–40 XP, „Einsammeln“-Button,
+ *    erster Klick gewinnt, 1 Stunde gültig, überlebt Restarts. Einsammeln setzt
+ *    den Decay wieder auf 5%
  *  - Täglich 0 Uhr (TZ pro Sprache): 5% Decay; wer 24h keine XP verdient hat,
  *    bekommt +3 Prozentpunkte pro weiterem inaktivem Tag (5→8→11→14%…),
  *    Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
@@ -122,6 +122,18 @@ module.exports = {
     client.once(Events.ClientReady, async () => {
       updatePresence();
 
+      // Scheduler & Voice ZUERST starten. registerCommands hängt an Discord-REST
+      // (Retries, kein hartes Timeout) – genau das hat Bonus-Drops zuvor
+      // unsichtbar gemacht, weil der Minuten-Tick nie anlief, während XP und
+      // alte Slash-Commands trotzdem funktionierten.
+      schedulerStop = startScheduler({ ctx });
+      voiceTracker = createVoiceTracker({ client, store, logger, getGuildConfig: (gid) => store.getGuild(gid) });
+      voiceTracker.start();
+      logger.info(
+        `[xp-level-bot] Scheduler & Voice laufen – Bonus-Ticks aktiv. ` +
+          `${client.guilds.cache.size} Server, ${store.getAllUsersCount()} Nutzer im RAM`
+      );
+
       // Laute, sofort sichtbare Warnung: mit gesetztem Dev-Guild-Scope werden
       // ALLE Commands (inkl. /toggle_nicknames & /sync_nicknames) NUR in dieser
       // einen Gilde registriert – auf normalen Servern fehlen sie dann und
@@ -135,7 +147,7 @@ module.exports = {
         );
       }
 
-      // Command-Registrierung beim Start zuverlässig ausführen und awaiten
+      // Command-Registrierung NACH dem Scheduler. Darf ihn nicht mehr blockieren.
       try {
         await registerCommands(ctx);
         // Direkt danach prüfen (und laut loggen), ob Discord wirklich ALLE
@@ -158,12 +170,7 @@ module.exports = {
           }
         } catch {}
       }
-      schedulerStop = startScheduler({ ctx });
-      voiceTracker = createVoiceTracker({ client, store, logger, getGuildConfig: (gid) => store.getGuild(gid) });
-      voiceTracker.start();
-      logger.info(
-        `[xp-level-bot] Bereit auf ${client.guilds.cache.size} Servern – ${store.getAllUsersCount()} Nutzer im RAM`
-      );
+      logger.info(`[xp-level-bot] Bereit auf ${client.guilds.cache.size} Servern`);
     });
 
     // ---------------- Bonus-Belohnungen (Zufalls-XP-Drops im Haupt-Chat) ----------------
@@ -213,8 +220,12 @@ module.exports = {
         // nicht eingerichtet (oder nur Level-Rollen ohne /setup): kein XP, kein Bonus
         if (!cfg || !cfg.leaderboardChannelId) return;
 
-        // Bonus-System läuft zeitgesteuert (geplante Drops, siehe Scheduler) –
-        // es hängt nicht mehr an Nachrichten-Aktivität im Haupt-Chat.
+        // Bonus zusätzlich am Chat hängen: Wenn der Minuten-Scheduler hängt
+        // oder ein Slot verpasst wurde, erscheint der Drop genau dann, wenn
+        // Leute online sind und schnell klicken können.
+        if (bonusDropper?.kickFromActivity) {
+          void bonusDropper.kickFromActivity(cfg, msg.guild);
+        }
 
         const content = msg.content || '';
 
