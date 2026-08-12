@@ -32,7 +32,7 @@ const {
   planDailyBonusSlots,
   isSlotDue,
 } = require('../bots/xp-level-bot/src/logic');
-const { createBonusDropper, BONUS_CLAIM_PREFIX } = require('../bots/xp-level-bot/src/bonus');
+const { createBonusDropper, BONUS_CLAIM_PREFIX, BONUS_PLAN_VERSION } = require('../bots/xp-level-bot/src/bonus');
 const { createXpStore } = require('../bots/xp-level-bot/src/store');
 
 // ---------------------------------------------------------------------------
@@ -414,6 +414,68 @@ test('Bonus-Drop: nach Scheduler-Ausfall wird genau der jüngste verpasste Slot 
   assert.equal(h.sentMessages.length, 1);
   const expectedHandled = plan.filter((slot) => slot <= latest);
   assert.deepEqual(h.cfg.bonusState.firedSlots, expectedHandled);
+});
+
+test('Bonus-Drop: alte firedSlots ohne lastSentAt werden nicht mehr als „schon gesendet“ geglaubt', async () => {
+  const h = makeBonusHarness();
+  const day = todayKey('de');
+  const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
+  h.cfg.bonusState = {
+    dayKey: day,
+    planVersion: 2, // der Stand nach dem letzten „Fix“, der nie sichtbar gesendet hat
+    firedSlots: [...plan],
+    activeDrop: null,
+  };
+  await h.dropper.checkScheduled(h.cfg, h.guild, dateWithTzMinute(plan[0]));
+  assert.equal(h.sentMessages.length, 1, 'Lügen-Slots dürfen den Tag nicht leer fegen');
+  assert.equal(h.cfg.bonusState.planVersion, BONUS_PLAN_VERSION);
+  assert.ok(h.cfg.bonusState.lastSentAt > 0, 'erfolgreicher Send setzt lastSentAt');
+});
+
+test('Bonus-Drop: echte Sends (lastSentAt) werden nicht nochmal nachgeholt', async () => {
+  const h = makeBonusHarness();
+  const day = todayKey('de');
+  const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
+  h.cfg.bonusState = {
+    dayKey: day,
+    planVersion: BONUS_PLAN_VERSION,
+    firedSlots: [...plan],
+    activeDrop: null,
+    lastSentAt: Date.now() - 60_000,
+  };
+  await h.dropper.checkScheduled(h.cfg, h.guild, dateWithTzMinute(plan[plan.length - 1]));
+  assert.equal(h.sentMessages.length, 0, 'bereits wirklich gesendete Slots bleiben abgeschlossen');
+});
+
+test('Bonus-Drop: wenn Components V2 scheitert, kommt klassisches Embed + Button', async () => {
+  const h = makeBonusHarness();
+  const originalSend = h.channel.send;
+  h.channel.send = async (payload) => {
+    if (payload && payload.flags && !payload.embeds) {
+      throw new Error('Invalid Form Body: components v2 rejected');
+    }
+    return originalSend(payload);
+  };
+  const day = todayKey('de');
+  const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
+  await h.dropper.checkScheduled(h.cfg, h.guild, dateWithTzMinute(plan[0]));
+  assert.equal(h.sentMessages.length, 1, 'Fallback muss senden');
+  const text = payloadText(h.sentMessages[0]);
+  assert.ok(text.includes(BONUS_CLAIM_PREFIX) || text.includes('embeds') || text.includes('Einsammeln'), 'Button bleibt erhalten');
+});
+
+test('Bonus-Drop: Chat-Kick holt einen überfälligen Slot nach und drosselt Folge-Kicks', async () => {
+  const h = makeBonusHarness();
+  const day = todayKey('de');
+  const plan = planDailyBonusSlots('g1', day, seededRngForDay('g1', day));
+  const now = dateWithTzMinute(plan[0]);
+  const first = await h.dropper.kickFromActivity(h.cfg, h.guild, now);
+  assert.equal(first, true);
+  assert.equal(h.sentMessages.length, 1);
+  // Zweiter Kick innerhalb der Drossel: kein zweiter Discord-Send-Versuch
+  const second = await h.dropper.kickFromActivity(h.cfg, h.guild, now);
+  assert.equal(second, false);
+  assert.equal(h.sentMessages.length, 1);
 });
 
 test('Bonus-Drop: offener Einsammeln-Button funktioniert nach Bot-Neustart weiter', async () => {

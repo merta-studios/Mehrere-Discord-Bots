@@ -227,6 +227,7 @@ Kurzfassung – Details siehe [`bots/xp-level-bot/README.md`](bots/xp-level-bot/
 - **`/rank`** (alle): Platz, Level, `xp/needed`, Balken & fehlende XP.
 - **`/update_leaderboard`** (nur Admins): rendert das Leaderboard **sofort** neu
   (z. B. nach manuellen Änderungen) – **5-Minuten-Cooldown** gegen Spam.
+- **Bonus-Geschenke**: 2–4 geplante Drops/Tag im Haupt-Chat (20–40 XP, Einsammeln-Button). Verpasste Termine werden nachgeholt, sobald jemand schreibt – nicht nur vom Minuten-Timer.
 - **`/help` + `/admin_set_bot_profile` + `/adminpanel`** – identisch zum Birthday Bot, mit XP-Details.
 - **Nicknames**: `[Lvl X 🥇] Name` – nur Top 3 mit Medaille, bei Auf-/Abstieg sofort. **Verrückte Plätze werden zuverlässig nachgezogen** (Top-5-Refresh bei jedem Level-Change, XP-only-Überholer alle 2 Min geprüft), 32-Zeichen-Cap, Rechte-Fehler → Ping im Haupt-Chat (außer für den Server-Owner).
 - **Turso**: **RAM-first**, ein Batch-Load beim Start, alle Ops im RAM, Flush nur bei `SIGTERM`, alle 5 Min & bei Level-Change – spart Limits extrem.
