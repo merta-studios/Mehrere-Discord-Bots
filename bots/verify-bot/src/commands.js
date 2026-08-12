@@ -55,7 +55,9 @@ function defineCommands() {
   const languageChoices = Object.keys(LANGS).map((code) => ({
     value: code,
     name: LANGS[code].name,
-    name_localizations: LANGS[code].names,
+    name_localizations: Object.fromEntries(
+      Object.entries(LANGS[code].names).map(([c, n]) => [DISCORD_LOCALE[c], n])
+    ),
   }));
 
   return [

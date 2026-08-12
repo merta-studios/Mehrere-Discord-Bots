@@ -34,6 +34,7 @@ const {
   parseRequestMessage,
   extractAllText,
 } = require('../bots/verify-bot/src/embed-builder');
+const { defineCommands } = require('../bots/verify-bot/src/commands');
 
 function containerToMessage(container) {
   const json = container.toJSON();
@@ -186,4 +187,49 @@ test('Text-Säuberung: Regeln behalten Markdown, Button-Name wird einzeilig', ()
   const rules = sanitizeRules('  Zeile 1\n\nZeile 2  ');
   assert.equal(rules, 'Zeile 1\n\nZeile 2');
   assert.equal(sanitizeButtonName('  ✅\nVerifizieren  '), '✅ Verifizieren');
+});
+
+// ---------------------------------------------------------------------------
+// Slash-Command-Definitionen: alle Commands müssen baubar & Discord-API-valide
+// sein. Regression: languageChoices nutzte rohe Sprachcodes (de, en, es, pt, zh)
+// statt Discord-Locale-Codes (de, en-US, es-ES, pt-BR, zh-CN) als
+// name_localizations-Keys. @discordjs/builders warf dadurch schon beim Bauen –
+// defineCommands() scheiterte, registerCommands() fing den Fehler still ab und
+// KEIN Command des Verify-Bots wurde registriert.
+// ---------------------------------------------------------------------------
+
+const VALID_LOCALES = new Set([
+  'id', 'da', 'de', 'en-GB', 'en-US', 'es-ES', 'es-419', 'fr', 'hr', 'it', 'lt',
+  'hu', 'nl', 'no', 'pl', 'pt-BR', 'ro', 'fi', 'sv-SE', 'vi', 'tr', 'cs', 'el',
+  'bg', 'ru', 'uk', 'hi', 'th', 'zh-CN', 'ja', 'zh-TW', 'ko',
+]);
+
+function assertValidLocales(map, path) {
+  for (const [locale] of Object.entries(map || {})) {
+    assert.ok(VALID_LOCALES.has(locale), `${path}: ungültige Discord-Locale "${locale}"`);
+  }
+}
+
+test('alle 7 Slash-Commands des Verify-Bots sind baubar und Discord-API-valide', () => {
+  const cmds = defineCommands().map((c) => c.toJSON());
+  assert.equal(cmds.length, 7);
+  assert.deepEqual(
+    cmds.map((c) => c.name),
+    ['create_verify_rules', 'create_classic_rules', 'set_verify_form', 'set_language', 'admin_set_bot_profile', 'help', 'adminpanel']
+  );
+
+  for (const cmd of cmds) {
+    assertValidLocales(cmd.name_localizations, `${cmd.name}.name`);
+    assertValidLocales(cmd.description_localizations, `${cmd.name}.description`);
+    for (const [locale, value] of Object.entries(cmd.description_localizations || {})) {
+      assert.ok(value.length >= 1 && value.length <= 100, `${cmd.name}: lokalisierte Beschreibung "${locale}" muss 1-100 Zeichen haben (${value.length})`);
+    }
+    for (const opt of cmd.options || []) {
+      assertValidLocales(opt.name_localizations, `${cmd.name}.${opt.name}.name`);
+      assertValidLocales(opt.description_localizations, `${cmd.name}.${opt.name}.description`);
+      for (const choice of opt.choices || []) {
+        assertValidLocales(choice.name_localizations, `${cmd.name}.${opt.name}.choice[${choice.value}].name`);
+      }
+    }
+  }
 });
