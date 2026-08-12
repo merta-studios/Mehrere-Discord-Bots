@@ -322,7 +322,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
       if (drop && !drop.claimedBy) await expireDrop(drop.dropId);
       const lang = storedCfg?.lang || 'en';
       return interaction.reply(
-        componentsV2Payload([smallContainer(null, t('bonusGone', lang))], { ephemeral: true })
+        componentsV2Payload([smallContainer(null, t('bonusGone', lang))], { ephemeral: false })
       );
     }
 
@@ -349,7 +349,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     await interaction
       .followUp(
         componentsV2Payload([smallContainer(null, t('bonusClaimedYou', lang, { xp: drop.xp }))], {
-          ephemeral: true,
+          ephemeral: false,
         })
       )
       .catch(() => {});

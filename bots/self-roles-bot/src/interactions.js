@@ -81,7 +81,7 @@ async function handleInteraction(ctx, interaction) {
   } catch (err) {
     ctx.logger.error('[self-roles-bot] Interaction-Fehler:', err);
     const lang = langFromDiscord(interaction.locale);
-    const payload = componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: true });
+    const payload = componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: false });
     try {
       if (interaction.deferred || interaction.replied) return await interaction.followUp(payload);
       return await interaction.reply(payload);
@@ -106,7 +106,7 @@ async function handleRoleButton(ctx, interaction, { roleId }) {
   if (!guild) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('errGuildOnly', langFromDiscord(interaction.locale)))], {
-        ephemeral: true,
+        ephemeral: false,
       })
     );
   }
@@ -116,10 +116,10 @@ async function handleRoleButton(ctx, interaction, { roleId }) {
   const lang = config?.lang || langFromDiscord(interaction.locale);
 
   if (!config || !config.roles?.length) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('messageBroken', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('messageBroken', lang))], { ephemeral: false }));
   }
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+  await interaction.deferReply().catch(() => {});
 
   // Registry auffrischen, damit Scheduler & Panel die Nachricht kennen.
   const entry = ensureEntry(ctx, interaction, config);
@@ -193,7 +193,7 @@ async function handleDropButton(ctx, interaction, { roleId, channelId, messageId
   const lang = guildLang(ctx, guild?.id, channelId, messageId) || langFromDiscord(interaction.locale);
 
   if (!guild) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', lang))], { ephemeral: false }));
   }
 
   await interaction.deferUpdate().catch(() => {});
@@ -242,10 +242,10 @@ async function handleCreateModal(ctx, interaction, { channelId }) {
   const lang = langFromDiscord(interaction.locale);
 
   if (!interaction.inGuild() || !isAdmin(interaction)) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false }));
   }
   if (!ctx.store.hasCapacity(interaction.guildId)) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errMaxMessages', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errMaxMessages', lang))], { ephemeral: false }));
   }
 
   const title = sanitizeTitle(interaction.fields.getTextInputValue('title'));
@@ -272,25 +272,25 @@ async function handlePickMessage(ctx, interaction) {
   const lang = langFromDiscord(interaction.locale);
 
   if (!interaction.inGuild() || !isAdmin(interaction)) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false }));
   }
 
   const [channelId, messageId] = String(interaction.values?.[0] || '').split(':');
   if (!channelId || !messageId) {
-    return interaction.update(componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: true }));
+    return interaction.update(componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: false }));
   }
 
   const resolved = await ctx.store.resolveMessage(interaction.guild, channelId, messageId);
   if (!resolved?.message) {
     ctx.store.remove(interaction.guildId, channelId, messageId);
     return interaction.update(
-      componentsV2Payload([smallContainer(null, t('editMessageGone', lang))], { ephemeral: true })
+      componentsV2Payload([smallContainer(null, t('editMessageGone', lang))], { ephemeral: false })
     );
   }
 
   const config = parseSelfRoleMessage(resolved.message);
   if (!config) {
-    return interaction.update(componentsV2Payload([smallContainer(null, t('messageBroken', lang))], { ephemeral: true }));
+    return interaction.update(componentsV2Payload([smallContainer(null, t('messageBroken', lang))], { ephemeral: false }));
   }
 
   // Rollennamen für die Editor-Anzeige nachschlagen (falls die Rolle noch existiert).

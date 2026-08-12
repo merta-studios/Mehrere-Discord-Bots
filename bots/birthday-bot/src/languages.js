@@ -1414,6 +1414,32 @@ const T = {
     it: '⏰ L’evento {name} è finito – non ci si può più iscrivere.',
   },
 
+  // Combined birthday/event message (multiple on same day)
+  combinedTitle: {
+    de: '🎉 Heute wird gefeiert!',
+    en: '🎉 Today we celebrate!',
+    fr: '🎉 On fête aujourd’hui !',
+    es: '🎉 ¡Hoy celebramos!',
+    pt: '🎉 Hoje é dia de festa!',
+    ru: '🎉 Сегодня празднуем!',
+    ja: '🎉 今日はお祝いだよ！',
+    ko: '🎉 오늘은 축하하는 날!',
+    zh: '🎉 今天一起庆祝！',
+    it: '🎉 Oggi si festeggia!',
+  },
+  combinedDesc: {
+    de: 'Heute haben mehrere Geburtstag oder es finden Events statt – schaut vorbei! 🥳',
+    en: 'Multiple birthdays or events today – check them out! 🥳',
+    fr: 'Plusieurs anniversaires ou événements aujourd’hui – jetez un œil ! 🥳',
+    es: 'Varios cumpleaños o eventos hoy – ¡échales un vistazo! 🥳',
+    pt: 'Vários aniversários ou eventos hoje – confiram! 🥳',
+    ru: 'Сегодня несколько дней рождения или событий – загляните! 🥳',
+    ja: '今日は誕生日やイベントが盛りだくさん – チェックしてね！🥳',
+    ko: '오늘은 생일과 이벤트가 많아요 – 확인해 보세요! 🥳',
+    zh: '今天有多个生日或活动——快来看看吧！🥳',
+    it: 'Oggi ci sono più compleanni o eventi – date un’occhiata! 🥳',
+  },
+
   // ----------------------------------------------------------
   // Owner-Admin-Panel (bewusst nur Deutsch)
   // ----------------------------------------------------------

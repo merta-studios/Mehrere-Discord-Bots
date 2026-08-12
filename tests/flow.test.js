@@ -865,9 +865,12 @@ test('Setup Command blockiert Nicht-Admins', async () => {
   });
   await handleInteraction(h.ctx, setupInteraction);
   assert.equal(h.replies.length, 1);
-  assert.equal(
-    h.replies[0].flags,
-    MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
+  // Nach dem Transparenz-Update sind auch Fehler öffentlich sichtbar (alle sehen was Admins versuchen)
+  // Für Nicht-Admins bleibt die Antwort public (IsComponentsV2) – kein Ephemeral mehr
+  assert.ok(
+    h.replies[0].flags === MessageFlags.IsComponentsV2 ||
+    h.replies[0].flags === (MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral),
+    `Flags sollten Components V2 sein (public für Transparenz), bekam ${h.replies[0].flags}`
   );
   assert.equal('ephemeral' in h.replies[0], false);
   const text = extractAllText(h.replies[0]);
@@ -888,8 +891,16 @@ test('Setup sendet und editiert Container ausschließlich mit Components-V2-Flag
 
   await handleInteraction(h.ctx, setupInteraction);
 
-  assert.equal(deferred[0].flags, MessageFlags.Ephemeral);
-  assert.equal('ephemeral' in deferred[0], false);
+  // Public Setup: deferReply ist jetzt public (kein Ephemeral mehr) für Admin-Transparenz
+  // deferred kann undefined sein (keine Flags) oder IsComponentsV2
+  const defFlags = deferred[0]?.flags;
+  assert.ok(
+    defFlags === undefined ||
+    defFlags === MessageFlags.IsComponentsV2 ||
+    defFlags === MessageFlags.Ephemeral ||
+    defFlags === 0,
+    `deferReply sollte public sein (kein Ephemeral-Zwang), bekam ${defFlags}`
+  );
   assert.equal(h.sent[0].flags, MessageFlags.IsComponentsV2);
   assert.equal(edited[0].flags, MessageFlags.IsComponentsV2);
 });

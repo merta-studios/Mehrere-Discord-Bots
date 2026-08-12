@@ -412,41 +412,41 @@ async function handleChatInput(ctx, interaction) {
     case 'adminpanel':
       return openPanel(ctx, interaction);
     default:
-      return interaction.reply(componentsV2Payload([smallContainer(null, 'Unbekannter Befehl.')], { ephemeral: true }));
+      return interaction.reply(componentsV2Payload([smallContainer(null, 'Unbekannter Befehl.')], { ephemeral: false }));
   }
 }
 
 async function setupCmd(ctx, interaction) {
   if (!interaction.inGuild()) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false }));
   }
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   const langChoice = interaction.options.getString('language');
   const lang = langChoice || 'en';
   if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false }));
   }
   if (!LANGS[lang]) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('setupLangBad', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('setupLangBad', lang))], { ephemeral: false }));
   }
 
   const leader = interaction.options.getChannel('leaderboard');
   const main = interaction.options.getChannel('mainchat');
   if (!leader || leader.type !== ChannelType.GuildText) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: false }));
   }
   if (!main || main.type !== ChannelType.GuildText) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: false }));
   }
 
   for (const ch of [leader, main]) {
     const permsBot = ch.permissionsFor(ctx.client.user);
     if (!permsBot?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
-      return interaction.reply(componentsV2Payload([smallContainer(null, t('errBotPerms', lang, { channel: `<#${ch.id}>` }))], { ephemeral: true }));
+      return interaction.reply(componentsV2Payload([smallContainer(null, t('errBotPerms', lang, { channel: `<#${ch.id}>` }))], { ephemeral: false }));
     }
   }
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   let existing = ctx.store.getGuild(interaction.guild.id);
   const alreadyUsers = existing ? ctx.store.getUsersForGuild(interaction.guild.id) : [];
@@ -504,10 +504,10 @@ async function setupCmd(ctx, interaction) {
 
 async function rankCmd(ctx, interaction) {
   const guildId = interaction.guildId;
-  if (!guildId) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }));
+  if (!guildId) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false }));
   const cfg = ctx.store.getGuild(guildId);
   const lang = cfg?.lang || langFromDiscord(interaction.locale);
-  if (!cfg || !cfg.leaderboardChannelId) return interaction.reply(componentsV2Payload([smallContainer(null, t('rankNoSetup', lang))], { ephemeral: true }));
+  if (!cfg || !cfg.leaderboardChannelId) return interaction.reply(componentsV2Payload([smallContainer(null, t('rankNoSetup', lang))], { ephemeral: false }));
 
   const userId = interaction.user.id;
   let rankInfo = ctx.store.getRank(guildId, userId);
@@ -515,7 +515,7 @@ async function rankCmd(ctx, interaction) {
     const u = ctx.store.getUser(guildId, userId);
     if (!u) {
       const r = buildRankEmbed({ lang, userId, rankInfo: null });
-      return interaction.reply(componentsV2Payload([r.container], { ephemeral: true }));
+      return interaction.reply(componentsV2Payload([r.container], { ephemeral: false }));
     }
     rankInfo = { rank: ctx.store.getUsersForGuild(guildId).length, total: ctx.store.getUsersForGuild(guildId).length, user: u };
     const full = ctx.store.getRank(guildId, userId);
@@ -557,11 +557,11 @@ async function helpCmd(ctx, interaction) {
 }
 
 async function profileCmd(ctx, interaction) {
-  if (!interaction.inGuild()) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }));
+  if (!interaction.inGuild()) return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false }));
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   const lang = ctx.store.getGuild(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
-  if (!perms?.has(PermissionFlagsBits.Administrator)) return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  if (!perms?.has(PermissionFlagsBits.Administrator)) return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false }));
+  await interaction.deferReply();
   const choice = interaction.options.getString('image');
   const label = t(`profileChoice${choice[0].toUpperCase()}${choice.slice(1)}`, lang);
   try {
@@ -599,16 +599,16 @@ async function profileCmd(ctx, interaction) {
 async function updateLeaderboardCmd(ctx, interaction) {
   const guildId = interaction.guildId;
   if (!guildId) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false }));
   }
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   const cfg = ctx.store.getGuild(guildId);
   const lang = cfg?.lang || langFromDiscord(interaction.locale);
   if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false }));
   }
   if (!cfg || !cfg.leaderboardChannelId) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('rankNoSetup', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('rankNoSetup', lang))], { ephemeral: false }));
   }
 
   const { isManualRefreshDue, noteManualRefresh } = require('./scheduler');
@@ -619,12 +619,12 @@ async function updateLeaderboardCmd(ctx, interaction) {
     return interaction.reply(
       componentsV2Payload(
         [smallContainer(null, t('updateLeaderboardCooldown', lang, { minutes }))],
-        { ephemeral: true }
+        { ephemeral: false }
       )
     );
   }
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   let guild = interaction.guild;
   if (!guild) {
@@ -653,20 +653,20 @@ async function updateLeaderboardCmd(ctx, interaction) {
  */
 function requireAdminSetup(ctx, interaction) {
   if (!interaction.inGuild?.() && !interaction.guildId) {
-    return { error: componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }) };
+    return { error: componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false }) };
   }
   const guildId = interaction.guildId;
   if (!guildId) {
-    return { error: componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true }) };
+    return { error: componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false }) };
   }
   const perms = interaction.memberPermissions ?? interaction.member?.permissions;
   const cfg = ctx.store.getGuild(guildId);
   const lang = cfg?.lang || langFromDiscord(interaction.locale);
   if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return { error: componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }) };
+    return { error: componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false }) };
   }
   if (!cfg || !cfg.leaderboardChannelId) {
-    return { error: componentsV2Payload([smallContainer(null, t('errNoSetup', lang))], { ephemeral: true }) };
+    return { error: componentsV2Payload([smallContainer(null, t('errNoSetup', lang))], { ephemeral: false }) };
   }
   return { cfg, lang, guildId };
 }
@@ -714,7 +714,7 @@ async function toggleNicknamesCmd(ctx, interaction) {
   await ctx.store.flush();
 
   const msg = enabled ? t('toggleNicknamesOn', gate.lang) : t('toggleNicknamesOff', gate.lang);
-  return interaction.reply(componentsV2Payload([smallContainer(null, msg)], { ephemeral: true }));
+  return interaction.reply(componentsV2Payload([smallContainer(null, msg)], { ephemeral: false }));
 }
 
 /**
@@ -729,12 +729,12 @@ async function syncNicknamesCmd(ctx, interaction) {
   const { isSyncRunning, withSyncLock, syncAllNicknames } = require('./nicknames');
   if (isSyncRunning(gate.guildId)) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('syncNicknamesAlreadyRunning', gate.lang))], { ephemeral: true })
+      componentsV2Payload([smallContainer(null, t('syncNicknamesAlreadyRunning', gate.lang))], { ephemeral: false })
     );
   }
 
   // Sofort deferren → Discord zeigt in der Command-Übersicht den Ladebildschirm.
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   let guild = interaction.guild;
   if (!guild) {

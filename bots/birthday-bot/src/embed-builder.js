@@ -14,6 +14,10 @@
  * Marker (Listen-Sprache, Glückwünsche, Interessenten) sind als
  * Zero-Width-Blobs kodiert (siehe zw-marker.js) – für Nutzer komplett
  * unsichtbar, aber vom Bot jederzeit auslesbar.
+ *
+ * NEU: Kombinierte Tages-Nachricht – mehrere Geburtstage & Events an
+ * einem Tag werden in EINE Nachricht mit mehreren Abschnitten gepackt.
+ * Jeder Abschnitt hat eigene Gratulanten/Interessenten + eigenen Button.
  */
 
 const {
@@ -433,8 +437,42 @@ function wishMarkerText(entries, prefix, chunkPayloadChars = 1700) {
   return chunks;
 }
 
+// Neue Marker für kombinierte Nachricht (scoped)
+function combinedWishMarkerText(birthdayId, entries, chunkPayloadChars = 1700) {
+  const chunks = [];
+  let current = '';
+  for (const w of entries) {
+    if (!w.ts) continue;
+    const marker = `bday-wish:${birthdayId}:${w.id}:${w.ts}`;
+    if (current && current.length + marker.length > chunkPayloadChars) {
+      chunks.push(encodeHidden(current));
+      current = '';
+    }
+    current += marker;
+  }
+  if (current) chunks.push(encodeHidden(current));
+  return chunks;
+}
+
+function combinedIntMarkerText(eventHex, entries, chunkPayloadChars = 1700) {
+  const chunks = [];
+  let current = '';
+  const hex = String(eventHex || '').toLowerCase();
+  for (const w of entries) {
+    if (!w.ts) continue;
+    const marker = `bday-int:${hex}:${w.id}:${w.ts}`;
+    if (current && current.length + marker.length > chunkPayloadChars) {
+      chunks.push(encodeHidden(current));
+      current = '';
+    }
+    current += marker;
+  }
+  if (current) chunks.push(encodeHidden(current));
+  return chunks;
+}
+
 // ---------------------------------------------------------------------------
-// Täglicher Geburtstags-Gruß
+// Täglicher Geburtstags-Gruß (einzeln – bleibt für Kompatibilität)
 // ---------------------------------------------------------------------------
 
 /**
@@ -480,6 +518,233 @@ function buildCongratsEmbed({ member, lang, dateKey, wishes = [] }) {
   container.addActionRowComponents(row);
 
   return { container, embed: container, row };
+}
+
+// ---------------------------------------------------------------------------
+// Kombinierte Tages-Nachricht – mehrere Geburtstage & Events in EINER Message
+// ---------------------------------------------------------------------------
+
+/**
+ * Baut EINE kombinierte Nachricht für alle Geburtstage + Events eines Tages.
+ * Jeder Abschnitt hat eigenen Marker, eigene Gratulanten/Interessenten und eigenen Button.
+ *
+ * Struktur:
+ * - Header: combinedTitle + combinedDesc + hidden bday-combined:dateKey
+ * - Für jede Geburtstagsperson:
+ *   - TextDisplay: Titel + Body + hidden bday-congrats:dateKey:userId
+ *   - (optional) TextDisplay: Glückwünsche (x) + wish lines + hidden bday-wish:birthdayId:wisherId:ts chunks
+ *   - ActionRow: Gratulieren Button (bday_congrats_userId_dateKey)
+ *   - Separator
+ * - Für jedes Event:
+ *   - TextDisplay: Event Titel + Body + hidden bday-event:dateKey:hex
+ *   - (optional) TextDisplay: Interessenten + lines + hidden bday-int:hex:wisherId:ts
+ *   - ActionRow: Interessant Button (bday_event_interest_<index>_<dateKey>)
+ */
+function buildCombinedCongratsEmbed({ lang = 'de', dateKey, birthdays = [], events = [], now = new Date() }) {
+  const container = new ContainerBuilder();
+  const maxShown = 12;
+
+  const headerLines = [
+    `# ${t('combinedTitle', lang)}`,
+    t('combinedDesc', lang),
+    encodeHidden(`bday-combined:${dateKey}`),
+  ];
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(headerLines.join('\n')));
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+
+  // Birthdays
+  for (let i = 0; i < birthdays.length; i++) {
+    const b = birthdays[i];
+    const bId = String(b.id || b.userId || b.member?.id || '');
+    if (!bId) continue;
+    const wishes = normalizeWishEntries(b.wishes || []);
+
+    const header = `## ${t('bdayCongratsTitle', lang)}\n\n${t('bdayCongratsBody', lang, { user: `<@${bId}>` })}\n${encodeHidden(`bday-congrats:${dateKey}:${bId}`)}`;
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(header));
+
+    if (wishes.length > 0) {
+      let wishesText = `### ${t('congratsField', lang, { count: wishes.length })}\n`;
+      wishesText += wishListText(wishes.slice(0, maxShown), lang);
+      if (wishes.length > maxShown) {
+        wishesText += `\n${t('congratsMore', lang, { count: wishes.length - maxShown })}`;
+      }
+      const chunks = combinedWishMarkerText(bId, wishes);
+      if (chunks.length) wishesText += chunks[0];
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(wishesText));
+      for (const chunk of chunks.slice(1)) {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(chunk));
+      }
+    }
+
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`bday_congrats_${bId}_${dateKey}`)
+        .setStyle(ButtonStyle.Success)
+        .setLabel(t('btnCongratulate', lang))
+    );
+    container.addActionRowComponents(row);
+
+    if (i < birthdays.length - 1 || events.length > 0) {
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    }
+  }
+
+  // Events
+  for (let j = 0; j < events.length; j++) {
+    const ev = events[j];
+    const name = ev.name;
+    if (!name) continue;
+    const hex = (ev.hex || encodeEventName(name)).toLowerCase();
+    const interested = normalizeWishEntries(ev.interested || []);
+
+    const header = `## ${t('eventCongratsTitle', lang)}\n\n${t('eventCongratsBody', lang, { name: `**${name}**` })}\n${encodeHidden(`bday-event:${dateKey}:${hex}`)}`;
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(header));
+
+    if (interested.length > 0) {
+      let text = `### ${t('eventInterestedField', lang, { count: interested.length })}\n`;
+      text += wishListText(interested.slice(0, maxShown), lang);
+      if (interested.length > maxShown) {
+        text += `\n${t('congratsMore', lang, { count: interested.length - maxShown })}`;
+      }
+      const chunks = combinedIntMarkerText(hex, interested);
+      if (chunks.length) text += chunks[0];
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(text));
+      for (const chunk of chunks.slice(1)) {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(chunk));
+      }
+    }
+
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    // Indexed customId: robust gegen lange Hex, leicht parsbar
+    const customId = `bday_event_interest_${j}_${dateKey}`;
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(customId)
+        .setStyle(ButtonStyle.Success)
+        .setLabel(t('btnEventInterested', lang))
+    );
+    container.addActionRowComponents(row);
+
+    if (j < events.length - 1) {
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    }
+  }
+
+  return { container, embed: container };
+}
+
+// ---------------------------------------------------------------------------
+// Parsing für kombinierte Nachricht (für Interaktionen)
+// ---------------------------------------------------------------------------
+
+function parseCombinedMessage(msg) {
+  const text = extractAllText(msg) || '';
+  const hiddenAll = decodeHidden(text).join('\n');
+  const haystack = `${text}\n${hiddenAll}`;
+
+  let dateKey = null;
+  const combinedMatch = haystack.match(/bday-combined:(\d{4}-\d{2}-\d{2})/);
+  if (combinedMatch) dateKey = combinedMatch[1];
+
+  // Birthdays in order
+  const birthdayOrder = [];
+  const seenB = new Set();
+  const bdayRegex = /bday-congrats:(\d{4}-\d{2}-\d{2}):(\d+)/g;
+  let m;
+  while ((m = bdayRegex.exec(haystack))) {
+    const d = m[1], uid = m[2];
+    if (!dateKey) dateKey = d;
+    if (!seenB.has(uid)) {
+      seenB.add(uid);
+      birthdayOrder.push(uid);
+    }
+  }
+
+  // Events in order
+  const eventOrder = [];
+  const seenE = new Set();
+  const eventRegex = /bday-event:(\d{4}-\d{2}-\d{2}):([0-9a-f]+)/gi;
+  while ((m = eventRegex.exec(haystack))) {
+    const d = m[1], hex = m[2].toLowerCase();
+    if (!dateKey) dateKey = d;
+    if (!seenE.has(hex)) {
+      seenE.add(hex);
+      eventOrder.push(hex);
+    }
+  }
+
+  // Wishes: bday-wish:birthdayId:wisherId:ts
+  const wishesByBirthday = new Map();
+  const wishCombinedRegex = /bday-wish:(\d+):(\d+):(\d+)/g;
+  while ((m = wishCombinedRegex.exec(haystack))) {
+    const bId = m[1], wId = m[2], ts = Number(m[3]);
+    if (!wishesByBirthday.has(bId)) wishesByBirthday.set(bId, []);
+    const arr = wishesByBirthday.get(bId);
+    if (!arr.some(v => v.id === wId)) arr.push({ id: wId, ts });
+  }
+  // Legacy wish: wish:wisherId:ts (but not part of bday-wish)
+  const legacyWishes = [];
+  const legacyWishRegex = /\bwish:(\d+):(\d+)/g;
+  while ((m = legacyWishRegex.exec(haystack))) {
+    const idx = m.index;
+    const preceding = haystack.slice(Math.max(0, idx - 5), idx);
+    if (preceding.endsWith('bday-')) continue;
+    const wId = m[1], ts = Number(m[2]);
+    if (!legacyWishes.some(v => v.id === wId)) legacyWishes.push({ id: wId, ts });
+  }
+
+  // Interested: bday-int:hex:wisherId:ts
+  const interestedByHex = new Map();
+  const intCombinedRegex = /bday-int:([0-9a-f]+):(\d+):(\d+)/gi;
+  while ((m = intCombinedRegex.exec(haystack))) {
+    const hex = m[1].toLowerCase(), wId = m[2], ts = Number(m[3]);
+    if (!interestedByHex.has(hex)) interestedByHex.set(hex, []);
+    const arr = interestedByHex.get(hex);
+    if (!arr.some(v => v.id === wId)) arr.push({ id: wId, ts });
+  }
+  const legacyInt = [];
+  const legacyIntRegex = /\bint:(\d+):(\d+)/g;
+  while ((m = legacyIntRegex.exec(haystack))) {
+    const idx = m.index;
+    const preceding = haystack.slice(Math.max(0, idx - 5), idx);
+    if (preceding.endsWith('bday-')) continue;
+    const wId = m[1], ts = Number(m[2]);
+    if (!legacyInt.some(v => v.id === wId)) legacyInt.push({ id: wId, ts });
+  }
+
+  const birthdays = birthdayOrder.map(bId => ({
+    id: bId,
+    wishes: wishesByBirthday.get(bId) || (birthdayOrder.length === 1 ? legacyWishes : []),
+  }));
+
+  const events = eventOrder.map(hex => {
+    const name = decodeEventName(hex) || hex;
+    return {
+      name,
+      hex,
+      interested: interestedByHex.get(hex) || (eventOrder.length === 1 ? legacyInt : []),
+    };
+  });
+
+  return {
+    dateKey,
+    birthdays,
+    events,
+    wishesByBirthday,
+    interestedByHex,
+    legacyWishes,
+    legacyInt,
+  };
+}
+
+function isCombinedMessage(msg) {
+  const text = extractAllText(msg) || '';
+  const hiddenAll = decodeHidden(text).join('\n');
+  const hay = `${text}\n${hiddenAll}`;
+  return /bday-combined:\d{4}-\d{2}-\d{2}/.test(hay);
 }
 
 // ---------------------------------------------------------------------------
@@ -568,6 +833,7 @@ function eventConfirmationRow(lang) {
  * Die tägliche Event-Nachricht um 0 Uhr – wie der Geburtstags-Gruß, aber mit
  * Event-Titel, „Interessenten“-Abschnitt und „Interessant! 😂“-Button.
  * Interessenten: Mentions UNTEREINANDER, mit Uhrzeit des Klicks.
+ * (Einzel-Version – bleibt für Kompatibilität, wird aber jetzt durch combined ersetzt)
  */
 function buildEventCongratsEmbed({ name, lang, dateKey, interested = [] }) {
   const container = new ContainerBuilder();
@@ -662,6 +928,9 @@ module.exports = {
   confirmationRow,
   buildSevenDayErrorEmbed,
   buildCongratsEmbed,
+  buildCombinedCongratsEmbed,
+  parseCombinedMessage,
+  isCombinedMessage,
   encodeEventName,
   decodeEventName,
   buildEventModal,
@@ -673,6 +942,8 @@ module.exports = {
   formatWishTime,
   wishListText,
   wishMarkerText,
+  combinedWishMarkerText,
+  combinedIntMarkerText,
   encodeHidden,
   decodeHidden,
   smallContainer,

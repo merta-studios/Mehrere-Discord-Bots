@@ -9,6 +9,8 @@
  * Zero-Width-Markern (zw-marker.js) UND den sichtbaren Erwähnungen
  * gelesen und vereinigt – dedupliziert, verlustfrei, ohne sichtbares
  * „wish:/int:“-Textformat.
+ *
+ * NEU: Unterstützt kombinierte Tages-Nachricht mit mehreren Abschnitten.
  */
 
 const { MessageFlags } = require('discord.js');
@@ -22,10 +24,14 @@ const {
   buildDeleteConfirmationEmbed,
   buildSevenDayErrorEmbed,
   buildCongratsEmbed,
+  buildCombinedCongratsEmbed,
+  parseCombinedMessage,
+  isCombinedMessage,
   buildEventModal,
   buildEventConfirmationEmbed,
   buildEventCongratsEmbed,
   decodeEventName,
+  encodeEventName,
   normalizeWishEntries,
   decodeHidden,
   smallContainer,
@@ -234,7 +240,7 @@ async function handleButton(ctx, interaction) {
     );
   }
 
-  // Gratulieren auf dem Geburtstags-Gruß
+  // Gratulieren auf dem Geburtstags-Gruß (einzeln oder kombiniert)
   if (id.startsWith('bday_congrats_')) {
     return congrats(ctx, interaction, id);
   }
@@ -273,8 +279,8 @@ async function handleButton(ctx, interaction) {
     );
   }
 
-  // „Interessant! 😂“ auf der Event-Nachricht
-  if (id === 'bday_event_interest') {
+  // „Interessant! 😂“ auf der Event-Nachricht – Legacy + kombiniert
+  if (id === 'bday_event_interest' || id.startsWith('bday_event_interest_')) {
     return eventInterest(ctx, interaction);
   }
 
@@ -353,7 +359,8 @@ async function confirmYes(ctx, interaction) {
 
 /**
  * Gratulieren: Wer schon gratuliert hat, kann nicht doppelt.
- * Die Glückwünsche + Anzahl + Uhrzeiten stecken im Container selbst (keine DB).
+ * Unterstützt sowohl einzelne Geburtstags-Nachrichten als auch kombinierte
+ * Nachrichten mit mehreren Abschnitten.
  */
 async function congrats(ctx, interaction, id) {
   const parts = id.split('_'); // bday_congrats_<userId>_<dateKey>
@@ -374,8 +381,7 @@ async function congrats(ctx, interaction, id) {
     );
   }
 
-  // Gratulieren ist nur innerhalb der nächsten 24 Stunden erlaubt (nach dem
-  // Senden des Gruß-Containers). Danach nimmt der Bot keine Glückwünsche mehr an.
+  // Gratulieren ist nur innerhalb der nächsten 24 Stunden erlaubt
   if (!isWithinHours(interaction.message?.createdTimestamp, 24)) {
     return interaction.reply(
       componentsV2Payload(
@@ -385,17 +391,57 @@ async function congrats(ctx, interaction, id) {
     );
   }
 
+  // Prüfen ob kombinierte Nachricht
+  if (isCombinedMessage(interaction.message)) {
+    const parsed = parseCombinedMessage(interaction.message);
+    const idx = parsed.birthdays.findIndex((b) => b.id === birthdayUserId);
+    if (idx === -1) {
+      // Fallback: vielleicht ist die ID im alten Format? Versuche alte Logik
+      return congratsSingle(ctx, interaction, birthdayUserId, dateKey, lang, clickerId);
+    }
+    // Check bereits gratuliert?
+    if (parsed.birthdays[idx].wishes.some((w) => w.id === clickerId)) {
+      return interaction.reply(
+        componentsV2Payload(
+          [smallContainer(null, t('alreadyWished', lang, { user: `<@${birthdayUserId}>` }))],
+          { ephemeral: true }
+        )
+      );
+    }
+    parsed.birthdays[idx].wishes.push({ id: clickerId, ts: Date.now() });
+
+    const birthdayEntries = parsed.birthdays.map((b) => ({ id: b.id, wishes: b.wishes }));
+    const eventEntries = parsed.events.map((ev) => ({ name: ev.name, hex: ev.hex, interested: ev.interested }));
+
+    const { container } = buildCombinedCongratsEmbed({
+      lang,
+      dateKey: parsed.dateKey || dateKey,
+      birthdays: birthdayEntries,
+      events: eventEntries,
+    });
+
+    await interaction.update(componentsV2Payload([container]));
+    return interaction.followUp(
+      componentsV2Payload(
+        [smallContainer(null, t('wished', lang, { user: `<@${birthdayUserId}>` }))],
+        { ephemeral: true }
+      )
+    );
+  }
+
+  // Einzelne Nachricht – alte Logik
+  return congratsSingle(ctx, interaction, birthdayUserId, dateKey, lang, clickerId);
+}
+
+async function congratsSingle(ctx, interaction, birthdayUserId, dateKey, lang, clickerId) {
   const rawText = extractAllText(interaction.message) || '';
 
-  // Glückwünsche aus den (unsichtbaren) Markern lesen (id + Uhrzeit) und
-  // mit den sichtbaren Erwähnungen vereinigen – dedupliziert, nichts geht
-  // verloren (alte Nachrichten, abgeschnittene Marker, …), kein Doppel-Eintrag.
   const marked = parseMarkedEntries(rawText, 'wish');
   const mentionedIds = [
     ...new Set(
       [...rawText.matchAll(/<@!?([^>]+)>/g)]
         .map((m) => m[1])
-        .filter((uid) => uid !== birthdayUserId) // Geburtstagskind zählt nicht
+        .filter((uid) => uid !== birthdayUserId)
     ),
   ];
   const wishes = mergeListEntries(marked, mentionedIds);
@@ -409,7 +455,6 @@ async function congrats(ctx, interaction, id) {
     );
   }
 
-  // Neuer Glückwunsch MIT Uhrzeit
   wishes.push({ id: clickerId, ts: Date.now() });
 
   const { container } = buildCongratsEmbed({
@@ -595,20 +640,74 @@ async function eventDeleteSelect(ctx, interaction) {
 
 /**
  * „Interessant! 😂“-Button auf der 0-Uhr-Event-Nachricht.
- * Analog zu den Geburtstags-Glückwünschen: Die Interessenten (inkl. Uhrzeit)
- * stecken im Container selbst (keine DB), jeder nur einmal, Fenster: 24 Stunden.
+ * Unterstützt Einzel- und kombinierte Nachrichten.
  */
 async function eventInterest(ctx, interaction) {
   const entry = ctx.store.get(interaction.guildId);
   const lang = entry?.lang || langFromDiscord(interaction.locale);
   const clickerId = interaction.user.id;
+  const customId = interaction.customId;
 
+  // Zeitfenster: 24h
+  if (!isWithinHours(interaction.message?.createdTimestamp, 24)) {
+    // Für kombinierte Nachricht: versuche Event-Namen zu ermitteln für Fehlermeldung
+    let nameForMsg = 'Event';
+    try {
+      if (isCombinedMessage(interaction.message)) {
+        const parsed = parseCombinedMessage(interaction.message);
+        const target = resolveEventFromCustomId(customId, parsed.events);
+        if (target) nameForMsg = `**${target.name}**`;
+      } else {
+        const rawText = extractAllText(interaction.message) || '';
+        const hidden = decodeHidden(rawText);
+        const eventRe = /bday-event:(\d{4}-\d{2}-\d{2}):([0-9a-f]+)/i;
+        const marker = rawText.match(eventRe) || hidden.map((s) => s.match(eventRe)).find((mm) => mm) || null;
+        const n = marker ? decodeEventName(marker[2]) : null;
+        if (n) nameForMsg = `**${n}**`;
+      }
+    } catch {}
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('eventInterestClosed', lang, { name: nameForMsg }))], { ephemeral: true })
+    );
+  }
+
+  // Kombinierte Nachricht?
+  if (isCombinedMessage(interaction.message)) {
+    const parsed = parseCombinedMessage(interaction.message);
+    const target = resolveEventFromCustomId(customId, parsed.events);
+    if (!target) {
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: true })
+      );
+    }
+    if (target.interested.some((w) => w.id === clickerId)) {
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, t('eventAlreadyInterested', lang, { name: `**${target.name}**` }))], { ephemeral: true })
+      );
+    }
+    target.interested.push({ id: clickerId, ts: Date.now() });
+
+    const birthdayEntries = parsed.birthdays.map((b) => ({ id: b.id, wishes: b.wishes }));
+    const eventEntries = parsed.events.map((ev) => ({ name: ev.name, hex: ev.hex, interested: ev.interested }));
+
+    const { container } = buildCombinedCongratsEmbed({
+      lang,
+      dateKey: parsed.dateKey,
+      birthdays: birthdayEntries,
+      events: eventEntries,
+    });
+
+    await interaction.update(componentsV2Payload([container]));
+    return interaction.followUp(
+      componentsV2Payload([smallContainer(null, t('eventInterestedDone', lang, { name: `**${target.name}**` }))], { ephemeral: true })
+    );
+  }
+
+  // Einzelne Event-Nachricht – alte Logik
   const rawText = extractAllText(interaction.message) || '';
   const hidden = decodeHidden(rawText);
-  // Event-Marker auslesen – neue Nachrichten: Zero-Width-Blob, alte: Klartext.
   const eventRe = /bday-event:(\d{4}-\d{2}-\d{2}):([0-9a-f]+)/i;
-  const marker =
-    rawText.match(eventRe) || hidden.map((s) => s.match(eventRe)).find((m) => m) || null;
+  const marker = rawText.match(eventRe) || hidden.map((s) => s.match(eventRe)).find((mm) => mm) || null;
   const name = marker ? decodeEventName(marker[2]) : null;
   if (!marker || !name) {
     return interaction.reply(
@@ -618,16 +717,6 @@ async function eventInterest(ctx, interaction) {
   const dateKey = marker[1];
   const boldName = `**${name}**`;
 
-  // Interesse-Melden nur 24 Stunden nach dem Post (dann ist das Event durch)
-  if (!isWithinHours(interaction.message?.createdTimestamp, 24)) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('eventInterestClosed', lang, { name: boldName }))], { ephemeral: true })
-    );
-  }
-
-  // Interessenten aus den (unsichtbaren) Markern lesen (id + Uhrzeit) und
-  // mit den sichtbaren Erwähnungen vereinigen – dedupliziert, nichts geht
-  // verloren, kein Doppel-Eintrag möglich.
   const marked = parseMarkedEntries(rawText, 'int');
   const mentionedIds = [
     ...new Set([...rawText.matchAll(/<@!?([^>]+)>/g)].map((mm) => mm[1])),
@@ -639,7 +728,6 @@ async function eventInterest(ctx, interaction) {
       componentsV2Payload([smallContainer(null, t('eventAlreadyInterested', lang, { name: boldName }))], { ephemeral: true })
     );
   }
-  // Neuer Interessent MIT Uhrzeit
   interested.push({ id: clickerId, ts: Date.now() });
 
   const { container } = buildEventCongratsEmbed({ name, lang, dateKey, interested });
@@ -648,6 +736,41 @@ async function eventInterest(ctx, interaction) {
   return interaction.followUp(
     componentsV2Payload([smallContainer(null, t('eventInterestedDone', lang, { name: boldName }))], { ephemeral: true })
   );
+}
+
+function resolveEventFromCustomId(customId, events) {
+  if (!Array.isArray(events) || !events.length) return null;
+  // Indexed format: bday_event_interest_<index>_<dateKey>
+  if (customId.startsWith('bday_event_interest_')) {
+    const rest = customId.slice('bday_event_interest_'.length);
+    const parts = rest.split('_');
+    // first part numeric -> index
+    if (/^\d+$/.test(parts[0])) {
+      const idx = Number(parts[0]);
+      if (events[idx]) return events[idx];
+    } else {
+      // hex format
+      const hex = rest.toLowerCase();
+      // exact match
+      let found = events.find((ev) => ev.hex.toLowerCase() === hex);
+      if (found) return found;
+      // prefix match (truncated hex)
+      found = events.find((ev) => ev.hex.toLowerCase().startsWith(hex) || hex.startsWith(ev.hex.toLowerCase()));
+      if (found) return found;
+      // try decode and match name
+      const name = decodeEventName(hex);
+      if (name) {
+        found = events.find((ev) => ev.name === name);
+        if (found) return found;
+      }
+    }
+  }
+  // Legacy single
+  if (customId === 'bday_event_interest') {
+    return events[0] || null;
+  }
+  // Fallback: first event
+  return events[0] || null;
 }
 
 /** Eigenes Eintragen: validieren → Bestätigungs-Container mit den 3 Buttons. */
@@ -763,7 +886,7 @@ async function adminModalSubmit(ctx, interaction) {
     const desc = existed
       ? t('adminDeletedSuccess', entry.lang, { user: `<@${pending.targetId}>` })
       : t('noBirthdayToDelete', entry.lang);
-    return interaction.reply(componentsV2Payload([smallContainer(null, desc)], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, desc)], { ephemeral: false }));
   }
 
   const day = parseDayInput(dayRaw);
@@ -819,7 +942,7 @@ async function adminModalSubmit(ctx, interaction) {
           t('adminSetSuccess', entry.lang, { user: `<@${pending.targetId}>`, date })
         ),
       ],
-      { ephemeral: true }
+      { ephemeral: false }
     )
   );
 }
