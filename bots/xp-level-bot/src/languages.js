@@ -316,6 +316,18 @@ const T = {
     zh: '⚡ {user} 手最快，领取了 **{xp} XP**！恭喜！🎉 先到先得——下次可能就轮到你！',
     it: '⚡ {user} è stato il più veloce e ha riscosso i **{xp} XP**! Complimenti! 🎉 Chi clicca prima vince – la prossima volta forse tocca a te!',
   },
+  bonusClaimedLine: {
+    de: '✅ Eingesammelt von {user}!',
+    en: '✅ Claimed by {user}!',
+    fr: '✅ Récupéré par {user} !',
+    es: '✅ ¡Recogido por {user}!',
+    pt: '✅ Coletado por {user}!',
+    ru: '✅ Забрал {user}!',
+    ja: '✅ {user} が受け取りました！',
+    ko: '✅ {user}님이 받았어요!',
+    zh: '✅ 已被 {user} 领取！',
+    it: '✅ Riscosso da {user}!',
+  },
   bonusExpiredTitle: {
     de: '🎁 Bonus-Belohnung – verfallen!',
     en: '🎁 Bonus reward – expired!',

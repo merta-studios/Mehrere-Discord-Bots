@@ -224,7 +224,7 @@ test('Bonus-Drop: geplanter Slot zur Fälligkeit sendet Belohnung mit XP-Zahl & 
   await h.dropper.checkScheduled(h.cfg, h.guild, now);
   assert.equal(h.sentMessages.length, 1, 'genau ein Drop');
   const text = payloadText(h.sentMessages[0].components);
-  assert.ok(text.includes('xp-bonus:'), 'Marker vorhanden');
+  assert.ok(!text.includes('xp-bonus:'), 'kein sichtbarer Speicher-Marker mehr');
   assert.ok(text.includes('**22 XP**'), 'gewürfelte XP-Zahl (rng 0.1 → 22) steht im Text');
   assert.ok(text.includes(BONUS_CLAIM_PREFIX), 'Einsammeln-Button vorhanden');
   assert.ok(text.includes('Einsammeln'), 'Button-Label sagt „Einsammeln“');
