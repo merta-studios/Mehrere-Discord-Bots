@@ -22,10 +22,11 @@ test('Bot-Module haben die erwartete Form', () => {
   assert.equal(xp.tokenEnv, 'XP_BOT_TOKEN');
   assert.equal(typeof xp.create, 'function');
 
-  const love = require('../bots/love-tester-bot/index.js');
-  assert.equal(love.id, 'love-tester-bot');
-  assert.equal(love.tokenEnv, 'LOVE_BOT_TOKEN');
-  assert.equal(typeof love.create, 'function');
+  const selfRoles = require('../bots/self-roles-bot/index.js');
+  assert.equal(selfRoles.id, 'self-roles-bot');
+  assert.equal(selfRoles.tokenEnv, 'SELF_ROLES_BOT_TOKEN');
+  assert.equal(typeof selfRoles.create, 'function');
+  assert.ok(Array.isArray(selfRoles.intents));
 });
 
 test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 9 Commands)', () => {

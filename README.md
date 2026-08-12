@@ -18,7 +18,7 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 |---|---|
 | 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons im Container). 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche (**Glückwunsch-Liste kompakt nebeneinander mit Uhrzeit**), **7-Tage-Aufräumregel unter der Liste**, Owner-Admin-Panel im DM. |
 | ⭐ **XP Level Bot** | **RAM-first & Turso-persistiert** – XP pro Wort (Spam-Erkennung krass, 3 XP/Wort, max 30, 30s Cooldown) + **15 XP für Bilder/Videos/Sprachnachrichten**, Level-Kurve 80→1999 XP, täglicher 5%-Basis-Schwund (bei Inaktivität steigend), Voice 25 XP/Min, Top15-Leaderboard **stündlich + bei Level-Ups**, Nicknames `[Lvl X 🥇]` (Top 3, **Rang-Verschiebungen werden zuverlässig nachgezogen**), **Level-Belohnungsrollen via Formular** (`/level_roles`), **`/update_leaderboard` (Admin, 5-Min-Cooldown)**, /rank + /setup (2 Kanäle) + Adminpanel. |
-| 💘 **Love Tester Bot** | Schätzt die Liebe zwischen zwei Personen anhand eurer Chatverläufe – **10 Sprachen, teen-tauglicher Ship-Richter** (`/test_love` mit Datenschutz-Bestätigung & Live-Fortschritt %), **Endless Story Game (`/endless_story_channel`)** mit **10 Zügen Kontext**, **`### `-Heading** für größere Situationen und **Mention + Hinweis** nach Entscheidungen, `/setup`-Assistent (3 Schritte: Sprache → Kanäle → Groq-Key), nutzt **dieselbe Turso-DB wie der XP-Bot**, Admin-Panel + /help wie die anderen Bots. |
+| 🎭 **Self Roles Bot** | Rollen zum Selbstbedienen – **komplett ohne Datenbank** (Konfiguration steckt unsichtbar in der Nachricht). `/create_self_role [channel]` → Formular (große Textbox + Titel) → **Bearbeitungs-/Bestätigungs-Nachricht** mit Kanal, Titel, Beschreibung (immer einzeilig) und Rollenliste. **2–20 Rollen** pro Nachricht, **max. 10 Nachrichten** pro Server, Rollen werden **erst beim Absenden** erstellt (ganz unten, erwähnbar). Buttons in Grau mit **live aktualisierter Anzahl** – auch bei manueller Rollenvergabe. `/edit_self_role`, Einzel- oder Mehrfachauswahl, 10 Sprachen, Admin-Panel + /help wie die anderen Bots. |
 | 🛠️ **Multi-Bot-Hoster** | Loader, der alle Bots im `bots/`-Ordner automatisch startet (nur die mit gesetztem Token), plus Health-Server für UptimeRobot. |
 
 ## 🗂️ Projektstruktur
@@ -38,9 +38,9 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 │   ├── xp-level-bot/         # ⭐ XP-Level-Bot (Turso-persistiert)
 │   │   ├── index.js
 │   │   └── src/              # gesamte Bot-Logik
-│   └── love-tester-bot/      # 💘 Love Tester Bot (nutzt dieselbe Turso-DB wie der XP-Bot)
+│   └── self-roles-bot/       # 🎭 Self-Roles-Bot (ohne Datenbank, wie der Birthday-Bot)
 │       ├── index.js
-│       └── src/              # Wizard, Analyse-Runner, Groq, 10 Sprachen
+│       └── src/              # Editor, Store, Zähler-Sync, 10 Sprachen
 │
 ├── tests/                    # Tests (npm test) – ohne Discord-Verbindung
 ├── render.yaml               # Render-Blueprint (Deployment-Config)
@@ -83,10 +83,10 @@ In `.env` eintragen:
 | `BIRTHDAY_BOT_OWNER_ID` | **Deine Discord-ID** – der Bot-Owner fürs `/adminpanel` |
 | `BIRTHDAY_BOT_GUILD_ID` | optional: eine Server-ID zum sofortigen Testen der Commands (sonst leer lassen) |
 | `XP_BOT_TOKEN` | Token des XP-Bots |
-| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Turso-DB – **eine DB für XP-Bot UND Love Tester** (gleiche Zugangsdaten) |
-| `LOVE_BOT_TOKEN` | Token des Love-Tester-Bots |
-| `LOVE_BOT_OWNER_ID` | optional: Owner fürs Love-Tester-`/adminpanel` (Fallback: XP-/Birthday-Owner) |
-| `LOVE_BOT_GUILD_ID` | optional: Dev-Server für sofortige Love-Tester-Command-Registrierung |
+| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Turso-DB für den XP-Bot |
+| `SELF_ROLES_BOT_TOKEN` | Token des Self-Roles-Bots (**braucht keine Datenbank!**) |
+| `SELF_ROLES_BOT_OWNER_ID` | optional: Owner fürs Self-Roles-`/adminpanel` (Fallback: Birthday-Owner) |
+| `SELF_ROLES_BOT_GUILD_ID` | optional: Dev-Server für sofortige Self-Roles-Command-Registrierung |
 | `PORT` | Port für den Health-Server (Standard 10000) |
 
 **Deine Discord-ID findest du so:** Discord → Einstellungen → Erweitert → „Entwicklermodus“
@@ -233,28 +233,41 @@ Kurzfassung – Details siehe [`bots/xp-level-bot/README.md`](bots/xp-level-bot/
 
 ---
 
-## 💘 Love Tester Bot – alle Funktionen
+## 🎭 Self Roles Bot – alle Funktionen
 
-Details siehe [`bots/love-tester-bot/README.md`](bots/love-tester-bot/README.md):
+Details siehe [`bots/self-roles-bot/README.md`](bots/self-roles-bot/README.md):
 
-- **`/setup`** (nur Admins): **3-Schritte-Assistent** – 1. Sprache (Auswahlmenü,
-  10 Sprachen), 2. mehrere Kanäle (Kanal-Auswahlmenü), 3. Groq-API-Key (Formular).
-  Mit **Zurück / Weiter / Bestätigen / Abbrechen**, guter Anleitung pro Schritt und
-  Zusammenfassung vor dem Speichern.
-- **`/test_love <user1> <user2>`** (alle, nur nach Setup): öffentliche
-  **Datenschutz-Bestätigung** (Chatverläufe → Groq), Buttons nur für den
-  Command-Sender. Danach humorvolle **Live-Analyse mit Fortschrittsbalken in %**.
-- **Scan**: max. **500 Nachrichten** über alle eingerichteten Kanäle; Ausschnitte
-  mit 4 Nachrichten davor, Kern (max. 3 Fremde dazwischen) und Rest danach.
-- **KI-Text-Umwandlung**: Bilder, Videos, Sprachnachrichten, Antworten, Sticker,
-  Server-Emojis, Erwähnungen → lesbarer Text; beide User markiert als `[USER1]`/`[USER2]`.
-- **Groq** (`llama-3.3-70b-versatile`): humorvoller System-Prompt, 3–5 begründete
-  Sätze, finale Zeile `### XX %`. Token-Budget wird überwacht.
-- **Endless Story Game (`/endless_story_channel`)** (nur Admins): Startet eine unendliche, interaktive Geschichte im Kanal. Jede Situation erscheint mit größerer Schrift (**`### Großer Text`**) und 3 farbigen Buttons. Klickt jemand einen Button, wird die Nachricht editiert (Buttons ausgegraut + **Mention & Hinweis unter dem Text** `<@ID> hat die nächste Option schon entschieden.`), und Groq generiert aus den **letzten 10 Situationen und Optionen** den nächsten Zug.
-- **Fehler-Resilienz**: Groq-Limit, API-Fehler, Discord-Rate-Limits →
-  „Erneut versuchen“ / „Weiter analysieren“ / „Abbrechen“, Fortschritt bleibt erhalten.
-- **Datenbank**: dieselbe Turso-DB wie der XP-Bot (eigene Tabellen, kaum Daten).
-- `/help` + `/admin_set_bot_profile` + `/adminpanel` �
+- **Komplett ohne Datenbank** – genau wie der Birthday-Bot: Titel, Beschreibung,
+  Sprache, Auswahl-Modus und alle Rollen stecken als **unsichtbarer
+  Zero-Width-Blob** in der Nachricht selbst. Neustarts & Ausfälle egal.
+- **`/create_self_role [channel]`** (nur Admins): Formular mit **großer Textbox**
+  (Beschreibung) und **kleinem Feld** (Titel). Jede neue Zeile in der
+  Beschreibung wird automatisch zu einem **Leerzeichen** – immer einzeilig.
+- **Bearbeitungs-/Bestätigungs-Nachricht**: zeigt nochmal **Kanal, Titel,
+  Beschreibung, Auswahl-Modus** und die Rollen („noch keine konfiguriert“).
+  Mit Buttons **➕ hinzufügen / ➖ entfernen / ✏️ Titel & Text / 🎚️ Auswahl
+  umschalten / 🚀 Absenden / ❌ Abbrechen**. Absenden bleibt gesperrt, bis
+  **mindestens 2** (max. **20**) Rollen konfiguriert sind.
+- **Rollen-Formular**: **Rollenname** (so heißt die Rolle auf dem Server) +
+  **Text-Platzhalter** (was in Nachricht & Button steht).
+- **Rollen werden erst beim Absenden erstellt** – automatisch **ganz unten** in
+  der Rollenliste, **erwähnbar**, ohne Berechtigungen. Schlägt das Senden fehl,
+  werden sie per **Rollback** wieder gelöscht.
+- **Finale Nachricht**: `Platzhalter (Anzahl) - @Rollenmention` je Zeile, darunter
+  **alle Buttons in Grau** mit `Platzhalter (Anzahl)`.
+- **Jeder darf klicken**: Rolle wird vergeben („✅ Zack!“), im **Einzel-Modus**
+  wird die alte Rolle getauscht. Hat man die Rolle schon, fragt der Bot nach und
+  bietet einen **🗑️ Abgeben-Button** an. Alle Antworten sind ephemer.
+- **Zähler krass aktuell**: bei jedem Klick, bei **manueller** Rollenvergabe
+  (`guildMemberUpdate`), beim Löschen/Umbenennen von Rollen, bei Server-Austritten –
+  plus Scheduler (minütlich mit Signatur-Check, 15-min-`members.fetch()`,
+  stündlicher Rescan).
+- **`/edit_self_role`**: Auswahlmenü aller bestehenden Nachrichten → derselbe
+  Editor, Änderungen erst mit **💾 Speichern**.
+- **Limits**: 2–20 Rollen pro Nachricht, **max. 10 Nachrichten** pro Server.
+- **Robust**: Locks pro Nachricht, Timeout-Schutz, Fallback-Parser aus den
+  Buttons, Recovery beim ersten Klick nach einem Neustart – **nie** ein stummes
+  „Interaktion fehlgeschlagen“.
 - `/help` + `/admin_set_bot_profile` + `/adminpanel` – wie bei den anderen Bots.
 
 ---
