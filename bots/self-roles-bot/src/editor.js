@@ -127,7 +127,7 @@ function botCanManageRoles(guild) {
 // Editor rendern
 // ---------------------------------------------------------------------------
 
-function editorPayload(session, { ephemeral = true } = {}) {
+function editorPayload(session, { ephemeral = false } = {}) {
   const container =
     session.view === 'remove' ? buildRemoveSelectContainer(session) : buildEditorContainer(session);
   return componentsV2Payload([container], { ephemeral });
@@ -273,7 +273,7 @@ async function publishSession(ctx, interaction, session) {
   }
 
   await interaction.update(
-    componentsV2Payload([smallContainer(t('editorTitle', lang), t('publishing', lang))], { ephemeral: true })
+    componentsV2Payload([smallContainer(t('editorTitle', lang), t('publishing', lang))], { ephemeral: false })
   ).catch(() => {});
 
   let createdIds = [];
@@ -359,12 +359,12 @@ async function handleEditorButton(ctx, interaction, { action, sessionId }) {
 
   if (!session) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errSessionExpired', fallbackLang))], { ephemeral: true })
+      componentsV2Payload([smallContainer(null, t('errSessionExpired', fallbackLang))], { ephemeral: false })
     );
   }
   if (session.userId !== interaction.user.id || !isAdmin(interaction)) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', session.lang))], { ephemeral: true })
+      componentsV2Payload([smallContainer(null, t('errNoPermission', session.lang))], { ephemeral: false })
     );
   }
 
@@ -412,7 +412,7 @@ async function handleEditorButton(ctx, interaction, { action, sessionId }) {
     case 'cancel': {
       ctx.sessions.drop(session.id);
       return interaction.update(
-        componentsV2Payload([smallContainer(null, t('cancelled', session.lang))], { ephemeral: true })
+        componentsV2Payload([smallContainer(null, t('cancelled', session.lang))], { ephemeral: false })
       );
     }
 
@@ -427,13 +427,13 @@ async function handleRemoveSelect(ctx, interaction, { sessionId }) {
   if (!session) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('errSessionExpired', langFromDiscord(interaction.locale)))], {
-        ephemeral: true,
+        ephemeral: false,
       })
     );
   }
   if (session.userId !== interaction.user.id) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', session.lang))], { ephemeral: true })
+      componentsV2Payload([smallContainer(null, t('errNoPermission', session.lang))], { ephemeral: false })
     );
   }
 
@@ -452,7 +452,7 @@ async function handleRoleModal(ctx, interaction, { sessionId }) {
   if (!session) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('errSessionExpired', langFromDiscord(interaction.locale)))], {
-        ephemeral: true,
+        ephemeral: false,
       })
     );
   }
@@ -492,7 +492,7 @@ async function handleTextModal(ctx, interaction, { sessionId }) {
   if (!session) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('errSessionExpired', langFromDiscord(interaction.locale)))], {
-        ephemeral: true,
+        ephemeral: false,
       })
     );
   }

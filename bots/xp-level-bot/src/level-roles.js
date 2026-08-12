@@ -89,10 +89,10 @@ function buildModal({ lang, cfg }) {
 async function handleLevelRolesCommand(ctx, interaction) {
   const lang = ctx.store.getGuild(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
   if (!interaction.inGuild()) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', lang))], { ephemeral: false }));
   }
   if (!canAdmin(interaction)) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false }));
   }
   const cfg = ctx.store.getGuild(interaction.guildId);
   return interaction.showModal(buildModal({ lang, cfg }));
@@ -105,24 +105,24 @@ async function handleLevelRolesCommand(ctx, interaction) {
 async function handleLevelRolesModalSubmit(ctx, interaction) {
   const lang = ctx.store.getGuild(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
   if (!interaction.inGuild()) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', lang))], { ephemeral: false }));
   }
   if (!canAdmin(interaction)) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false }));
   }
 
   const template = interaction.fields.getTextInputValue(FIELD_FORMAT).trim();
   const levelsRaw = interaction.fields.getTextInputValue(FIELD_LEVELS);
 
   if (!hasLevelPlaceholder(template)) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('levelRolesNoPlaceholder', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('levelRolesNoPlaceholder', lang))], { ephemeral: false }));
   }
   const levels = parseLevelList(levelsRaw);
   if (!levels || levels.length === 0) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('levelRolesNoLevels', lang))], { ephemeral: true }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('levelRolesNoLevels', lang))], { ephemeral: false }));
   }
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
   try {
     const { created, deleted } = await applyLevelRolesSetup({ ctx, guild: interaction.guild, template, levels });
 

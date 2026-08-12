@@ -9,12 +9,16 @@
  * durchsucht.
  *
  * Mitgereist in der Liste:
- * - Events als „🚀 **Name**“-Zeilen (mit in die Monate einsortiert)
+ * - Events als „**Name**“-Zeilen (mit in die Monate einsortiert)
  * - die optionale Geburtstagsrollen-ID im Marker (bday::v1::<lang>:<roleId>)
  *
  * Beim stündlichen Refresh wird die Nachricht NEU AUSGELESEN, Nutzer, die
  * den Server verlassen haben, werden entfernt, und der Container wird
  * frisch gebaut (aktueller Monat zuerst).
+ *
+ * NEU: birthdayCheck bündelt alle heutigen Geburtstage + Events in EINE
+ * kombinierte Nachricht mit mehreren Abschnitten (robust, mit Gratulanten
+ * pro Person und Buttons pro Abschnitt).
  */
 
 const { ChannelType } = require('discord.js');
@@ -24,6 +28,7 @@ const {
   parseListEmbed,
   buildCongratsEmbed,
   buildEventCongratsEmbed,
+  buildCombinedCongratsEmbed,
   encodeEventName,
   extractAllText,
   decodeHidden,
@@ -340,11 +345,15 @@ function createStore({ client, logger }) {
 
   /**
    * Täglicher Check um 0 Uhr: Wer hat heute Geburtstag? Welches Event ist heute?
-   * Pro Geburtstagskind/Event wird genau EIN Container gesendet – Doppel-
-   * sendungen werden über den Marker verhindert (der Bot schaut nach,
-   * ob der Gruß für heute schon existiert).
-   * Events landen danach NICHT wieder in der Liste wie Geburtstage, sondern
-   * werden dort gelöscht.
+   * NEU: Alle heutigen Geburtstage + Events werden in EINE kombinierte Nachricht
+   * gepackt – mit mehreren Abschnitten, jeweils eigenen Gratulanten/Interessenten
+   * und eigenen Buttons (robust gegen Doppel-Sends via Marker).
+   *
+   * - Kombinierte Nachricht trägt Marker bday-combined:dateKey
+   * - Zusätzlich pro Abschnitt: bday-congrats:dateKey:userId und bday-event:dateKey:hex
+   * - Gratulanten pro Abschnitt: bday-wish:birthdayId:wisherId:ts
+   * - Interessenten pro Event-Abschnitt: bday-int:hex:wisherId:ts
+   * - Events werden nach dem Posten aus der Liste gelöscht (wie bisher)
    */
   async function birthdayCheck(entry) {
     const guild = client.guilds.cache.get(entry.guildId);
@@ -366,7 +375,6 @@ function createStore({ client, logger }) {
     const recentArr = recent instanceof Map ? [...recent.values()] : [...recent];
     const wasSent = (marker) =>
       recentArr.some((m) => {
-        // Neuer Marker: Zero-Width-Blob (unsichtbar), alte Nachrichten: Klartext.
         const text = extractAllText(m);
         return (
           decodeHidden(text).some((s) => s.includes(marker)) ||
@@ -377,69 +385,106 @@ function createStore({ client, logger }) {
         );
       });
 
-    for (const b of todays) {
-      const marker = `bday-congrats:${dateKey}:${b.userId}`;
-      if (wasSent(marker)) {
-        // Gruß schon da (z.B. nach Restart) – Rolle aber sicherheitshalber setzen
+    // Wenn bereits eine kombinierte Nachricht für heute existiert, nichts mehr senden
+    const combinedMarker = `bday-combined:${dateKey}`;
+    if (wasSent(combinedMarker)) {
+      // Rollen trotzdem vergeben (falls Bot nach dem Senden neugestartet wurde)
+      for (const b of todays) {
         const member = await guild.members.fetch(b.userId).catch(() => null);
         if (member && entry.birthdayRoleId) await assignBirthdayRole(guild, member, entry);
-        continue;
       }
+      return;
+    }
 
+    // Falls alle heutigen Geburtstage/Events bereits einzeln gepostet wurden (alte Logik),
+    // vermeiden wir Doppel-Spam: dann gilt heute als bereits erledigt.
+    const allIndividualBirthdaySent = todays.length === 0 || todays.every((b) => wasSent(`bday-congrats:${dateKey}:${b.userId}`));
+    const allIndividualEventSent = todaysEvents.length === 0 || todaysEvents.every((ev) => wasSent(`bday-event:${dateKey}:${encodeEventName(ev.name)}`));
+    if (allIndividualBirthdaySent && allIndividualEventSent && (todays.length + todaysEvents.length > 0)) {
+      for (const b of todays) {
+        const member = await guild.members.fetch(b.userId).catch(() => null);
+        if (member && entry.birthdayRoleId) await assignBirthdayRole(guild, member, entry);
+      }
+      // Falls noch Events übrig, die eigentlich gelöscht werden sollten, löschen
+      if (todaysEvents.length) {
+        await refresh(entry, null, (events) => events.filter((e) => !(e.month === t.month && e.day === t.day)));
+      }
+      return;
+    }
+
+    // Welche Geburtstage/Events sind noch ungesendet? (robust gegen Teil-Sends nach Restart)
+    const unsentBirthdays = todays.filter((b) => !wasSent(`bday-congrats:${dateKey}:${b.userId}`));
+    const unsentEvents = todaysEvents.filter((ev) => !wasSent(`bday-event:${dateKey}:${encodeEventName(ev.name)}`));
+
+    // Wenn gar nichts ungesendet ist (sollte durch obigen Check schon abgefangen sein), nichts tun
+    if (!unsentBirthdays.length && !unsentEvents.length) {
+      // Trotzdem Rollen
+      for (const b of todays) {
+        const member = await guild.members.fetch(b.userId).catch(() => null);
+        if (member && entry.birthdayRoleId) await assignBirthdayRole(guild, member, entry);
+      }
+      return;
+    }
+
+    // Für die kombinierte Nachricht: nimm die noch ungesendeten.
+    // Falls komplett neu heute (keine alten Einzel-Posts), sind unsent == todays
+    // Bei Upgrade-Szenario (einzelne Posts existieren bereits teilweise) packen wir nur die restlichen
+    // in die kombinierte Nachricht, um Duplikate zu vermeiden.
+    const birthdaysToSend = unsentBirthdays.length ? unsentBirthdays : todays;
+    const eventsToSend = unsentEvents.length ? unsentEvents : todaysEvents;
+
+    // Member-Objekte für Geburtstage holen
+    const birthdayEntries = [];
+    for (const b of birthdaysToSend) {
       const member = await guild.members.fetch(b.userId).catch(() => null);
-      if (!member) continue;
+      birthdayEntries.push({ id: b.userId, member: member || { id: b.userId }, wishes: [] });
+    }
+    const eventEntries = eventsToSend.map((ev) => ({
+      name: ev.name,
+      hex: encodeEventName(ev.name),
+      interested: [],
+    }));
 
-      const { container } = buildCongratsEmbed({ member, lang: entry.lang, dateKey });
-      let sent = null;
-      try {
-        sent = await channel.send(componentsV2Payload([container]));
-      } catch (err) {
-        logger.warn(`[birthday-bot] Gruß für ${b.userId} konnte nicht gesendet werden:`, err.message);
-        sent = null;
-      }
-      if (sent) {
-        // Mit 🎉🎂🎊🎁🎈🥳 in zufälliger Reihenfolge reagieren
-        await addReactionsInRandomOrder(sent, BIRTHDAY_REACTION_EMOJIS).catch(() => {});
-      }
-      // Geburtstagsrolle für 24 Stunden vergeben (falls beim /setup gewählt)
-      if (entry.birthdayRoleId) await assignBirthdayRole(guild, member, entry);
+    const { container } = buildCombinedCongratsEmbed({
+      lang: entry.lang,
+      dateKey,
+      birthdays: birthdayEntries,
+      events: eventEntries,
+    });
+
+    let sent = null;
+    try {
+      sent = await channel.send(componentsV2Payload([container]));
+    } catch (err) {
+      logger.warn(`[birthday-bot] Kombinierter Geburtstags-POST für ${dateKey} konnte nicht gesendet werden:`, err.message);
+      sent = null;
     }
 
-    // Events: ähnliche 0-Uhr-Nachricht (eigener Titel/Text/Button), danach
-    // aus der Liste ENTFERNEN (Events rotieren nicht wie Geburtstage).
-    let fired = 0;
-    for (const ev of todaysEvents) {
-      const marker = `bday-event:${dateKey}:${encodeEventName(ev.name)}`;
-      if (!wasSent(marker)) {
-        const { container } = buildEventCongratsEmbed({ name: ev.name, lang: entry.lang, dateKey });
-        let sent = null;
-        try {
-          sent = await channel.send(componentsV2Payload([container]));
-        } catch (err) {
-          logger.warn(`[birthday-bot] Event-Post „${ev.name}“ konnte nicht gesendet werden:`, err.message);
-          sent = null;
-        }
-        if (sent) {
-          // Mit den Emojis aus dem Event-Namen reagieren (zufällige Reihenfolge), sonst nichts
-          const emojis = extractEmojisFromText(ev.name);
-          if (emojis.length) {
-            await addReactionsInRandomOrder(sent, emojis).catch(() => {});
-          }
-        }
-        fired++;
-        logger.info(`[birthday-bot] Event „${ev.name}“ auf ${guild.name} gefeuert`);
+    if (sent) {
+      // Reaktionen: Geburtstags-Emojis + Emojis aus Event-Namen
+      const allEmojis = [...BIRTHDAY_REACTION_EMOJIS];
+      for (const ev of eventsToSend) {
+        const evEmojis = extractEmojisFromText(ev.name);
+        for (const e of evEmojis) if (!allEmojis.includes(e)) allEmojis.push(e);
       }
+      await addReactionsInRandomOrder(sent, allEmojis).catch(() => {});
+      logger.info(`[birthday-bot] Kombinierter POST für ${dateKey} auf ${guild.name} gesendet: ${birthdaysToSend.length} Geburtstage, ${eventsToSend.length} Events`);
     }
+
+    // Geburtstagsrollen für ALLE heutigen Geburtstagskinder (nicht nur die gerade gesendeten)
+    for (const b of todays) {
+      const member = await guild.members.fetch(b.userId).catch(() => null);
+      if (member && entry.birthdayRoleId) await assignBirthdayRole(guild, member, entry);
+    }
+
+    // Fällige Events aus der Liste löschen, wenn sie in unserem heutigen Durchlauf enthalten waren
     if (todaysEvents.length) {
-      // Fällige Events aus der Liste löschen (nicht ans Listen-Ende rotieren)
-      await refresh(entry, null, (events) =>
-        events.filter((e) => !(e.month === t.month && e.day === t.day))
-      );
+      await refresh(entry, null, (events) => events.filter((e) => !(e.month === t.month && e.day === t.day)));
     }
   }
 
   /**
-   * Die neue 7-Tage-Aufräumregel:
+   * Die 7-Tage-Aufräumregel:
    *
    * Geburtstags-Grüße & Event-Posts (erkennbar an ihren Markern) bleiben
    * insgesamt 7 Tage unter der Liste stehen. Ist ein Post älter als 7 Tage,
@@ -497,7 +542,7 @@ function createStore({ client, logger }) {
       .filter((m) => m.id !== entry.messageId && m.createdTimestamp > listTs)
       .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
-    // Abgelaufene Posts: eigene Geburtstags-Grüße / Event-Posts, älter als 7 Tage.
+    // Abgelaufene Posts: eigene Geburtstags-Grüße / Event-Posts / Kombi-Posts, älter als 7 Tage.
     const isPost = (m) => {
       const s = JSON.stringify(m.components || []);
       const text = extractAllText(m);
@@ -505,12 +550,16 @@ function createStore({ client, logger }) {
       return (
         hidden.includes('bday-congrats:') ||
         hidden.includes('bday-event:') ||
+        hidden.includes('bday-combined:') ||
         text.includes('bday-congrats:') ||
         text.includes('bday-event:') ||
+        text.includes('bday-combined:') ||
         s.includes('bday-congrats:') ||
         s.includes('bday-event:') ||
+        s.includes('bday-combined:') ||
         (m.content || '').includes('bday-congrats:') ||
-        (m.content || '').includes('bday-event:')
+        (m.content || '').includes('bday-event:') ||
+        (m.content || '').includes('bday-combined:')
       );
     };
     const expired = below.filter((m) => isPost(m) && m.createdTimestamp + POST_LIFETIME_MS <= now);

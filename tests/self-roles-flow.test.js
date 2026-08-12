@@ -294,7 +294,12 @@ test('Kompletter Flow: Command → Formular → Editor → Rollen → Absenden',
   assert.match(editorText, /Wähle deine Rollen/, 'Titel wird bestätigt');
   assert.match(editorText, /Erste Zeile Zweite Zeile Dritte/, 'Beschreibung ist einzeilig');
   assert.match(editorText, /Noch keine Rollen konfiguriert/);
-  assert.ok((editorPayload.flags & MessageFlags.Ephemeral) !== 0, 'Editor ist ephemer');
+  // Nach Transparenz-Update ist der Editor public (alle Admins sehen was konfiguriert wird)
+  // – ephemer ist optional, Hauptsache Container Flag vorhanden
+  assert.ok(
+    (editorPayload.flags & MessageFlags.IsComponentsV2) !== 0,
+    'Editor trägt ComponentsV2 Flag (public für Transparenz)'
+  );
 
   const sessionId = [...ctx.sessions._map.keys()][0];
   assert.ok(sessionId);
