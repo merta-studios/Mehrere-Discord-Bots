@@ -276,7 +276,12 @@ function createXpStore({ logger, env } = {}) {
   }
   function setGuildCommandIds(guildId, ids) {
     if (guildId && ids && typeof ids === 'object') {
-      guildCommandIds.set(guildId, { ...(guildCommandIds.get(guildId) || {}), ...ids });
+      // ERSETZEN statt mergen – analog zu setCommandIds. `ids` ist immer die
+      // vollständige, autoritative Antwort von Discord (PUT/GET). Beim Merge
+      // überlebten verwaiste Guild-Snowflakes (z. B. gelöschte & von Discord
+      // mit neuer ID neu angelegte Commands) und wurden in /help als blaue,
+      // aber tote </name:alt>-Chips gerendert („Kein Befehl gefunden“).
+      guildCommandIds.set(guildId, { ...ids });
       dirtyMetadata = true;
       try { saveToFile(); } catch {}
     }

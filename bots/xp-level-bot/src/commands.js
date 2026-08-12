@@ -234,20 +234,30 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
 
 /**
  * Stellt sicher, dass die Command-IDs vor dem Rendern von /help geladen sind.
- * Reihenfolge: Memory -> persistenter Store -> Discord REST GET Fallback -> Auto-Re-Register Fallback.
+ *
+ * GRUNDREGEL (Fix „/toggle_nicknames & /sync_nicknames: Kein Befehl gefunden“):
+ * Persistente Store-IDs werden NIEMALS ungeprüft in /help gerendert. In der
+ * Datenbank können Snowflakes aus alten Registrierungen liegen – z. B.
+ * Dev-Guild-IDs, die durch einen früheren Scope-Bug im globalen Slot gelandet
+ * sind, oder IDs von Commands, die Discord nach Löschen & Neuanlegen mit einer
+ * neuen Snowflake versehen hat. /help zeigte solche Chips blau an, beim Klick
+ * meldete Discord aber „Kein Befehl gefunden“.
+ *
+ * Reihenfolge:
+ * 1. In-Memory-IDs – nur wenn sie in DIESEM Prozess frisch (TTL 5 min) gegen
+ *    Discord verifiziert wurden.
+ * 2. Autoritative Quelle: Discord REST GET. Die Antwort ERSETZT RAM + Store
+ *    komplett (kein Merge, damit verwaiste IDs nicht weiterleben). Fehlen
+ *    Commands bei Discord (z. B. weil produktiv noch ein alter Stand lief),
+ *    wird sofort neu registriert und die frische PUT-Antwort verwendet.
+ * 3. REST-Ausfall: nur IDs verwenden, die in diesem Prozess bereits einmal
+ *    gegen Discord verifiziert wurden. Gibt es keine, rendert /help die
+ *    Befehle als /name-Text statt als potenziell tote blaue Chips.
  *
  * SCOPE-LOGIK (Versuch 5):
  * - Auf der Dev-Gilde (guildId === devGuildId) werden Guild-Command-IDs verwendet.
  * - Auf ALLEN anderen Servern werden NUR globale Command-IDs verwendet – nie
  *   Guild-IDs einer fremden (Dev-)Gilde, sonst „Kein Befehl gefunden".
- *
- * VERIFIZIERUNG (Versuch 6): Gespeicherte Command-IDs werden NICHT blind
- * vertraut. Eine veraltete Snowflake (z.B. weil Discord einen Command neu
- * angelegt oder gelöscht hat) würde sonst in /help als </name:STALE_ID>
- * gerendert – beim Klick meldet Discord dann „Kein Befehl gefunden"
- * (genau das passierte bei /update_leaderboard). Deshalb werden die IDs
- * gegen die Discord REST API geprüft, sobald sie älter als die TTL sind
- * (max. 1 GET alle 5 Minuten pro Bot-Prozess, /help bleibt schnell).
  */
 const COMMAND_ID_VERIFY_TTL_MS = 5 * 60 * 1000;
 
@@ -264,121 +274,118 @@ async function ensureCommandIds(ctx, guildId = null) {
     ctx.commandIdsVerifiedScope === verifyScope &&
     typeof ctx.commandIdsVerifiedAt === 'number' &&
     Date.now() - ctx.commandIdsVerifiedAt < COMMAND_ID_VERIFY_TTL_MS;
+  const markVerified = (ids) => {
+    ctx.commandIdsVerifiedScope = verifyScope;
+    ctx.commandIdsVerifiedAt = Date.now();
+    ctx.commandIdsVerifiedIds = ids; // letzte geprüfte IDs = einziger Offline-Fallback
+  };
 
-  // 1. In-Memory Check (Guild-Slot zuerst, aber NUR auf der Dev-Gilde).
-  //    Nur zurückgeben, wenn frisch verifiziert – sonst weiter zu Schritt 3.
-  if (isDevGuildCall && ctx.guildCommandIds instanceof Map && hasAll(ctx.guildCommandIds.get(guildId))) {
-    if (isFresh()) return ctx.guildCommandIds.get(guildId);
-  }
-  if (hasAll(ctx.commandIds)) {
-    if (isFresh()) return ctx.commandIds;
-  }
+  const memoryIds = () =>
+    isDevGuildCall
+      ? (ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(guildId) : null)
+      : ctx.commandIds;
 
-  // 2. Store Check (übersteht Bot-Restarts sofort ohne REST-Aufruf).
-  //    Auch hier: ohne frische Verifizierung nicht blind zurückgeben.
-  if (isDevGuildCall && ctx.store?.getGuildCommandIds && hasAll(ctx.store.getGuildCommandIds(guildId))) {
-    const storedG = ctx.store.getGuildCommandIds(guildId);
-    ctx.guildCommandIds = ctx.guildCommandIds || new Map();
-    ctx.guildCommandIds.set(guildId, storedG);
-    if (isFresh()) return storedG;
-  }
-  if (ctx.store?.getCommandIds && hasAll(ctx.store.getCommandIds())) {
-    ctx.commandIds = { ...(ctx.commandIds || {}), ...ctx.store.getCommandIds() };
-    if (isFresh()) return ctx.commandIds;
-  }
+  // 1. In-Memory Check – nur zurückgeben, wenn frisch verifiziert.
+  const mem = memoryIds();
+  if (hasAll(mem) && isFresh()) return mem;
 
-  // 3. Command-IDs direkt von der Discord REST API abrufen und damit die
-  //    gespeicherten IDs VERIFIZIEREN bzw. korrigieren. Verwaiste Snowflakes
-  //    (z.B. gelöschte/neu angelegte Commands) werden so ersetzt.
+  // 2. Autoritativer Check gegen Discord REST. WICHTIG: Der persistente Store
+  //    wird hier bewusst NICHT als Zwischenquelle eingelesen – ungeprüfte
+  //    Store-IDs erzeugten genau die gemeldeten toten </name:alt>-Chips von
+  //    /toggle_nicknames und /sync_nicknames.
   const clientId = ctx.client?.user?.id;
   const token = ctx.token;
   if (clientId && token) {
     try {
       const rest = ctx.rest || new REST({ version: '10' }).setToken(token);
 
+      let fetched = null;
       if (isDevGuildCall) {
         // Nur auf der Dev-Gilde selbst die Guild-Commands laden – und nur in den
         // Guild-Slot schreiben, nie in den globalen Slot.
-        const fetched = await rest.get(Routes.applicationGuildCommands(clientId, devGuildId));
+        fetched = await rest.get(Routes.applicationGuildCommands(clientId, devGuildId));
         if (Array.isArray(fetched)) {
           const ids = Object.fromEntries(fetched.map((c) => [c.name, c.id]));
           ctx.guildCommandIds = ctx.guildCommandIds || new Map();
           ctx.guildCommandIds.set(devGuildId, ids);
           if (ctx.store?.setGuildCommandIds) ctx.store.setGuildCommandIds(devGuildId, ids);
-          if (hasAll(ids)) {
-            ctx.commandIdsVerifiedScope = verifyScope;
-            ctx.commandIdsVerifiedAt = Date.now();
-            return ids;
-          }
+          markVerified(ids);
+          if (hasAll(ids)) return ids;
         }
       } else {
         // Normaler Server / Produktion: IMMER die globalen Commands laden.
-        const fetched = await rest.get(Routes.applicationCommands(clientId));
+        fetched = await rest.get(Routes.applicationCommands(clientId));
         if (Array.isArray(fetched)) {
           const ids = Object.fromEntries(fetched.map((c) => [c.name, c.id]));
           ctx.commandIds = ids;
           if (ctx.store?.setCommandIds) ctx.store.setCommandIds(ids);
-          if (hasAll(ids)) {
-            ctx.commandIdsVerifiedScope = verifyScope;
-            ctx.commandIdsVerifiedAt = Date.now();
-            return ids;
-          }
+          markVerified(ids);
+          if (hasAll(ids)) return ids;
         }
       }
 
-      // Falls GET immer noch unvollständig ist (z.B. /level_roles oder
-      // /update_leaderboard fehlt auf Discord), aktiv neu registrieren und
-      // die frischen IDs verwenden. Nur bei echtem Erfolg als verifiziert
-      // markieren – sonst versucht der nächste /help-Aufruf es erneut.
+      // Fehlen Commands auf Discord (z. B. /toggle_nicknames oder
+      // /sync_nicknames), aktiv neu registrieren und die frischen IDs verwenden.
+      // Nur bei echtem Erfolg als vollständig verifiziert markieren – sonst
+      // versucht der nächste /help-Aufruf es erneut.
       const registered = await registerCommands(ctx, { retryDelays: [0] });
       if (registered) {
-        if (isDevGuildCall) {
-          const guildIds = ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(devGuildId) : null;
-          if (guildIds && hasAll(guildIds)) {
-            ctx.commandIdsVerifiedScope = verifyScope;
-            ctx.commandIdsVerifiedAt = Date.now();
-            return guildIds;
-          }
-        } else if (hasAll(ctx.commandIds)) {
-          ctx.commandIdsVerifiedScope = verifyScope;
-          ctx.commandIdsVerifiedAt = Date.now();
-          return ctx.commandIds;
+        const fresh = memoryIds();
+        if (hasAll(fresh)) {
+          markVerified(fresh);
+          return fresh;
         }
+      }
+
+      // Registrierung konnten nicht alle Namen herstellen: die soeben per GET
+      // verifizierten (echten) IDs zurückgeben – fehlende Befehle werden dann
+      // als /name-Text gerendert statt mit falscher Snowflake.
+      if (Array.isArray(fetched)) {
+        return Object.fromEntries(fetched.map((c) => [c.name, c.id]));
       }
     } catch (err) {
       ctx.logger?.warn?.(`[xp-level-bot] ensureCommandIds: Fetch/Register fehlgeschlagen: ${err.message}`);
     }
   }
 
-  // Keine verifizierten IDs verfügbar – bestmöglichen Fallback liefern.
-  return ctx.commandIds || {};
+  // 3. REST nicht erreichbar: NUR die zuletzt in diesem Prozess verifizierten
+  //    IDs dieses Scopes verwenden. NIEMALS ungeprüfte Store-IDs – die waren
+  //    die Ursache für die toten blauen Chips.
+  const last = ctx.commandIdsVerifiedIds;
+  if (ctx.commandIdsVerifiedScope === verifyScope && last && typeof last === 'object') return last;
+  return {};
 }
 
 /**
  * Erzeugt eine klickbare Command-Mention im Format </name:id>.
- * Fallback auf /name nur dann, wenn wirklich keine ID auffindbar ist.
+ * Fallback auf /name nur dann, wenn keine VERIFIZIERTE ID auffindbar ist.
+ *
+ * WICHTIG (Fix „/toggle_nicknames & /sync_nicknames: Kein Befehl gefunden“):
+ * Es gibt bewusst KEINEN Fallback auf den persistenten Store. /help ruft vor
+ * dem Rendern immer ensureCommandIds auf, das ctx.commandIds /
+ * ctx.guildCommandIds ausschließlich mit IDs füllt, die gegen die Discord
+ * REST API geprüft (oder frisch registriert) wurden. Ungeprüfte Store-IDs
+ * hatten früher blaue, aber tote Chips erzeugt.
  *
  * SCOPE-LOGIK (Versuch 5, Prüfpunkt 1):
- * - Guild-Command-IDs (aus `ctx.guildCommandIds` / Store) dürfen AUSSCHLIESSLICH
- *   auf der Dev-Gilde selbst verwendet werden (guildId === devGuildId).
+ * - Guild-Command-IDs (aus `ctx.guildCommandIds`) dürfen AUSSCHLIESSLICH auf
+ *   der Dev-Gilde selbst verwendet werden (guildId === devGuildId).
  * - Auf normalen Servern (guildId !== devGuildId) wird NIE eine Guild-Command-ID
  *   aus einer anderen (Dev-)Gilde gerendert – sonst meldet Discord beim Klick
- *   „Kein Befehl gefunden". Dort zählt zwingend die GLOBALE Command-ID.
+ *   „Kein Befehl gefunden”. Dort zählt zwingend die GLOBALE Command-ID.
  */
 function commandMention(ctx, name, guildId = null) {
   const devGuildId = normalizeGuildId(ctx.devGuildId);
   const isDevGuild = Boolean(devGuildId && guildId && String(guildId) === devGuildId);
 
   let id = null;
-  if (isDevGuild) {
+  if (isDevGuild && ctx.guildCommandIds instanceof Map) {
     // Nur auf der Dev-Gilde selbst dürfen Guild-Command-IDs verwendet werden.
-    const guildIds = ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(guildId) : null;
-    const storedGuildIds = ctx.store?.getGuildCommandIds ? ctx.store.getGuildCommandIds(guildId) : null;
-    id = guildIds?.[name] || storedGuildIds?.[name];
+    id = ctx.guildCommandIds.get(guildId)?.[name] || null;
   }
   if (!id) {
     // Auf allen normalen Servern: ausschließlich die globale Command-ID.
-    id = ctx.commandIds?.[name] || (ctx.store?.getCommandId ? ctx.store.getCommandId(name) : null);
+    id = ctx.commandIds?.[name] || null;
   }
 
   return id ? `</${name}:${id}>` : `/${name}`;
@@ -771,10 +778,68 @@ function todayKeyForLang(lang) {
   return `${time.year}-${pad(time.month)}-${pad(time.day)}`;
 }
 
+/**
+ * Start-Verifikation (Fix „/toggle_nicknames & /sync_nicknames nicht gefunden"):
+ * Prüft per REST, ob Discord wirklich ALLE definierten Commands serviert, und
+ * loggt das Ergebnis laut und deutlich. Fehlen welche (z. B. weil produktiv
+ * noch ein alter Stand lief oder XP_BOT_GUILD_ID gesetzt ist), ist das im Log
+ * sofort sichtbar – statt erst beim nächsten „Kein Befehl gefunden“-Klick.
+ * Fehlende Commands werden dabei sofort nachregistriert.
+ */
+async function verifyCommandsLive(ctx) {
+  const clientId = ctx.client?.user?.id;
+  if (!clientId || !ctx.token) return false;
+  const expected = defineCommands()
+    .map((c) => c.toJSON())
+    .map((c) => c.name);
+  const devGuildId = normalizeGuildId(ctx.devGuildId);
+  const scopeLabel = devGuildId ? `guild ${devGuildId}` : 'global';
+  try {
+    const rest = ctx.rest || new REST({ version: '10' }).setToken(ctx.token);
+    const route = devGuildId
+      ? Routes.applicationGuildCommands(clientId, devGuildId)
+      : Routes.applicationCommands(clientId);
+    let live = await rest.get(route);
+    let liveNames = new Set((Array.isArray(live) ? live : []).map((c) => c.name));
+    let missing = expected.filter((n) => !liveNames.has(n));
+    if (missing.length > 0) {
+      ctx.logger?.warn?.(
+        `[xp-level-bot] Command-Verifikation (Scope: ${scopeLabel}): Discord fehlen ${missing
+          .map((n) => `/${n}`)
+          .join(', ')} – registriere sofort nach...`
+      );
+      const ok = await registerCommands(ctx, { retryDelays: [0] });
+      if (ok) {
+        live = await rest.get(route).catch(() => null);
+        liveNames = new Set((Array.isArray(live) ? live : []).map((c) => c.name));
+        missing = expected.filter((n) => !liveNames.has(n));
+      }
+    }
+    if (missing.length === 0) {
+      ctx.logger?.info?.(
+        `[xp-level-bot] Command-Verifikation OK (Scope: ${scopeLabel}) – alle ${expected.length} Commands live: ${expected
+          .map((n) => `/${n}`)
+          .join(', ')}`
+      );
+      return true;
+    }
+    ctx.logger?.error?.(
+      `[xp-level-bot] Command-Verifikation FEHLGESCHLAGEN (Scope: ${scopeLabel}) – Discord kennt diese Commands NICHT: ${missing
+        .map((n) => `/${n}`)
+        .join(', ')}. /help versucht bei jedem Aufruf eine Reparatur.`
+    );
+    return false;
+  } catch (err) {
+    ctx.logger?.warn?.(`[xp-level-bot] Command-Verifikation übersprungen/fehlgeschlagen: ${err.message}`);
+    return false;
+  }
+}
+
 module.exports = {
   defineCommands,
   registerCommands,
   ensureCommandIds,
+  verifyCommandsLive,
   handleChatInput,
   pick,
   commandMention,
