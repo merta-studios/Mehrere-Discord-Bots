@@ -2,7 +2,8 @@
  * Alle Interaktionen, die keine Slash-Commands sind:
  *
  * - Rollen-Buttons unter den öffentlichen Self-Roles-Nachrichten
- *   (Rolle geben / „hast du schon“ + Abgeben-Button)
+ *   (Rolle geben / „hast du schon“ + Abgeben-Button). Die Antworten
+ *   darauf sind IMMER ephemer – nur der Klicker sieht sie.
  * - Editor-Buttons, Auswahlmenüs & Formulare
  * - Admin-Panel (Owner, nur im DM)
  *
@@ -81,7 +82,8 @@ async function handleInteraction(ctx, interaction) {
   } catch (err) {
     ctx.logger.error('[self-roles-bot] Interaction-Fehler:', err);
     const lang = langFromDiscord(interaction.locale);
-    const payload = componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: false });
+    // Unerwartete Fehler nie in den Kanal spammen – nur der Klicker sieht sie.
+    const payload = componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: true });
     try {
       if (interaction.deferred || interaction.replied) return await interaction.followUp(payload);
       return await interaction.reply(payload);
@@ -100,13 +102,16 @@ async function handleInteraction(ctx, interaction) {
  * - Rolle noch nicht da → geben (im Einzel-Modus fliegen andere Rollen raus)
  * - Rolle schon da     → nachfragen + Button zum Abgeben
  * Danach werden die Zähler in der Nachricht sofort aktualisiert.
+ *
+ * Alle Antworten hier sind ephemer (nur der Klicker sieht sie) – sonst
+ * würde jeder Klick eine dauerhafte öffentliche Bot-Nachricht hinterlassen.
  */
 async function handleRoleButton(ctx, interaction, { roleId }) {
   const guild = interaction.guild;
   if (!guild) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('errGuildOnly', langFromDiscord(interaction.locale)))], {
-        ephemeral: false,
+        ephemeral: true,
       })
     );
   }
@@ -116,10 +121,11 @@ async function handleRoleButton(ctx, interaction, { roleId }) {
   const lang = config?.lang || langFromDiscord(interaction.locale);
 
   if (!config || !config.roles?.length) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('messageBroken', lang))], { ephemeral: false }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('messageBroken', lang))], { ephemeral: true }));
   }
 
-  await interaction.deferReply().catch(() => {});
+  // Ephemeral MUSS schon beim Defer gesetzt werden – nachträglich geht das nicht.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral, ephemeral: true }).catch(() => {});
 
   // Registry auffrischen, damit Scheduler & Panel die Nachricht kennen.
   const entry = ensureEntry(ctx, interaction, config);
@@ -128,22 +134,22 @@ async function handleRoleButton(ctx, interaction, { roleId }) {
   if (!role) {
     // Rolle gelöscht → Nachricht aufräumen und Bescheid geben.
     await safeRefresh(ctx, entry, { force: true });
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, t('roleGone', lang))]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, t('roleGone', lang))]));
   }
 
   const member = interaction.member?.roles ? interaction.member : await guild.members.fetch(interaction.user.id).catch(() => null);
   if (!member) {
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, t('errGeneric', lang))]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, t('errGeneric', lang))]));
   }
 
   if (!canBotManageRole(guild, role)) {
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, t('errBotPerms', lang))]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, t('errBotPerms', lang))]));
   }
 
   const hasRole = member.roles.cache.has(roleId);
 
   if (hasRole) {
-    // Nachfragen: „Du hast sie schon – abgeben?“
+    // Nachfragen (ephemer): „Du hast sie schon – abgeben?“
     const container = buildAlreadyHasContainer({
       lang,
       roleId,
@@ -151,7 +157,7 @@ async function handleRoleButton(ctx, interaction, { roleId }) {
       messageId: interaction.message.id,
     });
     await safeRefresh(ctx, entry, { force: false });
-    return safeEditReply(interaction, componentsV2Payload([container]));
+    return safeEditReply(interaction, privatePayload([container]));
   }
 
   // Rolle geben – im Einzel-Modus vorher die anderen Rollen dieser Nachricht abnehmen.
@@ -176,14 +182,14 @@ async function handleRoleButton(ctx, interaction, { roleId }) {
     // auch bei einer zickigen API garantiert rausgeht.
     await safeRefresh(ctx, entry, { force: true });
 
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, text)]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, text)]));
   } catch (err) {
     ctx.logger.warn('[self-roles-bot] Rolle konnte nicht vergeben werden:', err.message);
     const msg =
       err?.code === 50013 || err?.status === 403
         ? t('errBotPerms', lang)
         : t('roleActionFailed', lang, { error: err.message });
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, msg)]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, msg)]));
   }
 }
 
@@ -193,26 +199,33 @@ async function handleDropButton(ctx, interaction, { roleId, channelId, messageId
   const lang = guildLang(ctx, guild?.id, channelId, messageId) || langFromDiscord(interaction.locale);
 
   if (!guild) {
-    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', lang))], { ephemeral: false }));
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', lang))], { ephemeral: true }));
   }
 
-  await interaction.deferUpdate().catch(() => {});
+  // Sitzt der Button auf der ephemeren Nachfrage, ersetzen wir sie in-place.
+  // Öffentliche Alt-Antworten (vor dem Ephemeral-Fix) bekommen eine neue
+  // ephemere Antwort – die öffentliche Self-Roles-Nachricht bleibt unangetastet.
+  if (isEphemeralMessage(interaction.message)) {
+    await interaction.deferUpdate().catch(() => {});
+  } else {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral, ephemeral: true }).catch(() => {});
+  }
 
   const member = interaction.member?.roles ? interaction.member : await guild.members.fetch(interaction.user.id).catch(() => null);
   if (!member) {
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, t('errGeneric', lang))]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, t('errGeneric', lang))]));
   }
 
   if (!member.roles.cache.has(roleId)) {
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, t('roleNotHad', lang))]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, t('roleNotHad', lang))]));
   }
 
   const role = guild.roles.cache.get(roleId) || (await guild.roles.fetch(roleId).catch(() => null));
   if (!role) {
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, t('roleGone', lang))]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, t('roleGone', lang))]));
   }
   if (!canBotManageRole(guild, role)) {
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, t('errBotPerms', lang))]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, t('errBotPerms', lang))]));
   }
 
   try {
@@ -222,7 +235,7 @@ async function handleDropButton(ctx, interaction, { roleId, channelId, messageId
     else await ctx.store.refreshForRole(guild.id, roleId, { force: true }).catch(() => {});
     return safeEditReply(
       interaction,
-      componentsV2Payload([smallContainer(null, t('roleRemoved', lang, { role: `<@&${roleId}>` }))])
+      privatePayload([smallContainer(null, t('roleRemoved', lang, { role: `<@&${roleId}>` }))])
     );
   } catch (err) {
     ctx.logger.warn('[self-roles-bot] Rolle konnte nicht entfernt werden:', err.message);
@@ -230,7 +243,7 @@ async function handleDropButton(ctx, interaction, { roleId, channelId, messageId
       err?.code === 50013 || err?.status === 403
         ? t('errBotPerms', lang)
         : t('roleActionFailed', lang, { error: err.message });
-    return safeEditReply(interaction, componentsV2Payload([smallContainer(null, msg)]));
+    return safeEditReply(interaction, privatePayload([smallContainer(null, msg)]));
   }
 }
 
@@ -381,6 +394,22 @@ async function safeRefresh(ctx, entry, options = {}, timeoutMs = 2500) {
     return null;
   }
   return result;
+}
+
+/** Components-V2-Payload, die nur der Klicker sieht. */
+function privatePayload(components) {
+  return componentsV2Payload(components, { ephemeral: true });
+}
+
+/**
+ * Trägt die Nachricht das Ephemeral-Flag? Robust gegenüber dem
+ * discord.js-Flags-Bitfield, einfachen Zahlen (Mocks) und fehlenden Flags.
+ */
+function isEphemeralMessage(message) {
+  const flags = message?.flags;
+  if (!flags) return false;
+  if (typeof flags === 'number') return (flags & MessageFlags.Ephemeral) !== 0;
+  return Boolean(flags.has?.(MessageFlags.Ephemeral));
 }
 
 async function safeEditReply(interaction, payload) {

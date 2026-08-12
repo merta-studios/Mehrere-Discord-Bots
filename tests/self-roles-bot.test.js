@@ -13,9 +13,10 @@
  */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { ButtonStyle } = require('discord.js');
+const { ButtonStyle, MessageFlags } = require('discord.js');
 
 const logic = require('../bots/self-roles-bot/src/logic');
+const { componentsV2Payload } = require('../bots/self-roles-bot/src/message-payload');
 const {
   buildSelfRoleContainer,
   parseSelfRoleMessage,
@@ -488,4 +489,27 @@ test('Alte Nachrichten im ausführlichen Marker-Format werden noch verstanden', 
 test('Doppelte Platzhalter werden über den Vergleichsschlüssel erkannt', () => {
   assert.equal(logic.labelKey('  Gamer  '), logic.labelKey('gamer'));
   assert.notEqual(logic.labelKey('Gamer'), logic.labelKey('Gamer 2'));
+});
+
+test('Ephemere Button-Antworten tragen das Ephemeral-Flag (nur für den Klicker)', () => {
+  const { smallContainer } = require('../bots/self-roles-bot/src/embed-builder');
+  const privateReply = componentsV2Payload([smallContainer(null, 'Zack')], { ephemeral: true });
+  const publicMessage = componentsV2Payload([smallContainer(null, 'Rollen')], { ephemeral: false });
+
+  assert.equal(
+    (privateReply.flags & MessageFlags.Ephemeral) !== 0,
+    true,
+    'Klick-Antwort muss ephemeral sein'
+  );
+  assert.equal(
+    (privateReply.flags & MessageFlags.IsComponentsV2) !== 0,
+    true,
+    'Klick-Antwort bleibt Components V2'
+  );
+  assert.equal(
+    (publicMessage.flags & MessageFlags.Ephemeral) !== 0,
+    false,
+    'Die fertige Self-Roles-Nachricht selbst bleibt öffentlich'
+  );
+  assert.equal('ephemeral' in privateReply, false, 'Kein veraltetes ephemeral-Feld im Payload');
 });

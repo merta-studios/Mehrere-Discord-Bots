@@ -204,7 +204,16 @@ function makeHarness({ botCanManageRoles = true, roleCreateFails = false, sendFa
 
 /** Interaktions-Mocks – sammeln alle Antworten für die Assertions. */
 function makeInteraction(overrides = {}) {
-  const out = { replies: [], updates: [], modals: [], editReplies: [], followUps: [], deferred: false, replied: false };
+  const out = {
+    replies: [],
+    updates: [],
+    modals: [],
+    editReplies: [],
+    followUps: [],
+    deferred: false,
+    replied: false,
+    deferOptions: null,
+  };
   const base = {
     deferred: false,
     replied: false,
@@ -237,12 +246,14 @@ function makeInteraction(overrides = {}) {
       out.followUps.push(p);
       return p;
     },
-    deferReply: async () => {
+    deferReply: async (opts = {}) => {
       out.deferred = true;
+      out.deferOptions = opts;
       base.deferred = true;
     },
     deferUpdate: async () => {
       out.deferred = true;
+      out.deferUpdate = true;
       base.deferred = true;
     },
     showModal: async (m) => {
@@ -250,6 +261,23 @@ function makeInteraction(overrides = {}) {
     },
   };
   return { interaction: Object.assign(base, overrides), out };
+}
+
+function isEphemeralPayload(payload) {
+  return Boolean(payload?.flags & MessageFlags.Ephemeral);
+}
+
+/** Defer oder direkte Antwort muss das Ephemeral-Flag tragen. */
+function assertPrivateToClicker(out, label = 'Antwort') {
+  const deferredEphemeral =
+    out.deferOptions &&
+    ((typeof out.deferOptions.flags === 'number' && (out.deferOptions.flags & MessageFlags.Ephemeral) !== 0) ||
+      out.deferOptions.ephemeral === true);
+  const reply = out.replies.at(-1) || out.followUps.at(-1) || out.editReplies.at(-1);
+  assert.ok(
+    deferredEphemeral || isEphemeralPayload(reply),
+    `${label} muss nur für den Klicker sichtbar sein (ephemeral)`
+  );
 }
 
 function textOf(payload) {
@@ -414,6 +442,7 @@ test('Button-Klick gibt die Rolle und aktualisiert den Zähler', async () => {
   await handleInteraction(h.ctx, click.interaction);
 
   assert.ok(member._owned.has(h.roleA.id), 'Nutzer hat die Rolle bekommen');
+  assertPrivateToClicker(click.out, 'Rollen-Vergabe');
   const answer = textOf(click.out.editReplies.at(-1));
   assert.match(answer, new RegExp(`<@&${h.roleA.id}>`));
   assert.match(answer, /gehört jetzt dir|Zack/);
@@ -441,6 +470,7 @@ test('Zweiter Klick fragt nach und der Abgeben-Button entfernt die Rolle', async
   });
   await handleInteraction(h.ctx, again.interaction);
 
+  assertPrivateToClicker(again.out, 'Schon-drin-Nachfrage');
   const ask = again.out.editReplies.at(-1);
   const askText = textOf(ask);
   assert.match(askText, /hast .*längst|schon/i);
@@ -462,6 +492,7 @@ test('Zweiter Klick fragt nach und der Abgeben-Button entfernt die Rolle', async
   await handleInteraction(h.ctx, drop.interaction);
 
   assert.equal(member._owned.has(h.roleA.id), false, 'Rolle wurde entfernt');
+  assertPrivateToClicker(drop.out, 'Rolle abgeben');
   assert.match(textOf(drop.out.editReplies.at(-1)), /ist weg|entfernt/i);
 });
 
@@ -498,7 +529,62 @@ test('Einzel-Modus tauscht die alte Rolle gegen die neue', async () => {
 
   assert.equal(member._owned.has(h.roleA.id), false, 'Alte Rolle ist weg');
   assert.ok(member._owned.has(h.roleB.id), 'Neue Rolle ist da');
+  assertPrivateToClicker(click.out, 'Rollentausch');
   assert.match(textOf(click.out.editReplies.at(-1)), /Rollentausch|Swap/i);
+});
+
+test('Abgeben auf der ephemeren Nachfrage ersetzt sie in-place (bleibt privat)', async () => {
+  const h = await publishFixture();
+  const member = h.makeMember('user1');
+  await member.roles.add(h.roleA.id);
+
+  const ephemeralAsk = {
+    id: 'ask1',
+    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+    components: [],
+  };
+  const drop = makeInteraction({
+    isButton: () => true,
+    customId: `srl_drop_${h.roleA.id}_chan1_${h.message.id}`,
+    guild: h.guild,
+    member,
+    user: { id: 'user1' },
+    message: ephemeralAsk,
+  });
+  await handleInteraction(h.ctx, drop.interaction);
+
+  assert.equal(drop.out.deferUpdate, true, 'Ephemere Nachfrage wird in-place aktualisiert');
+  assert.equal(member._owned.has(h.roleA.id), false);
+  assertPrivateToClicker(drop.out, 'In-place Abgeben');
+});
+
+test('Abgeben auf einer öffentlichen Alt-Antwort öffnet eine neue ephemere Antwort', async () => {
+  const h = await publishFixture();
+  const member = h.makeMember('user1');
+  await member.roles.add(h.roleA.id);
+
+  const publicLeftover = {
+    id: 'old-public',
+    flags: MessageFlags.IsComponentsV2, // kein Ephemeral – Altlast
+    components: [],
+    delete: async () => {
+      publicLeftover.deleted = true;
+    },
+  };
+  const drop = makeInteraction({
+    isButton: () => true,
+    customId: `srl_drop_${h.roleA.id}_chan1_${h.message.id}`,
+    guild: h.guild,
+    member,
+    user: { id: 'user1' },
+    message: publicLeftover,
+  });
+  await handleInteraction(h.ctx, drop.interaction);
+
+  assert.ok(drop.out.deferOptions, 'Neue ephemere Antwort statt Update der öffentlichen Nachricht');
+  assert.equal(drop.out.deferUpdate, undefined, 'Öffentliche Alt-Antwort wird nicht in-place überschrieben');
+  assert.equal(h.message.id, 'msg1', 'Die fertige Self-Roles-Nachricht bleibt stehen');
+  assertPrivateToClicker(drop.out, 'Alt-Antwort Abgeben');
 });
 
 test('Mehrfach-Modus lässt beide Rollen zu', async () => {
@@ -600,6 +686,7 @@ test('Klick auf eine gelöschte Rolle antwortet freundlich statt zu crashen', as
     message: h.message,
   });
   await handleInteraction(h.ctx, click.interaction);
+  assertPrivateToClicker(click.out, 'Gelöschte Rolle');
   assert.match(textOf(click.out.editReplies.at(-1)), /gelöscht|🪦/);
 });
 
@@ -616,6 +703,7 @@ test('Fehlende Bot-Rechte werden klar gemeldet (kein stiller Fehler)', async () 
     message: h.message,
   });
   await handleInteraction(h.ctx, click.interaction);
+  assertPrivateToClicker(click.out, 'Fehlende Rechte');
   assert.match(textOf(click.out.editReplies.at(-1)), /Rollen verwalten|Manage Roles/i);
   assert.equal(member._owned.has(h.roleA.id), false);
 });
@@ -634,6 +722,7 @@ test('Klick auf eine kaputte Nachricht ohne Konfiguration bleibt höflich', asyn
   await handleInteraction(h.ctx, click.interaction);
   const answer = textOf(click.out.replies.at(-1) || click.out.editReplies.at(-1));
   assert.match(answer, /kaputt|veraltet|broken/i);
+  assertPrivateToClicker(click.out, 'Kaputte Nachricht');
 });
 
 test('Nach einem Neustart wird die Nachricht per Klick wieder in die Registry geholt', async () => {
