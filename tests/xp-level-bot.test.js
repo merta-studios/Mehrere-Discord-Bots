@@ -17,6 +17,7 @@ const {
   applyDailyDecay,
   formatNickname,
   stripLvlTag,
+  hasLvlTag,
   xpNeeded,
   MEDIA_XP,
   calculateXpForMessage,
@@ -28,7 +29,14 @@ const { t, LANGS } = require('../bots/xp-level-bot/src/languages');
 const { sendJoinNotice } = require('../bots/xp-level-bot/src/admin-panel');
 const { buildModal, syncMemberLevelRoles } = require('../bots/xp-level-bot/src/level-roles');
 const { buildLevelUpEmbed } = require('../bots/xp-level-bot/src/embed-builder');
-const { refreshRankNicknames, maybeRefreshRankNicknames } = require('../bots/xp-level-bot/src/nicknames');
+const {
+  refreshRankNicknames,
+  maybeRefreshRankNicknames,
+  ensureNickname,
+  syncAllNicknames,
+  areNicknamesEnabled,
+  removeNicknameTag,
+} = require('../bots/xp-level-bot/src/nicknames');
 const {
   isLeaderboardRefreshDue,
   isHourlyRefreshDue,
@@ -534,4 +542,121 @@ test('lbDecayNotice: Hinweis ist kurz & in allen 10 Sprachen vorhanden', () => {
 test('lbNextUpdate: erwähnt stündlich + Level-Ups', () => {
   assert.match(t('lbNextUpdate', 'de'), /stündlich/i);
   assert.match(t('lbNextUpdate', 'de'), /Level-Ups/i);
+});
+
+test('hasLvlTag: erkennt nur echte Level-Tags', () => {
+  assert.equal(hasLvlTag('[Lvl 2 🥈] Claudia'), true);
+  assert.equal(hasLvlTag('[Lvl 12] Bob'), true);
+  assert.equal(hasLvlTag('Claudia'), false);
+  assert.equal(hasLvlTag('Lvl 2 Claudia'), false);
+});
+
+test('areNicknamesEnabled: Standard ist an, nur explizites false schaltet aus', () => {
+  assert.equal(areNicknamesEnabled({ getGuild: () => null }, 'g1'), true);
+  assert.equal(areNicknamesEnabled({ getGuild: () => ({}) }, 'g1'), true);
+  assert.equal(areNicknamesEnabled({ getGuild: () => ({ nicknamesEnabled: true }) }, 'g1'), true);
+  assert.equal(areNicknamesEnabled({ getGuild: () => ({ nicknamesEnabled: false }) }, 'g1'), false);
+  assert.equal(areNicknamesEnabled({}, 'g1'), true);
+});
+
+test('ensureNickname: setzt nichts, wenn Nickname-Tags ausgeschaltet sind', async () => {
+  const { guild, members, makeMember } = makeNicknameHarness();
+  const a = makeMember('a', 'Alice', 'Alice');
+  let setCalls = 0;
+  a.setNickname = async (nick) => { setCalls += 1; a.nickname = nick; };
+  const store = {
+    getGuild: () => ({ guildId: 'g1', nicknamesEnabled: false, leaderboardChannelId: 'c' }),
+    getRank: () => ({ rank: 4 }),
+    getUser: () => ({ userId: 'a', level: 3, xp: 0 }),
+  };
+  const ok = await ensureNickname({ store }, guild, 'a', 3, 'de');
+  assert.equal(ok, false);
+  assert.equal(setCalls, 0);
+  assert.equal(members.get('a').nickname, 'Alice');
+});
+
+test('refreshRankNicknames: bleibt stumm, wenn Tags ausgeschaltet sind', async () => {
+  const { guild, members, makeMember } = makeNicknameHarness();
+  const a = makeMember('a', 'Alice', 'Alice');
+  let setCalls = 0;
+  a.setNickname = async (nick) => { setCalls += 1; a.nickname = nick; };
+  const store = {
+    getGuild: () => ({ nicknamesEnabled: false }),
+    getLeaderboard: () => [{ userId: 'a', level: 5, xp: 50 }],
+    getRank: () => ({ rank: 1 }),
+    getUser: () => ({ userId: 'a', level: 5, xp: 0 }),
+  };
+  await refreshRankNicknames({ store }, guild, 'a', 'de');
+  assert.equal(setCalls, 0);
+});
+
+test('removeNicknameTag: entfernt [Lvl]-Tag und stellt den Anzeigenamen wieder her', async () => {
+  const { guild, makeMember } = makeNicknameHarness();
+  const a = makeMember('a', 'alice123', '[Lvl 4 🥇] CoolAlice');
+  a.displayName = '[Lvl 4 🥇] CoolAlice';
+  const result = await removeNicknameTag({ store: { getGuild: () => ({}) } }, guild, a, 'de');
+  assert.equal(result, 'updated');
+  assert.equal(a.nickname, 'CoolAlice');
+});
+
+test('removeNicknameTag: setzt Nickname auf null, wenn nur der Username übrig bleibt', async () => {
+  const { guild, makeMember } = makeNicknameHarness();
+  const a = makeMember('a', 'Alice', '[Lvl 1] Alice');
+  const result = await removeNicknameTag({ store: { getGuild: () => ({}) } }, guild, a, 'de');
+  assert.equal(result, 'updated');
+  assert.equal(a.nickname, null);
+});
+
+test('syncAllNicknames: setzt fehlende Tags, wenn die Funktion an ist', async () => {
+  const { guild, members, makeMember } = makeNicknameHarness();
+  makeMember('a', 'Alice', 'Alice');
+  makeMember('b', 'Bob', '[Lvl 2] Bob');
+  makeMember('botty', 'Bot', null).user.bot = true;
+  guild.members.fetch = async () => members;
+
+  const store = {
+    getGuild: () => ({ nicknamesEnabled: true }),
+    getRank: (gid, userId) => ({ rank: userId === 'a' ? 1 : 4 }),
+    getUser: (gid, userId) => ({ userId, level: userId === 'a' ? 5 : 2, xp: 0 }),
+  };
+  const progress = [];
+  const stats = await syncAllNicknames({ store }, guild, 'de', {
+    onProgress: async (s) => { progress.push({ ...s }); },
+  });
+
+  assert.equal(stats.total, 2, 'Bots werden übersprungen');
+  assert.equal(stats.updated, 1);
+  assert.equal(stats.unchanged, 1);
+  assert.equal(stats.failed, 0);
+  assert.equal(members.get('a').nickname, '[Lvl 5 🥇] Alice');
+  assert.equal(members.get('b').nickname, '[Lvl 2] Bob');
+  assert.ok(progress.length >= 1, 'Lade-/Fortschritts-Callback muss feuern');
+});
+
+test('syncAllNicknames: entfernt Tags, wenn die Funktion aus ist', async () => {
+  const { guild, members, makeMember } = makeNicknameHarness();
+  makeMember('a', 'Alice', '[Lvl 5 🥇] Alice');
+  makeMember('b', 'Bob', 'Bob');
+  guild.members.fetch = async () => members;
+
+  const store = {
+    getGuild: () => ({ nicknamesEnabled: false }),
+    getRank: () => ({ rank: 1 }),
+    getUser: (gid, userId) => ({ userId, level: 5, xp: 0 }),
+  };
+  const stats = await syncAllNicknames({ store }, guild, 'de');
+  assert.equal(stats.enabled, false);
+  assert.equal(stats.updated, 1);
+  assert.equal(stats.unchanged, 1);
+  assert.equal(members.get('a').nickname, null);
+  assert.equal(members.get('b').nickname, 'Bob');
+});
+
+test('Nickname-Command-Beschreibungen bleiben in allen Sprachen unter 100 Zeichen', () => {
+  for (const key of ['toggleNicknamesHelp', 'toggleNicknamesEnabledDesc', 'syncNicknamesHelp']) {
+    for (const code of Object.keys(LANGS)) {
+      const text = t(key, code);
+      assert.ok(text.length >= 1 && text.length <= 100, `${key} (${code}) ${text.length}: ${text}`);
+    }
+  }
 });
