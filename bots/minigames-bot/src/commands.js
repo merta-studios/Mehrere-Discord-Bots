@@ -6,6 +6,7 @@ const {
   Routes,
   PermissionFlagsBits,
   InteractionContextType,
+  ChannelType,
   ContainerBuilder,
   TextDisplayBuilder,
   RESTJSONErrorCodes,
@@ -77,7 +78,7 @@ function defineCommands() {
           })
           .setDescription(t('playOpponentDesc', 'de'))
           .setDescriptionLocalizations(pick('playOpponentDesc'))
-          .setRequired(true)
+          .setRequired(false)
       ),
 
     new SlashCommandBuilder()
@@ -97,6 +98,36 @@ function defineCommands() {
           .setDescriptionLocalizations(pick('setLanguageDesc'))
           .setRequired(true)
           .addChoices(...localizedLanguageChoices())
+      ),
+
+    new SlashCommandBuilder()
+      .setName('set_counting_channel')
+      .setDescription(t('cmdCountingDesc', 'de'))
+      .setDescriptionLocalizations(pick('cmdCountingDesc'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .setContexts(InteractionContextType.Guild)
+      .addChannelOption((option) =>
+        option
+          .setName('channel')
+          .setNameLocalizations({
+            de: 'kanal', fr: 'salon', 'es-ES': 'canal', 'pt-BR': 'canal',
+            ru: 'канал', ja: 'チャンネル', ko: '채널', 'zh-CN': '频道', it: 'canale',
+          })
+          .setDescription(t('countingChannelDesc', 'de'))
+          .setDescriptionLocalizations(pick('countingChannelDesc'))
+          .addChannelTypes(ChannelType.GuildText)
+          .setRequired(true)
+      )
+      .addBooleanOption((option) =>
+        option
+          .setName('aktiv')
+          .setNameLocalizations({
+            'en-US': 'active', fr: 'actif', 'es-ES': 'activo', 'pt-BR': 'ativo',
+            ru: 'активно', ja: 'ゆうこう', ko: '활성', 'zh-CN': '启用', it: 'attivo',
+          })
+          .setDescription(t('countingActiveDesc', 'de'))
+          .setDescriptionLocalizations(pick('countingActiveDesc'))
+          .setRequired(false)
       ),
 
     new SlashCommandBuilder()
@@ -174,6 +205,7 @@ async function handleChatInput(ctx, interaction) {
   switch (interaction.commandName) {
     case 'play': return playCmd(ctx, interaction);
     case 'set_language': return setLanguageCmd(ctx, interaction);
+    case 'set_counting_channel': return setCountingChannelCmd(ctx, interaction);
     case 'admin_set_bot_profile': return profileCmd(ctx, interaction);
     case 'help': return helpCmd(ctx, interaction);
     case 'adminpanel': return openPanel(ctx, interaction);
@@ -186,20 +218,23 @@ async function playCmd(ctx, interaction) {
   if (!interaction.inGuild()) return privateReply(interaction, t('errGuildOnly', lang), lang);
 
   const game = interaction.options.getString('game');
+  // Der Gegner ist optional: ohne Angabe entsteht eine offene Herausforderung,
+  // bei der jede andere Person zuschlagen darf.
   const opponent = interaction.options.getUser('gegner');
-  if (!opponent) return privateReply(interaction, t('errOpponentMissing', lang), lang);
-  if (opponent.id === interaction.user.id) return privateReply(interaction, t('errSelf', lang), lang);
-  if (opponent.bot) return privateReply(interaction, t('errBot', lang), lang);
+  if (opponent) {
+    if (opponent.id === interaction.user.id) return privateReply(interaction, t('errSelf', lang), lang);
+    if (opponent.bot) return privateReply(interaction, t('errBot', lang), lang);
 
-  const opponentMember =
-    interaction.guild.members.cache.get(opponent.id) ||
-    (await interaction.guild.members.fetch(opponent.id).catch(() => null));
-  if (!opponentMember) return privateReply(interaction, t('errOpponentMissing', lang), lang);
+    const opponentMember =
+      interaction.guild.members.cache.get(opponent.id) ||
+      (await interaction.guild.members.fetch(opponent.id).catch(() => null));
+    if (!opponentMember) return privateReply(interaction, t('errOpponentMissing', lang), lang);
+  }
 
   const state = createChallenge({
     game,
     challengerId: interaction.user.id,
-    opponentId: opponent.id,
+    opponentId: opponent ? opponent.id : '',
     lang,
   });
 
@@ -221,6 +256,48 @@ async function setLanguageCmd(ctx, interaction) {
   const text = t('setLangUpdated', newLang, { lang: label });
   return interaction.reply(
     componentsV2Payload([buildLanguageContainer(interaction.guildId, newLang, text, changedAt)])
+  );
+}
+
+async function setCountingChannelCmd(ctx, interaction) {
+  const lang = configuredLang(ctx, interaction);
+  if (!interaction.inGuild()) return privateReply(interaction, t('errGuildOnly', lang), lang);
+  if (!isAdmin(interaction)) return privateReply(interaction, t('errNoPermission', lang), lang);
+
+  const channel = interaction.options.getChannel('channel');
+  const enable = interaction.options.getBoolean('aktiv') ?? true;
+  if (!channel || channel.type !== ChannelType.GuildText || typeof channel.setTopic !== 'function') {
+    return privateReply(interaction, t('errCountingChannel', lang), lang);
+  }
+
+  const manager = ctx.countingManager;
+  if (!manager) return privateReply(interaction, t('errGeneric', lang), lang);
+
+  await interaction.deferReply();
+  const wasActive = manager.isCountingChannel(channel);
+  const result = await manager.setCountingChannel(channel, lang, enable);
+
+  if (!result.ok) {
+    return interaction.editReply(
+      componentsV2Payload([smallContainer(null, t('errCountingTopic', lang), 0xe74c3c)], {
+        allowedMentions: { parse: [] },
+      })
+    );
+  }
+
+  const mention = `<#${channel.id}>`;
+  let text;
+  if (!enable) {
+    text = t(wasActive ? 'countingDisabled' : 'countingNotSet', lang, { channel: mention });
+  } else {
+    text = t(wasActive ? 'countingAlready' : 'countingEnabled', lang, { channel: mention });
+    if (result.manageMessages === false) text += `\n${t('countingNeedManageMessages', lang)}`;
+  }
+
+  return interaction.editReply(
+    componentsV2Payload([smallContainer(null, text, enable ? 0x2ecc71 : 0x95a5a6)], {
+      allowedMentions: { parse: [] },
+    })
   );
 }
 
@@ -286,6 +363,9 @@ async function helpCmd(ctx, interaction) {
     `## 🌍 ${commandMention(ctx, 'set_language')}`,
     t('helpSetLanguage', lang),
     '',
+    `## 🔢 ${commandMention(ctx, 'set_counting_channel')}`,
+    t('helpCounting', lang),
+    '',
     `## 🖼️ ${commandMention(ctx, 'admin_set_bot_profile')}`,
     t('helpProfile', lang),
     '',
@@ -306,6 +386,7 @@ module.exports = {
   handleChatInput,
   playCmd,
   setLanguageCmd,
+  setCountingChannelCmd,
   profileCmd,
   helpCmd,
   configuredLang,

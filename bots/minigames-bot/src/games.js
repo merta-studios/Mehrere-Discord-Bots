@@ -15,6 +15,7 @@ const STATUS_ACTIVE = 'active';
 const STATUS_WON = 'won';
 const STATUS_DRAW = 'draw';
 const STATUS_DECLINED = 'declined';
+const STATUS_CANCELLED = 'cancelled';
 const STATUS_EXPIRED = 'expired';
 const VALID_STATUSES = [
   STATUS_PENDING,
@@ -22,30 +23,38 @@ const VALID_STATUSES = [
   STATUS_WON,
   STATUS_DRAW,
   STATUS_DECLINED,
+  STATUS_CANCELLED,
   STATUS_EXPIRED,
 ];
 
 const CHALLENGE_TTL_MS = 60 * 60 * 1000;
 
-// Vier Gewinnt läuft auf 5 Spalten × 6 Reihen. Discord erlaubt maximal fünf
-// Buttons pro Action-Row – mit fünf Spalten steht deshalb genau ein Button
-// unter genau einer Spalte und niemand muss Spalten abzählen.
-const C4_COLUMNS = 5;
+// Vier Gewinnt läuft in der klassischen Größe 7 Spalten × 6 Reihen.
+// Discord erlaubt nur fünf Buttons pro Action-Row – sieben Spalten-Buttons
+// passen deshalb niemals bündig unter ein sieben Spalten breites Brett.
+// Statt das Brett zu verkleinern, wird die Spalte im Brett selbst gewählt:
+// eine Zeiger-Zeile (🔽) sitzt im selben Textblock wie das Brett und ist
+// dadurch IMMER exakt ausgerichtet. Darunter steht genau eine Button-Reihe
+// mit fünf Buttons: ⏮ ◀ ⬇ ▶ ⏭.
+const C4_COLUMNS = 7;
 const C4_ROWS = 6;
 const C4_SIZE = C4_COLUMNS * C4_ROWS;
 const TTT_SIZE = 9;
 
-// v2, weil sich die Brettgröße von Vier Gewinnt geändert hat: alte Marker
-// werden bewusst nicht mehr gelesen statt falsch interpretiert zu werden.
-const GAME_MARKER = 'mgame::v2::';
+// v3: Brettgröße (7×6) und der neue Spalten-Zeiger verändern das Format.
+// Alte Marker werden bewusst nicht mehr gelesen statt falsch interpretiert.
+const GAME_MARKER = 'mgame::v3::';
 const LANG_MARKER = 'mgcfg::v1::';
 const VALID_LANGS = ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it'];
+
+const CURSOR_ACTIONS = ['first', 'left', 'right', 'last'];
 
 const CID = {
   accept: 'mg_accept',
   decline: 'mg_decline',
   tttMove: (cell) => `mg_ttt_${cell}`,
-  connect4Move: (column) => `mg_c4_${column}`,
+  connect4Drop: 'mg_c4_drop',
+  connect4Cursor: (action) => `mg_c4_${action}`,
 };
 
 function normalizeLang(code) {
@@ -61,18 +70,66 @@ function emptyBoard(game) {
   return Array(boardSize(game)).fill(0);
 }
 
-function createChallenge({ game, challengerId, opponentId, lang = 'en', now = Date.now() }) {
+/** Eine Spalte ist voll, sobald ihr oberstes Feld belegt ist. */
+function columnFull(board, column) {
+  return Boolean(board[column]);
+}
+
+function freeColumns(board) {
+  return Array.from({ length: C4_COLUMNS }, (_, column) => column).filter(
+    (column) => !columnFull(board, column)
+  );
+}
+
+/**
+ * Nächste freie Spalte in Blickrichtung – mit Umlauf, damit man mit einem
+ * Klick von ganz links nach ganz rechts springen kann.
+ */
+function nextFreeColumn(board, from, direction) {
+  const free = freeColumns(board);
+  if (!free.length) return Math.max(0, Math.min(C4_COLUMNS - 1, Number(from) || 0));
+  const start = Math.max(0, Math.min(C4_COLUMNS - 1, Number(from) || 0));
+  for (let step = 1; step <= C4_COLUMNS; step += 1) {
+    const candidate = (start + direction * step + C4_COLUMNS * step) % C4_COLUMNS;
+    if (!columnFull(board, candidate)) return candidate;
+  }
+  return free[0];
+}
+
+/** Sorgt dafür, dass der Zeiger nie auf einer vollen Spalte stehen bleibt. */
+function sanitizeCursor(board, cursor) {
+  const value = Number.isInteger(Number(cursor)) ? Number(cursor) : 0;
+  const clamped = Math.max(0, Math.min(C4_COLUMNS - 1, value));
+  if (!columnFull(board, clamped)) return clamped;
+  const free = freeColumns(board);
+  if (!free.length) return clamped;
+  // Nächste freie Spalte in der Nähe suchen (erst rechts, dann links).
+  return free.reduce((best, column) =>
+    Math.abs(column - clamped) < Math.abs(best - clamped) ? column : best
+  );
+}
+
+function defaultCursor(game) {
+  return game === GAME_CONNECT4 ? Math.floor(C4_COLUMNS / 2) : 0;
+}
+
+/**
+ * Legt eine Herausforderung an. Ohne `opponentId` entsteht eine **offene**
+ * Runde: dann darf jedes Servermitglied antreten.
+ */
+function createChallenge({ game, challengerId, opponentId = '', lang = 'en', now = Date.now() }) {
   if (!VALID_GAMES.includes(game)) throw new Error(`Unbekanntes Spiel: ${game}`);
   return {
     game,
     status: STATUS_PENDING,
     challengerId: String(challengerId),
-    opponentId: String(opponentId),
+    opponentId: opponentId ? String(opponentId) : '',
     lang: normalizeLang(lang),
     board: emptyBoard(game),
     turn: '',
     winnerId: '',
     winningCells: [],
+    cursor: defaultCursor(game),
     moves: 0,
     createdAt: Number(now),
     expiresAt: Number(now) + CHALLENGE_TTL_MS,
@@ -81,11 +138,20 @@ function createChallenge({ game, challengerId, opponentId, lang = 'en', now = Da
   };
 }
 
+function isOpenChallenge(state) {
+  return Boolean(state) && state.status === STATUS_PENDING && !state.opponentId;
+}
+
 function normalizeState(input) {
   if (!input || !VALID_GAMES.includes(input.game)) return null;
   const challengerId = String(input.challengerId || '');
   const opponentId = String(input.opponentId || '');
-  if (!challengerId || !opponentId || challengerId === opponentId) return null;
+  if (!challengerId) return null;
+  if (opponentId && challengerId === opponentId) return null;
+
+  const status = VALID_STATUSES.includes(input.status) ? input.status : STATUS_PENDING;
+  // Ohne Gegner ist nur eine offene (oder abgebrochene/abgelaufene) Anfrage gültig.
+  if (!opponentId && ![STATUS_PENDING, STATUS_CANCELLED, STATUS_EXPIRED].includes(status)) return null;
 
   const expectedSize = boardSize(input.game);
   const rawBoard = Array.isArray(input.board) ? input.board : [];
@@ -93,8 +159,7 @@ function normalizeState(input) {
     const value = Number(rawBoard[i]);
     return value === 1 || value === 2 ? value : 0;
   });
-  const status = VALID_STATUSES.includes(input.status) ? input.status : STATUS_PENDING;
-  const participants = [challengerId, opponentId];
+  const participants = [challengerId, opponentId].filter(Boolean);
 
   return {
     game: input.game,
@@ -108,6 +173,10 @@ function normalizeState(input) {
     winningCells: (Array.isArray(input.winningCells) ? input.winningCells : [])
       .map(Number)
       .filter((n) => Number.isInteger(n) && n >= 0 && n < expectedSize),
+    cursor:
+      input.game === GAME_CONNECT4
+        ? sanitizeCursor(board, input.cursor === undefined ? defaultCursor(input.game) : input.cursor)
+        : 0,
     moves: Math.max(0, Math.min(expectedSize, Number(input.moves) || board.filter(Boolean).length)),
     createdAt: Number(input.createdAt) || Date.now(),
     expiresAt: Number(input.expiresAt) || Date.now() + CHALLENGE_TTL_MS,
@@ -129,6 +198,7 @@ function compactState(state) {
     t: s.turn,
     w: s.winnerId,
     c: s.winningCells,
+    p: s.cursor,
     m: s.moves,
     n: s.createdAt,
     e: s.expiresAt,
@@ -149,6 +219,7 @@ function expandState(data) {
     turn: data.t,
     winnerId: data.w,
     winningCells: data.c,
+    cursor: data.p,
     moves: data.m,
     createdAt: data.n,
     expiresAt: data.e,
@@ -205,27 +276,57 @@ function cloneState(state, changes = {}) {
   });
 }
 
-function acceptChallenge(state, userId, now = Date.now()) {
+/**
+ * Wer beginnt, entscheidet der Zufall – nicht mehr automatisch die Person,
+ * die den Command benutzt hat.
+ */
+function randomStarter(state, random = Math.random) {
+  const value = Number(random());
+  const roll = Number.isFinite(value) ? Math.min(0.999999, Math.max(0, value)) : 0;
+  return roll < 0.5 ? state.challengerId : state.opponentId;
+}
+
+/**
+ * Nimmt eine Herausforderung an. Bei einer offenen Runde wird die annehmende
+ * Person zum Gegner; bei einer gezielten Anfrage darf nur der Gegner klicken.
+ */
+function acceptChallenge(state, userId, now = Date.now(), random = Math.random) {
   const s = normalizeState(state);
   if (!s || s.status !== STATUS_PENDING) return { error: 'not_pending', state: s };
-  if (String(userId) !== s.opponentId) return { error: 'not_opponent', state: s };
+  const id = String(userId);
+  const open = isOpenChallenge(s);
+  if (open && id === s.challengerId) return { error: 'self_join', state: s };
+  if (!open && id !== s.opponentId) return { error: 'not_opponent', state: s };
   if (Number(now) >= s.expiresAt) return { error: 'expired', state: expireChallenge(s, now) };
+
+  const joined = open ? cloneState(s, { opponentId: id }) : s;
   return {
-    state: cloneState(s, {
+    state: cloneState(joined, {
       status: STATUS_ACTIVE,
-      turn: s.challengerId,
+      turn: randomStarter(joined, random),
       acceptedAt: Number(now),
     }),
   };
 }
 
+/**
+ * Gezielte Anfrage: nur der Gegner darf ablehnen.
+ * Offene Runde: nur der Herausforderer darf seine Suche abbrechen.
+ */
 function declineChallenge(state, userId, now = Date.now()) {
   const s = normalizeState(state);
   if (!s || s.status !== STATUS_PENDING) return { error: 'not_pending', state: s };
-  if (String(userId) !== s.opponentId) return { error: 'not_opponent', state: s };
+  const id = String(userId);
+  const open = isOpenChallenge(s);
+  if (open && id !== s.challengerId) return { error: 'not_challenger', state: s };
+  if (!open && id !== s.opponentId) return { error: 'not_opponent', state: s };
   if (Number(now) >= s.expiresAt) return { error: 'expired', state: expireChallenge(s, now) };
   return {
-    state: cloneState(s, { status: STATUS_DECLINED, turn: '', finishedAt: Number(now) }),
+    state: cloneState(s, {
+      status: open ? STATUS_CANCELLED : STATUS_DECLINED,
+      turn: '',
+      finishedAt: Number(now),
+    }),
   };
 }
 
@@ -273,8 +374,28 @@ function connect4Winner(board, lastCell) {
 
 function tokenFor(state, userId) {
   if (String(userId) === state.challengerId) return 1;
-  if (String(userId) === state.opponentId) return 2;
+  if (state.opponentId && String(userId) === state.opponentId) return 2;
   return 0;
+}
+
+/** Bewegt den Spalten-Zeiger von Vier Gewinnt (nur die Person am Zug). */
+function moveCursor(state, userId, action) {
+  const s = normalizeState(state);
+  if (!s || s.status !== STATUS_ACTIVE) return { error: 'not_active', state: s };
+  if (s.game !== GAME_CONNECT4) return { error: 'invalid_move', state: s };
+  if (!tokenFor(s, userId)) return { error: 'not_player', state: s };
+  if (s.turn !== String(userId)) return { error: 'not_turn', state: s };
+  if (!CURSOR_ACTIONS.includes(action)) return { error: 'invalid_move', state: s };
+
+  const free = freeColumns(s.board);
+  if (!free.length) return { error: 'invalid_move', state: s };
+
+  let cursor = s.cursor;
+  if (action === 'first') cursor = free[0];
+  else if (action === 'last') cursor = free[free.length - 1];
+  else cursor = nextFreeColumn(s.board, s.cursor, action === 'left' ? -1 : 1);
+
+  return { state: cloneState(s, { cursor }), moved: cursor !== s.cursor };
 }
 
 function applyMove(state, userId, position, now = Date.now()) {
@@ -286,12 +407,13 @@ function applyMove(state, userId, position, now = Date.now()) {
 
   const board = [...s.board];
   let cell;
+  let column;
   if (s.game === GAME_TTT) {
     cell = Number(position);
     if (!Number.isInteger(cell) || cell < 0 || cell >= 9) return { error: 'invalid_move', state: s };
     if (board[cell]) return { error: 'cell_taken', state: s };
   } else {
-    const column = Number(position);
+    column = position === undefined || position === null ? s.cursor : Number(position);
     if (!Number.isInteger(column) || column < 0 || column >= C4_COLUMNS) {
       return { error: 'invalid_move', state: s };
     }
@@ -306,12 +428,14 @@ function applyMove(state, userId, position, now = Date.now()) {
 
   board[cell] = token;
   const moves = s.moves + 1;
+  const cursor = s.game === GAME_CONNECT4 ? sanitizeCursor(board, column) : 0;
   const won = s.game === GAME_TTT ? tttWinner(board) : connect4Winner(board, cell);
   if (won) {
     return {
       state: cloneState(s, {
         board,
         moves,
+        cursor,
         status: STATUS_WON,
         turn: '',
         winnerId: String(userId),
@@ -326,6 +450,7 @@ function applyMove(state, userId, position, now = Date.now()) {
       state: cloneState(s, {
         board,
         moves,
+        cursor,
         status: STATUS_DRAW,
         turn: '',
         finishedAt: Number(now),
@@ -338,6 +463,7 @@ function applyMove(state, userId, position, now = Date.now()) {
     state: cloneState(s, {
       board,
       moves,
+      cursor,
       turn: String(userId) === s.challengerId ? s.opponentId : s.challengerId,
     }),
     cell,
@@ -348,10 +474,11 @@ function parseCustomId(customId) {
   const id = String(customId || '');
   if (id === CID.accept) return { kind: 'accept' };
   if (id === CID.decline) return { kind: 'decline' };
-  let match = id.match(/^mg_ttt_([0-8])$/);
-  if (match) return { kind: 'move', game: GAME_TTT, position: Number(match[1]) };
-  match = id.match(new RegExp(`^mg_c4_([0-${C4_COLUMNS - 1}])$`));
-  if (match) return { kind: 'move', game: GAME_CONNECT4, position: Number(match[1]) };
+  const ttt = id.match(/^mg_ttt_([0-8])$/);
+  if (ttt) return { kind: 'move', game: GAME_TTT, position: Number(ttt[1]) };
+  if (id === CID.connect4Drop) return { kind: 'move', game: GAME_CONNECT4, position: null };
+  const cursor = id.match(/^mg_c4_(first|left|right|last)$/);
+  if (cursor) return { kind: 'cursor', game: GAME_CONNECT4, action: cursor[1] };
   return null;
 }
 
@@ -364,6 +491,7 @@ module.exports = {
   STATUS_WON,
   STATUS_DRAW,
   STATUS_DECLINED,
+  STATUS_CANCELLED,
   STATUS_EXPIRED,
   CHALLENGE_TTL_MS,
   C4_COLUMNS,
@@ -373,21 +501,28 @@ module.exports = {
   GAME_MARKER,
   LANG_MARKER,
   VALID_LANGS,
+  CURSOR_ACTIONS,
   CID,
   normalizeLang,
   boardSize,
   emptyBoard,
+  columnFull,
+  freeColumns,
+  nextFreeColumn,
   createChallenge,
+  isOpenChallenge,
   normalizeState,
   encodeGamePayload,
   decodeGamePayload,
   encodeLanguagePayload,
   decodeLanguagePayload,
+  randomStarter,
   acceptChallenge,
   declineChallenge,
   expireChallenge,
   tttWinner,
   connect4Winner,
+  moveCursor,
   applyMove,
   parseCustomId,
 };

@@ -5,8 +5,12 @@
  * möglich und Buttons, die genau dort sitzen, wo man sie erwartet.
  * - Tic-Tac-Toe: das 3×3-Raster besteht selbst aus Buttons – kein zweites
  *   Textbrett daneben.
- * - Vier Gewinnt: 5 Spalten, damit alle fünf Drop-Buttons in eine einzige
- *   Reihe direkt unter das Brett passen (Discord erlaubt 5 Buttons pro Reihe).
+ * - Vier Gewinnt: klassische 7×6-Größe. Discord erlaubt hart nur fünf Buttons
+ *   pro Reihe, sieben Spalten-Buttons können also nie unter den sieben Spalten
+ *   sitzen. Deshalb wird die Spalte NICHT über sieben Buttons gewählt, sondern
+ *   über einen Zeiger (🔽), der im selben Textblock wie das Brett steht und
+ *   dadurch immer exakt über „seiner“ Spalte klebt. Darunter steht genau eine
+ *   Button-Reihe mit fünf Buttons: ⏮ ◀ ⬇️ ▶ ⏭.
  */
 
 const {
@@ -26,10 +30,13 @@ const {
   STATUS_WON,
   STATUS_DRAW,
   STATUS_DECLINED,
+  STATUS_CANCELLED,
   STATUS_EXPIRED,
   C4_COLUMNS,
   C4_ROWS,
   CID,
+  isOpenChallenge,
+  columnFull,
   encodeGamePayload,
   decodeGamePayload,
   encodeLanguagePayload,
@@ -44,6 +51,7 @@ const COLORS = {
   won: 0x2ecc71,
   draw: 0x95a5a6,
   declined: 0xe74c3c,
+  cancelled: 0xe67e22,
   expired: 0x7f8c8d,
 };
 
@@ -105,6 +113,10 @@ const C4_P2 = '🟡';
 const C4_WIN_P1 = '🟥';
 const C4_WIN_P2 = '🟨';
 const C4_DROP = '⬇️';
+const C4_CURSOR = '🔽';
+// Platzhalter der Zeiger-Zeile: dieselbe Emoji-Breite wie ein Spielstein,
+// aber optisch unauffällig – dadurch bleibt die Zeile exakt ausgerichtet.
+const C4_CURSOR_GAP = '⬛';
 
 /** Gleich breite Button-Labels: ideografische Leerräume um jedes Emoji. */
 const PAD = '\u3000';
@@ -126,17 +138,22 @@ function gameIcons(game) {
 
 function challengeContainer(state) {
   const lang = state.lang;
+  const open = isOpenChallenge(state);
   const container = new ContainerBuilder().setAccentColor(COLORS[state.status] || COLORS.pending);
 
-  if (state.status === STATUS_DECLINED || state.status === STATUS_EXPIRED) {
-    const key = state.status === STATUS_DECLINED ? 'declined' : 'expired';
+  if ([STATUS_DECLINED, STATUS_CANCELLED, STATUS_EXPIRED].includes(state.status)) {
+    const key = { [STATUS_DECLINED]: 'declined', [STATUS_CANCELLED]: 'cancelled', [STATUS_EXPIRED]: 'expired' }[
+      state.status
+    ];
+    const bodyKey = state.status === STATUS_EXPIRED && !state.opponentId ? 'expiredOpenBody' : `${key}Body`;
     container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
           `## ${t(`${key}Title`, lang)}`,
-          t(`${key}Body`, lang, {
+          t(bodyKey, lang, {
             challenger: mention(state.challengerId),
-            opponent: mention(state.opponentId),
+            opponent: state.opponentId ? mention(state.opponentId) : '',
+            game: gameName(state.game, lang),
           }),
         ].join('\n')
       )
@@ -149,10 +166,16 @@ function challengeContainer(state) {
     new TextDisplayBuilder().setContent(
       [
         `## ${gameIcons(state.game)} ${gameName(state.game, lang)}`,
-        t('challengeLine', lang, {
-          challenger: mention(state.challengerId),
-          opponent: mention(state.opponentId),
-        }),
+        open
+          ? t('challengeOpenLine', lang, {
+              challenger: mention(state.challengerId),
+              game: gameName(state.game, lang),
+            })
+          : t('challengeLine', lang, {
+              challenger: mention(state.challengerId),
+              opponent: mention(state.opponentId),
+            }),
+        t('randomStarterHint', lang),
         t('deadlineShort', lang, { deadline: deadlineTag(state.expiresAt) }),
       ].join('\n')
     )
@@ -160,8 +183,14 @@ function challengeContainer(state) {
   addStateMarker(container, state);
   container.addActionRowComponents(
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(CID.accept).setStyle(ButtonStyle.Success).setLabel(t('btnAccept', lang)),
-      new ButtonBuilder().setCustomId(CID.decline).setStyle(ButtonStyle.Secondary).setLabel(t('btnDecline', lang))
+      new ButtonBuilder()
+        .setCustomId(CID.accept)
+        .setStyle(ButtonStyle.Success)
+        .setLabel(t(open ? 'btnJoin' : 'btnAccept', lang)),
+      new ButtonBuilder()
+        .setCustomId(CID.decline)
+        .setStyle(ButtonStyle.Secondary)
+        .setLabel(t(open ? 'btnCancelSearch' : 'btnDecline', lang))
     )
   );
   return container;
@@ -249,7 +278,7 @@ function tttContainer(state) {
 }
 
 /* ------------------------------------------------------------------ *
- * Vier Gewinnt – 5 Spalten, 5 Buttons, eine Reihe
+ * Vier Gewinnt – klassische 7×6-Größe mit Zeiger statt Spalten-Buttons
  * ------------------------------------------------------------------ */
 
 function c4Glyph(board, cell, winningCells = []) {
@@ -261,45 +290,70 @@ function c4Glyph(board, cell, winningCells = []) {
 }
 
 /**
- * 5×6-Raster ohne Spaltennummern – die Buttons stehen direkt darunter.
- * Die vier Gewinnsteine werden als Quadrate hervorgehoben.
+ * Die Zeiger-Zeile gehört zum selben Textblock wie das Brett und benutzt
+ * exakt gleich breite Emoji. Dadurch kann sie – anders als eine Button-Reihe –
+ * niemals gegen das Brett verrutschen.
  */
-function connect4Board(board, winningCells = []) {
+function connect4Cursor(cursor) {
+  return Array.from({ length: C4_COLUMNS }, (_, column) =>
+    column === cursor ? C4_CURSOR : C4_CURSOR_GAP
+  ).join('');
+}
+
+/**
+ * 7×6-Raster ohne Spaltennummern und ohne Trennzeichen: sieben Emoji pro
+ * Zeile bleiben auch auf schmalen Handy-Displays in einer Zeile.
+ */
+function connect4Board(board, winningCells = [], cursor = null) {
   const rows = [];
+  if (Number.isInteger(cursor)) rows.push(connect4Cursor(cursor));
   for (let row = 0; row < C4_ROWS; row += 1) {
     const cells = [];
     for (let col = 0; col < C4_COLUMNS; col += 1) {
       cells.push(c4Glyph(board, row * C4_COLUMNS + col, winningCells));
     }
-    rows.push(cells.join(PAD));
+    rows.push(cells.join(''));
   }
   return rows.join('\n');
 }
 
 /**
- * Ein Drop-Button pro Spalte. Weil es genau fünf Spalten gibt, passen alle
- * Buttons in eine Action-Row und stehen dadurch bündig unter „ihrer“ Spalte.
+ * Genau fünf Buttons – Discords Maximum pro Reihe – steuern den Zeiger und
+ * werfen den Stein ein: ⏮ ◀ ⬇️ ▶ ⏭.
  */
-function columnButton(state, column) {
-  const full = Boolean(state.board[column]);
-  return new ButtonBuilder()
-    .setCustomId(CID.connect4Move(column))
-    .setStyle(full ? ButtonStyle.Secondary : ButtonStyle.Primary)
-    .setLabel(wideLabel(C4_DROP))
-    .setDisabled(state.status !== STATUS_ACTIVE || full);
+function connect4Controls(state) {
+  const disabled = state.status !== STATUS_ACTIVE;
+  const dropBlocked = disabled || columnFull(state.board, state.cursor);
+  const button = (customId, emoji, style, off) =>
+    new ButtonBuilder()
+      .setCustomId(customId)
+      .setStyle(style)
+      .setLabel(wideLabel(emoji))
+      .setDisabled(Boolean(off));
+
+  return new ActionRowBuilder().addComponents(
+    button(CID.connect4Cursor('first'), '⏮️', ButtonStyle.Secondary, disabled),
+    button(CID.connect4Cursor('left'), '◀️', ButtonStyle.Secondary, disabled),
+    button(CID.connect4Drop, C4_DROP, ButtonStyle.Success, dropBlocked),
+    button(CID.connect4Cursor('right'), '▶️', ButtonStyle.Secondary, disabled),
+    button(CID.connect4Cursor('last'), '⏭️', ButtonStyle.Secondary, disabled)
+  );
 }
 
 function connect4Container(state) {
   const container = new ContainerBuilder().setAccentColor(COLORS[state.status] || COLORS.active);
+  const showCursor = state.status === STATUS_ACTIVE;
   container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`${battleHeader(state)}\n\n${connect4Board(state.board, state.winningCells)}`)
-  );
-  addStateMarker(container, state);
-  container.addActionRowComponents(
-    new ActionRowBuilder().addComponents(
-      ...Array.from({ length: C4_COLUMNS }, (_, column) => columnButton(state, column))
+    new TextDisplayBuilder().setContent(
+      `${battleHeader(state)}\n\n${connect4Board(
+        state.board,
+        state.winningCells,
+        showCursor ? state.cursor : null
+      )}`
     )
   );
+  addStateMarker(container, state);
+  container.addActionRowComponents(connect4Controls(state));
   addOutcome(container, state);
   return container;
 }
@@ -309,18 +363,19 @@ function connect4Container(state) {
  * ------------------------------------------------------------------ */
 
 function buildGameContainer(state) {
-  if (state.status === STATUS_PENDING || state.status === STATUS_DECLINED || state.status === STATUS_EXPIRED) {
+  if ([STATUS_PENDING, STATUS_DECLINED, STATUS_CANCELLED, STATUS_EXPIRED].includes(state.status)) {
     return challengeContainer(state);
   }
   return state.game === GAME_CONNECT4 ? connect4Container(state) : tttContainer(state);
 }
 
 function buildGamePayload(state) {
-  // Bei der Anfrage wird gezielt nur der Gegner gepingt. Der Herausforderer
-  // bleibt zwar als Mention sichtbar, bekommt aber keine unnötige Eigen-Ping.
-  const pingedUsers = state.status === STATUS_PENDING
-    ? [state.opponentId]
-    : [state.challengerId, state.opponentId];
+  // Bei einer gezielten Anfrage wird nur der Gegner gepingt. Bei einer offenen
+  // Suche gibt es niemanden, den man sinnvoll anpingen könnte.
+  const pingedUsers =
+    state.status === STATUS_PENDING
+      ? [state.opponentId].filter(Boolean)
+      : [state.challengerId, state.opponentId].filter(Boolean);
   return componentsV2Payload([buildGameContainer(state)], {
     allowedMentions: { users: pingedUsers, roles: [], parse: [] },
   });
@@ -350,6 +405,7 @@ module.exports = {
   parseLanguageMessage,
   gameName,
   connect4Board,
+  connect4Cursor,
   buildGameContainer,
   buildGamePayload,
   buildLanguageContainer,

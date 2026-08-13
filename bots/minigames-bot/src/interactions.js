@@ -10,6 +10,7 @@ const {
   declineChallenge,
   expireChallenge,
   applyMove,
+  moveCursor,
   parseCustomId,
 } = require('./games');
 const { parseGameMessage, buildGamePayload, smallContainer } = require('./embed-builder');
@@ -76,6 +77,11 @@ function errorText(error, lang) {
     column_full: 'columnFull',
     not_active: 'noLongerActive',
     not_pending: 'noLongerActive',
+    not_challenger: 'notChallenger',
+    self_join: 'selfJoin',
+    cancelled: 'noLongerActive',
+    invalid_move: 'errState',
+    expired: 'noLongerActive',
   }[error] || 'errState';
   return t(key, lang);
 }
@@ -116,6 +122,15 @@ async function handleGameButton(ctx, interaction, parsed) {
     if (parsed.kind === 'decline') {
       const result = declineChallenge(state, interaction.user.id);
       if (result.error) return privateReply(interaction, errorText(result.error, lang));
+      return editGameMessage(ctx, interaction, message, result.state);
+    }
+
+    if (parsed.kind === 'cursor') {
+      if (parsed.game !== state.game) return privateReply(interaction, t('errState', lang));
+      const result = moveCursor(state, interaction.user.id, parsed.action);
+      if (result.error) return privateReply(interaction, errorText(result.error, lang));
+      // Nichts bewegt (z. B. nur eine freie Spalte) → Nachricht unverändert lassen.
+      if (!result.moved) return interaction.deferUpdate().catch(() => null);
       return editGameMessage(ctx, interaction, message, result.state);
     }
 
