@@ -13,6 +13,8 @@
  */
 
 const { ChannelType, PermissionFlagsBits } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 
 const {
   parseSelfRoleMessage,
@@ -35,13 +37,86 @@ function keyOf(channelId, messageId) {
   return `${channelId}:${messageId}`;
 }
 
-function createStore({ client, logger }) {
+function createStore({ client, logger, disableFileBackup = false, env } = {}) {
   /** guildId -> Map<`${channelId}:${messageId}`, entry> */
   const registry = new Map();
   /** guildId -> timestamp des letzten vollständigen members.fetch() */
   const memberFetchAt = new Map();
   /** Serialisiert Refreshes pro Nachricht (verhindert Race-Conditions). */
   const locks = new Map();
+  /** guildId -> { logging: boolean, lang: string } */
+  const guildSettings = new Map();
+
+  const envFn = typeof env === 'function' ? env : ((k, fb = '') => process.env[k] ?? fb);
+  const noFileBackup = disableFileBackup || envFn('SELF_ROLES_DISABLE_FILE_BACKUP', '') === 'true';
+
+  const fallbackPath = path.join(__dirname, '..', '..', '..', 'data', 'self-roles-settings.json');
+  const localFallback = path.join(__dirname, '..', 'self-roles-settings.json');
+
+  function loadFileSettings() {
+    if (noFileBackup) return;
+    for (const p of [fallbackPath, localFallback]) {
+      try {
+        if (fs.existsSync(p)) {
+          const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+          if (raw && typeof raw === 'object') {
+            for (const [gid, cfg] of Object.entries(raw)) {
+              if (cfg && typeof cfg === 'object') {
+                guildSettings.set(gid, {
+                  logging: cfg.logging !== false,
+                  lang: cfg.lang || 'de',
+                });
+              }
+            }
+          }
+          break;
+        }
+      } catch {}
+    }
+  }
+
+  function saveFileSettings() {
+    if (noFileBackup) return;
+    const data = Object.fromEntries(guildSettings.entries());
+    for (const p of [fallbackPath, localFallback]) {
+      try {
+        const dir = path.dirname(p);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+      } catch {}
+    }
+  }
+
+  // Beim Initialisieren gespeicherte Server-Settings einlesen
+  loadFileSettings();
+
+  function getGuildSettings(guildId) {
+    if (!guildId) return { logging: true, lang: 'de' };
+    const current = guildSettings.get(guildId);
+    if (current) return current;
+    // Standardmäßig ist Rollen-Logging für jeden Server AN
+    return { logging: true, lang: 'de' };
+  }
+
+  function setGuildSettings(guildId, settings = {}) {
+    if (!guildId) return;
+    const prev = getGuildSettings(guildId);
+    const updated = {
+      logging: settings.logging !== false,
+      lang: settings.lang || prev.lang || 'de',
+    };
+    guildSettings.set(guildId, updated);
+    saveFileSettings();
+    return updated;
+  }
+
+  function isRoleLoggingEnabled(guildId) {
+    return getGuildSettings(guildId).logging !== false;
+  }
+
+  function getRoleLoggingLang(guildId) {
+    return getGuildSettings(guildId).lang || 'de';
+  }
 
   function guildMap(guildId) {
     if (!registry.has(guildId)) registry.set(guildId, new Map());
@@ -69,6 +144,8 @@ function createStore({ client, logger }) {
   function deleteGuild(guildId) {
     registry.delete(guildId);
     memberFetchAt.delete(guildId);
+    guildSettings.delete(guildId);
+    saveFileSettings();
   }
 
   function countMessages(guildId) {
@@ -180,6 +257,9 @@ function createStore({ client, logger }) {
   function entryFromMessage(guildId, channel, message) {
     const parsed = parseSelfRoleMessage(message);
     if (!parsed) return null;
+    if (parsed.logging != null) {
+      setGuildSettings(guildId, { logging: parsed.logging, lang: parsed.loggingLang });
+    }
     return {
       guildId,
       channelId: channel.id,
@@ -311,11 +391,16 @@ function createStore({ client, logger }) {
 
       entry.roles = liveRoles.map((r) => ({ roleId: r.roleId, label: r.label }));
 
+      const logging = isRoleLoggingEnabled(entry.guildId);
+      const loggingLang = getRoleLoggingLang(entry.guildId);
+
       const signature = JSON.stringify({
         t: entry.title,
         d: entry.description,
         m: entry.mode,
         l: entry.lang,
+        log: logging,
+        logL: loggingLang,
         r: liveRoles.map((r) => [r.roleId, r.label, r.count]),
       });
       if (!force && entry.signature === signature) return message; // nichts zu tun
@@ -326,6 +411,8 @@ function createStore({ client, logger }) {
         roles: liveRoles,
         lang: entry.lang,
         mode: entry.mode,
+        logging,
+        loggingLang,
       });
 
       try {
@@ -400,6 +487,11 @@ function createStore({ client, logger }) {
     hasCapacity,
     entries: () => registry.entries(),
     guildIds: () => [...registry.keys()],
+    // Server Settings (Rollen-Logging)
+    getGuildSettings,
+    setGuildSettings,
+    isRoleLoggingEnabled,
+    getRoleLoggingLang,
     // Suche & Recovery
     findMessages,
     scanGuild,

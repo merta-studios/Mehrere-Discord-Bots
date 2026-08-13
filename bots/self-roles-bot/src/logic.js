@@ -23,6 +23,7 @@ const MAX_ROLE_NAME_LEN = 90; // Discord erlaubt 100
 /** Marker-Präfixe (reines ASCII – siehe zw-marker.js). */
 const CONFIG_MARKER = 'srl::v1::';
 const ROLE_MARKER = 'srl-e:';
+const LOGGING_MARKER = 'srllog::v1::';
 
 /** Auswahl-Modi. */
 const MODE_SINGLE = 'single';
@@ -253,6 +254,30 @@ function buttonLabel(label, count, lang = 'en') {
   return `${base}${suffix}`;
 }
 
+/**
+ * Baut die Marker-Nutzlast für die Rollen-Logging-Einstellung.
+ * Format: srllog::v1::<enabled>:<lang>
+ * enabled: 1 (true) oder 0 (false)
+ */
+function encodeLoggingPayload({ enabled = true, lang = 'de' } = {}) {
+  const isEnabled = enabled !== false && enabled !== 'false' && enabled !== 0 && enabled !== '0';
+  const safeLang = /^[a-z]{2,5}$/i.test(String(lang)) ? String(lang).toLowerCase() : 'de';
+  return `${LOGGING_MARKER}${isEnabled ? '1' : '0'}:${safeLang}`;
+}
+
+/**
+ * Liest die Rollen-Logging-Einstellung aus einer Marker-Nutzlast.
+ * Gibt { enabled: boolean, lang: string } oder null zurück.
+ */
+function decodeLoggingPayload(payload) {
+  const text = String(payload ?? '');
+  const m = text.match(new RegExp(`${LOGGING_MARKER}(1|0|true|false):([a-z]{2,5})`, 'i'));
+  if (!m) return null;
+  const enabled = m[1] === '1' || m[1].toLowerCase() === 'true';
+  const lang = m[2].toLowerCase();
+  return { enabled, lang };
+}
+
 /** Prüft, ob eine Draft-Konfiguration veröffentlicht werden darf. */
 function validateDraft(draft) {
   const roles = Array.isArray(draft?.roles) ? draft.roles : [];
@@ -271,6 +296,7 @@ module.exports = {
   MAX_ROLE_NAME_LEN,
   CONFIG_MARKER,
   ROLE_MARKER,
+  LOGGING_MARKER,
   MODE_SINGLE,
   MODE_MULTI,
   flattenDescription,
@@ -283,6 +309,8 @@ module.exports = {
   decodeText,
   encodeConfigPayload,
   decodeConfigPayload,
+  encodeLoggingPayload,
+  decodeLoggingPayload,
   roleLine,
   parseRoleLine,
   CID,

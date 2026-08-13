@@ -182,6 +182,16 @@ async function handleRoleButton(ctx, interaction, { roleId }) {
     // auch bei einer zickigen API garantiert rausgeht.
     await safeRefresh(ctx, entry, { force: true });
 
+    // Rollen-Logging per Privat-DM
+    void sendRoleLoggingDm({
+      ctx,
+      guild,
+      user: interaction.user,
+      role,
+      action: swappedFrom ? 'swap' : 'give',
+      oldRole: swappedFrom ? (guild.roles.cache.get(swappedFrom) || { name: 'Rolle' }) : null,
+    });
+
     return safeEditReply(interaction, privatePayload([smallContainer(null, text)]));
   } catch (err) {
     ctx.logger.warn('[self-roles-bot] Rolle konnte nicht vergeben werden:', err.message);
@@ -233,6 +243,16 @@ async function handleDropButton(ctx, interaction, { roleId, channelId, messageId
     const entry = ctx.store.get(guild.id, channelId, messageId);
     if (entry) await safeRefresh(ctx, entry, { force: true });
     else await ctx.store.refreshForRole(guild.id, roleId, { force: true }).catch(() => {});
+
+    // Rollen-Logging per Privat-DM
+    void sendRoleLoggingDm({
+      ctx,
+      guild,
+      user: interaction.user,
+      role,
+      action: 'remove',
+    });
+
     return safeEditReply(
       interaction,
       privatePayload([smallContainer(null, t('roleRemoved', lang, { role: `<@&${roleId}>` }))])
@@ -439,6 +459,48 @@ function canBotManageRole(guild, role) {
   return myHighest > (role?.position ?? 0);
 }
 
+/**
+ * Sendet eine humorvolle Privat-DM an den Nutzer über die erhaltene/abgelegte Rolle.
+ * Wenn der Server Rollen-Logging deaktiviert hat oder der Nutzer DMs blockiert,
+ * passiert nichts (kein Crash).
+ */
+async function sendRoleLoggingDm({ ctx, guild, user, role, action, oldRole = null }) {
+  try {
+    if (!guild?.id || !user) return false;
+    if (!ctx.store?.isRoleLoggingEnabled(guild.id)) return false;
+
+    const loggingLang = ctx.store.getRoleLoggingLang(guild.id) || 'de';
+    const serverName = guild.name || 'Server';
+    const roleName = role?.name || 'Rolle';
+    const oldRoleName = oldRole?.name || 'Rolle';
+
+    let dmText = '';
+    if (action === 'give') {
+      dmText = t('dmRoleGiven', loggingLang, { server: serverName, role: roleName });
+    } else if (action === 'remove') {
+      dmText = t('dmRoleRemoved', loggingLang, { server: serverName, role: roleName });
+    } else if (action === 'swap') {
+      dmText = t('dmRoleSwapped', loggingLang, { server: serverName, role: roleName, oldRole: oldRoleName });
+    }
+
+    if (!dmText) return false;
+
+    const dmChannel = await user.createDM?.().catch(() => null);
+    if (!dmChannel) return false;
+
+    const payload = componentsV2Payload([smallContainer(null, dmText)]);
+    try {
+      await dmChannel.send(payload);
+    } catch {
+      await dmChannel.send({ content: dmText }).catch(() => {});
+    }
+    return true;
+  } catch (err) {
+    ctx?.logger?.warn?.(`[self-roles-bot] DM an ${user?.id} fehlgeschlagen:`, err.message);
+    return false;
+  }
+}
+
 module.exports = {
   handleInteraction,
   handleRoleButton,
@@ -447,4 +509,5 @@ module.exports = {
   handlePickMessage,
   ensureEntry,
   canBotManageRole,
+  sendRoleLoggingDm,
 };

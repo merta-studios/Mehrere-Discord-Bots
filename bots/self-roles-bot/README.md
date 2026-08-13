@@ -19,6 +19,7 @@ von Hand verteilt. Alles ohne eine einzige Datenbankzeile. 🤯
 |---|---|
 | `/create_self_role [channel]` | **Nur Admins.** Öffnet ein Formular mit **großer Textbox** (Beschreibung) und **kleinem Feld** (Titel). Danach erscheint die **Bearbeitungs-/Bestätigungs-Nachricht** mit Kanal, Titel, Beschreibung, Auswahl-Modus und der Rollenliste. |
 | `/edit_self_role` | **Nur Admins.** Auswahlmenü aller bestehenden Self-Roles-Nachrichten → derselbe Editor, Änderungen gehen erst mit **💾 Speichern** live. |
+| `/set_role_logging [status] [language]` | **Nur Admins.** Schaltet humorvolle Privat-DMs bei Rollenänderungen ein (`True`) oder aus (`False`) und setzt optional die Benachrichtigungssprache. Standardmäßig für jeden Server **an** und im Zero-Width-Marker auf Discord persistiert. |
 | `/admin_set_bot_profile [image]` | **Nur Admins.** Serverspezifisches Profilbild (Standard / Server-Icon / Server-Owner-Icon). |
 | `/help` | Befehlsübersicht in **10 Sprachen** (folgt der Discord-Sprache des Nutzers). |
 | `/adminpanel` | Owner-Panel – **nur im Privatchat** mit dem Bot-Owner. Serverliste mit Seiten, Detailansicht, Einladung (1 h, 1×) und Verlassen mit Sicherheitsabfrage. |

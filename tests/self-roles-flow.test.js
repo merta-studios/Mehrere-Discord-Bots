@@ -61,15 +61,30 @@ function makeHarness({ botCanManageRoles = true, roleCreateFails = false, sendFa
     return role;
   }
 
-  // Bot-Rolle steht hoch oben
   const botRole = makeRole({ id: 'botrole', name: 'Bot', position: 100 });
   roles.set(botRole.id, botRole);
 
+  const sentDms = [];
+
+  function makeUser(userId) {
+    return {
+      id: userId,
+      bot: false,
+      createDM: async () => ({
+        send: async (payload) => {
+          sentDms.push({ userId, payload });
+          return payload;
+        },
+      }),
+    };
+  }
+
   function makeMember(userId) {
     const owned = new Set();
+    const userObj = makeUser(userId);
     const member = {
       id: userId,
-      user: { id: userId, bot: false },
+      user: userObj,
       roles: {
         cache: {
           has: (id) => owned.has(id),
@@ -192,14 +207,28 @@ function makeHarness({ botCanManageRoles = true, roleCreateFails = false, sendFa
   const ctx = {
     client,
     logger,
-    store: createStore({ client, logger }),
+    store: createStore({ client, logger, disableFileBackup: true }),
     sessions: createSessionStore(),
     panelSessions: new Map(),
     ownerId: 'owner1',
     commandIds: {},
   };
 
-  return { ctx, guild, channel, roles, members, makeMember, sentMessages, created, deletedRoles, positionCalls, botMember };
+  return {
+    ctx,
+    guild,
+    channel,
+    roles,
+    members,
+    makeMember,
+    makeUser,
+    sentMessages,
+    sentDms,
+    created,
+    deletedRoles,
+    positionCalls,
+    botMember,
+  };
 }
 
 /** Interaktions-Mocks – sammeln alle Antworten für die Assertions. */
@@ -214,10 +243,16 @@ function makeInteraction(overrides = {}) {
     replied: false,
     deferOptions: null,
   };
+  const baseUser = overrides.user || { id: 'admin1' };
+  if (!baseUser.createDM) {
+    baseUser.createDM = async () => ({
+      send: async (p) => p,
+    });
+  }
   const base = {
     deferred: false,
     replied: false,
-    user: { id: 'admin1' },
+    user: baseUser,
     locale: 'de',
     guildId: 'guild1',
     channelId: 'chan1',
@@ -1023,4 +1058,173 @@ test('Store findet bestehende Nachrichten beim Scan selbst wieder', async () => 
   assert.equal(count, 1);
   assert.equal(h.ctx.store.countMessages('guild1'), 1);
   assert.equal(h.ctx.store.totalRoles('guild1'), 2);
+});
+
+// ---------------------------------------------------------------------------
+// /set_role_logging & Humorvolle Privat-DMs
+// ---------------------------------------------------------------------------
+
+test('/set_role_logging schaltet Logging an/aus und setzt Sprache', async () => {
+  const h = makeHarness();
+
+  // Standardmäßig ist Logging aktiv
+  assert.equal(h.ctx.store.isRoleLoggingEnabled('guild1'), true);
+
+  // 1) Ausschalten (False)
+  const offCmd = makeInteraction({
+    isChatInputCommand: () => true,
+    commandName: 'set_role_logging',
+    guild: h.guild,
+    options: {
+      getString: (name) => (name === 'status' ? 'false' : null),
+    },
+  });
+  await handleInteraction(h.ctx, offCmd.interaction);
+  assert.equal(h.ctx.store.isRoleLoggingEnabled('guild1'), false);
+  const offReply = textOf(offCmd.out.replies.at(-1));
+  assert.match(offReply, /deaktiviert|disabled/i);
+
+  // 2) Einschalten (True) mit Sprache (fr)
+  const onCmd = makeInteraction({
+    isChatInputCommand: () => true,
+    commandName: 'set_role_logging',
+    guild: h.guild,
+    options: {
+      getString: (name) => (name === 'status' ? 'true' : name === 'language' ? 'fr' : null),
+    },
+  });
+  await handleInteraction(h.ctx, onCmd.interaction);
+  assert.equal(h.ctx.store.isRoleLoggingEnabled('guild1'), true);
+  assert.equal(h.ctx.store.getRoleLoggingLang('guild1'), 'fr');
+  const onReply = textOf(onCmd.out.replies.at(-1));
+  assert.match(onReply, /aktiviert|enabled/i);
+});
+
+test('Rollen-Logging: Standardmäßig aktiv und sendet humorvolle DM bei Rollenerhalt', async () => {
+  const h = await publishFixture();
+  const member = h.makeMember('user1');
+
+  // User bekommt Rolle per Button
+  const click = makeInteraction({
+    isButton: () => true,
+    customId: `srl_role_${h.roleA.id}`,
+    guild: h.guild,
+    member,
+    user: member.user,
+    message: h.message,
+    memberPermissions: { has: () => false },
+  });
+  await handleInteraction(h.ctx, click.interaction);
+
+  assert.ok(member._owned.has(h.roleA.id));
+  assert.equal(h.sentDms.length, 1, 'Nutzer hat genau 1 Privat-DM erhalten');
+  assert.equal(h.sentDms[0].userId, 'user1');
+  const dmContent = textOf(h.sentDms[0].payload);
+  assert.match(dmContent, /Gamer/);
+  assert.match(dmContent, /Testserver/);
+  assert.match(dmContent, /abgestaubt|Schick|Stolz|fabelhaft/i);
+});
+
+test('Rollen-Logging: Sendet humorvolle DM bei Rollenabgabe', async () => {
+  const h = await publishFixture();
+  const member = h.makeMember('user1');
+  await member.roles.add(h.roleA.id);
+
+  // Klick auf "Rolle abgeben"
+  const drop = makeInteraction({
+    isButton: () => true,
+    customId: `srl_drop_${h.roleA.id}_chan1_${h.message.id}`,
+    guild: h.guild,
+    member,
+    user: member.user,
+    message: h.message,
+  });
+  await handleInteraction(h.ctx, drop.interaction);
+
+  assert.equal(member._owned.has(h.roleA.id), false);
+  assert.equal(h.sentDms.length, 1, 'Nutzer hat 1 DM erhalten');
+  const dmContent = textOf(h.sentDms[0].payload);
+  assert.match(dmContent, /Gamer/);
+  assert.match(dmContent, /Testserver/);
+  assert.match(dmContent, /Ende|abgelegt|Träne|feiern/i);
+});
+
+test('Rollen-Logging: Sendet humorvolle DM bei Rollentausch (Single-Modus)', async () => {
+  const h = await publishFixture({ mode: 'single' });
+  const member = h.makeMember('user1');
+  await member.roles.add(h.roleA.id);
+
+  // Rolle B wählen -> tauscht A gegen B
+  const click = makeInteraction({
+    isButton: () => true,
+    customId: `srl_role_${h.roleB.id}`,
+    guild: h.guild,
+    member,
+    user: member.user,
+    message: h.message,
+  });
+  await handleInteraction(h.ctx, click.interaction);
+
+  assert.equal(member._owned.has(h.roleA.id), false);
+  assert.ok(member._owned.has(h.roleB.id));
+  assert.equal(h.sentDms.length, 1);
+  const dmContent = textOf(h.sentDms[0].payload);
+  assert.match(dmContent, /Gamer/);
+  assert.match(dmContent, /Artist/);
+  assert.match(dmContent, /Testserver/);
+  assert.match(dmContent, /Aus alt mach neu|getauscht|Upgrade/i);
+});
+
+test('Rollen-Logging: Bei False werden KEINE DMs gesendet', async () => {
+  const h = await publishFixture();
+  const member = h.makeMember('user1');
+
+  // Deaktivieren
+  h.ctx.store.setGuildSettings('guild1', { logging: false });
+  assert.equal(h.ctx.store.isRoleLoggingEnabled('guild1'), false);
+
+  const click = makeInteraction({
+    isButton: () => true,
+    customId: `srl_role_${h.roleA.id}`,
+    guild: h.guild,
+    member,
+    user: member.user,
+    message: h.message,
+  });
+  await handleInteraction(h.ctx, click.interaction);
+
+  assert.ok(member._owned.has(h.roleA.id));
+  assert.equal(h.sentDms.length, 0, 'Keine DM gesendet, da logging=false');
+});
+
+test('Nicht-Admins können /set_role_logging nicht ausführen', async () => {
+  const h = makeHarness();
+  const cmd = makeInteraction({
+    isChatInputCommand: () => true,
+    commandName: 'set_role_logging',
+    guild: h.guild,
+    memberPermissions: { has: () => false },
+    options: { getString: () => 'false' },
+  });
+  await handleInteraction(h.ctx, cmd.interaction);
+  assert.match(textOf(cmd.out.replies.at(-1)), /Admins|admin/i);
+  assert.equal(h.ctx.store.isRoleLoggingEnabled('guild1'), true, 'Einstellung blieb unverändert');
+});
+
+test('Rollen-Logging Einstellung wird beim scanGuild aus dem Zero-Width-Marker der Nachricht wiederhergestellt', async () => {
+  const h = await publishFixture();
+  // Logging auf False und Sprache auf 'it' konfigurieren
+  h.ctx.store.setGuildSettings('guild1', { logging: false, lang: 'it' });
+  const entry = h.ctx.store.get('guild1', 'chan1', h.message.id);
+  await h.ctx.store.refreshEntry(entry, { force: true });
+
+  // Store zurücksetzen (Neustart simulieren)
+  h.ctx.store.deleteGuild('guild1');
+  // Jetzt standardmäßig true
+  assert.equal(h.ctx.store.isRoleLoggingEnabled('guild1'), true);
+
+  // Scan liest Zero-Width-Marker aus der Discord-Nachricht ein
+  await h.ctx.store.scanGuild(h.guild);
+  assert.equal(h.ctx.store.isRoleLoggingEnabled('guild1'), false, 'Logging-Status wurde aus Nachricht restauriert');
+  assert.equal(h.ctx.store.getRoleLoggingLang('guild1'), 'it', 'Logging-Sprache wurde restauriert');
 });
