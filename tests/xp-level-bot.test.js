@@ -37,7 +37,9 @@ const {
   syncAllNicknames,
   areNicknamesEnabled,
   removeNicknameTag,
+  applyExpectedNickname,
 } = require('../bots/xp-level-bot/src/nicknames');
+const { createXpStore } = require('../bots/xp-level-bot/src/store');
 const {
   isLeaderboardRefreshDue,
   isHourlyRefreshDue,
@@ -574,6 +576,40 @@ test('ensureNickname: setzt nichts, wenn Nickname-Tags ausgeschaltet sind', asyn
   assert.equal(ok, false);
   assert.equal(setCalls, 0);
   assert.equal(members.get('a').nickname, 'Alice');
+});
+
+test('parseNicknamesEnabled: Turso-BigInt 0 und "0" bleiben aus', () => {
+  const store = createXpStore({ env: () => '' });
+  assert.equal(store.parseNicknamesEnabled(0n), false);
+  assert.equal(store.parseNicknamesEnabled(0), false);
+  assert.equal(store.parseNicknamesEnabled('0'), false);
+  assert.equal(store.parseNicknamesEnabled('false'), false);
+  assert.equal(store.parseNicknamesEnabled(1n), true);
+  assert.equal(store.parseNicknamesEnabled(null), true);
+});
+
+test('setGuild: Leaderboard-/Bonus-Schreib ohne Flag überschreibt toggle off nicht', () => {
+  const store = createXpStore({ env: () => '' });
+  store.setGuild({ guildId: 'g1', leaderboardChannelId: 'lb', lang: 'de', nicknamesEnabled: false });
+  store.setGuild({ guildId: 'g1', lastLeaderboardRefresh: 99 });
+  assert.equal(store.getGuild('g1').nicknamesEnabled, false);
+  assert.equal(store.getGuild('g1').lastLeaderboardRefresh, 99);
+});
+
+test('applyExpectedNickname: setzt keine Tags, wenn Nicknames aus sind', async () => {
+  const { guild, makeMember } = makeNicknameHarness();
+  const a = makeMember('a', 'Alice', 'Alice');
+  let setCalls = 0;
+  a.setNickname = async (nick) => { setCalls += 1; a.nickname = nick; };
+  const store = {
+    getGuild: () => ({ nicknamesEnabled: false }),
+    getRank: () => ({ rank: 1 }),
+    getUser: () => ({ userId: 'a', level: 4, xp: 0 }),
+  };
+  const result = await applyExpectedNickname({ store }, guild, a, 'de', { level: 4 });
+  assert.equal(result, 'unchanged');
+  assert.equal(setCalls, 0);
+  assert.equal(a.nickname, 'Alice');
 });
 
 test('refreshRankNicknames: bleibt stumm, wenn Tags ausgeschaltet sind', async () => {
