@@ -35,7 +35,7 @@ const { createStore } = require('./src/store');
 const { createSessionStore } = require('./src/editor');
 const { startScheduler } = require('./src/scheduler');
 const { registerCommands } = require('./src/commands');
-const { handleInteraction } = require('./src/interactions');
+const { handleInteraction, handleGuildMemberUpdate } = require('./src/interactions');
 const { sendJoinNotice } = require('./src/admin-panel');
 
 module.exports = {
@@ -102,32 +102,14 @@ module.exports = {
       void handleInteraction(ctx, interaction);
     });
 
-    // ---------------- Zähler live halten ----------------
-    // Wenn ein Admin eine Rolle manuell vergibt oder entzieht, ziehen wir die
-    // Anzahl sofort nach (nur für Rollen, die wirklich in einer unserer
-    // Nachrichten vorkommen – sonst passiert gar nichts).
+    // ---------------- Zähler live halten + Rollen-Logging ----------------
+    // Wenn irgendjemand (Admin, anderer Bot, Self-Role-Button, …) eine Rolle
+    // bekommt oder verliert, aktualisieren wir die Zähler unserer eigenen
+    // Nachrichten UND schicken dem Nutzer eine humorvolle Privat-DM – für
+    // ALLE Rollen des Servers, nicht nur die Self-Roles-Rollen.
+    // Die eigentliche Logik lebt in interactions.js, damit sie testbar ist.
     client.on(Events.GuildMemberUpdate, (oldMember, newMember) => {
-      try {
-        const before = oldMember?.roles?.cache;
-        const after = newMember?.roles?.cache;
-        if (!before || !after) return;
-
-        const changed = new Set();
-        for (const id of before.keys()) if (!after.has(id)) changed.add(id);
-        for (const id of after.keys()) if (!before.has(id)) changed.add(id);
-        if (!changed.size) return;
-
-        const guildId = newMember.guild?.id;
-        if (!guildId) return;
-
-        for (const roleId of changed) {
-          void ctx.store
-            .refreshForRole(guildId, roleId, { force: false })
-            .catch((err) => logger.warn('[self-roles-bot] Live-Update fehlgeschlagen:', err.message));
-        }
-      } catch (err) {
-        logger.warn('[self-roles-bot] guildMemberUpdate-Fehler:', err.message);
-      }
+      void handleGuildMemberUpdate(ctx, oldMember, newMember);
     });
 
     // Rolle gelöscht → betroffene Nachrichten neu bauen (Rolle verschwindet)

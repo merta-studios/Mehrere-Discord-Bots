@@ -15,7 +15,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { PermissionFlagsBits, MessageFlags } = require('discord.js');
 
-const { handleInteraction } = require('../bots/self-roles-bot/src/interactions');
+const {
+  handleInteraction,
+  handleGuildMemberUpdate,
+} = require('../bots/self-roles-bot/src/interactions');
 const { createStore } = require('../bots/self-roles-bot/src/store');
 const { createSessionStore } = require('../bots/self-roles-bot/src/editor');
 const {
@@ -40,6 +43,10 @@ function makeHarness({ botCanManageRoles = true, roleCreateFails = false, sendFa
   const positionCalls = [];
 
   const guildId = 'guild1';
+
+  // Rückverknüpfung, damit makeMember() später auf guild + ctx zugreifen kann
+  // (beide werden weiter unten im Harness erst gebaut).
+  const harnessRef = { guild: null, ctx: null };
 
   function makeRole({ id, name, position = 1, mentionable = true }) {
     const role = {
@@ -82,29 +89,95 @@ function makeHarness({ botCanManageRoles = true, roleCreateFails = false, sendFa
   function makeMember(userId) {
     const owned = new Set();
     const userObj = makeUser(userId);
+
+    // Snapshot der aktuell besessenen Rollen (als frisches „oldMember“).
+    function snapshotMember(currentSet) {
+      const snap = new Set(currentSet);
+      return {
+        id: userId,
+        user: userObj,
+        guild: null, // wird beim Dispatch gesetzt
+        roles: {
+          cache: {
+            has: (id) => snap.has(id),
+            keys: () => snap.keys(),
+            get: (id) => (snap.has(id) ? roles.get(id) || null : null),
+            get highest() {
+              return botRole;
+            },
+          },
+        },
+      };
+    }
+
+    // Alle Rollen-Änderungen laufen durch mutate(), damit wir hinterher den
+    // zentralen guildMemberUpdate-Handler exakt so aufrufen wie Discord.js.
+    async function mutate(fn) {
+      const before = snapshotMember(owned);
+      before.guild = harnessRef.guild;
+      await fn();
+      const afterSnap = snapshotMember(owned);
+      const newMember = {
+        ...afterSnap,
+        user: userObj,
+        guild: harnessRef.guild,
+      };
+      try {
+        if (harnessRef.ctx) {
+          await handleGuildMemberUpdate(harnessRef.ctx, before, newMember);
+        }
+      } catch {
+        /* Test-Harness soll nicht crashen */
+      }
+    }
+
     const member = {
       id: userId,
       user: userObj,
+      get guild() {
+        return harnessRef.guild;
+      },
       roles: {
         cache: {
           has: (id) => owned.has(id),
           keys: () => owned.keys(),
+          get: (id) => (owned.has(id) ? roles.get(id) || null : null),
           get highest() {
             return botRole;
           },
         },
         add: async (ids) => {
-          for (const id of [].concat(ids)) {
-            if (!roles.has(id)) throw Object.assign(new Error('Unknown Role'), { code: 10011 });
-            owned.add(id);
-            roles.get(id).members.set(userId, member);
-          }
+          await mutate(async () => {
+            for (const id of [].concat(ids)) {
+              if (!roles.has(id)) throw Object.assign(new Error('Unknown Role'), { code: 10011 });
+              owned.add(id);
+              roles.get(id).members.set(userId, member);
+            }
+          });
         },
         remove: async (ids) => {
-          for (const id of [].concat(ids)) {
-            owned.delete(id);
-            roles.get(id)?.members?.delete(userId);
-          }
+          await mutate(async () => {
+            for (const id of [].concat(ids)) {
+              owned.delete(id);
+              roles.get(id)?.members?.delete(userId);
+            }
+          });
+        },
+        set: async (ids) => {
+          await mutate(async () => {
+            const wanted = new Set([].concat(ids));
+            for (const id of Array.from(owned)) {
+              if (!wanted.has(id)) {
+                owned.delete(id);
+                roles.get(id)?.members?.delete(userId);
+              }
+            }
+            for (const id of wanted) {
+              if (!roles.has(id)) throw Object.assign(new Error('Unknown Role'), { code: 10011 });
+              owned.add(id);
+              roles.get(id).members.set(userId, member);
+            }
+          });
         },
       },
       _owned: owned,
@@ -213,6 +286,12 @@ function makeHarness({ botCanManageRoles = true, roleCreateFails = false, sendFa
     ownerId: 'owner1',
     commandIds: {},
   };
+
+  // Ab jetzt können makeMember()-Aufrufe den zentralen Rollen-Logging-Handler
+  // korrekt füttern (Discord würde denselben Handler beim guildMemberUpdate-Event
+  // aufrufen).
+  harnessRef.guild = guild;
+  harnessRef.ctx = ctx;
 
   return {
     ctx,
@@ -1129,6 +1208,8 @@ test('Rollen-Logging: Sendet humorvolle DM bei Rollenabgabe', async () => {
   const h = await publishFixture();
   const member = h.makeMember('user1');
   await member.roles.add(h.roleA.id);
+  // Setup-DM verwerfen – hier interessiert uns nur die DM zum Abgeben.
+  h.sentDms.length = 0;
 
   // Klick auf "Rolle abgeben"
   const drop = makeInteraction({
@@ -1153,6 +1234,8 @@ test('Rollen-Logging: Sendet humorvolle DM bei Rollentausch (Single-Modus)', asy
   const h = await publishFixture({ mode: 'single' });
   const member = h.makeMember('user1');
   await member.roles.add(h.roleA.id);
+  // Setup-DM verwerfen – hier interessiert uns nur die Swap-DM.
+  h.sentDms.length = 0;
 
   // Rolle B wählen -> tauscht A gegen B
   const click = makeInteraction({
@@ -1173,6 +1256,52 @@ test('Rollen-Logging: Sendet humorvolle DM bei Rollentausch (Single-Modus)', asy
   assert.match(dmContent, /Artist/);
   assert.match(dmContent, /Testserver/);
   assert.match(dmContent, /Aus alt mach neu|getauscht|Upgrade/i);
+});
+
+test('Rollen-Logging: Auch NICHT-Self-Role-Rollen lösen eine DM aus (z. B. Admin vergibt manuell eine beliebige Rolle)', async () => {
+  const h = await publishFixture();
+  // Eine Rolle, die NICHT in irgendeiner Self-Roles-Nachricht vorkommt
+  const externalRole = await h.guild.roles.create({ name: 'VIP', mentionable: true });
+  const member = h.makeMember('user1');
+  h.sentDms.length = 0;
+
+  // Admin/Bot/irgendjemand vergibt die Rolle manuell (simuliert per member.roles.add)
+  await member.roles.add(externalRole.id);
+  assert.equal(h.sentDms.length, 1, 'Nutzer bekommt DM auch für Nicht-Self-Role-Rollen');
+  assert.equal(h.sentDms[0].userId, 'user1');
+  let dmContent = textOf(h.sentDms[0].payload);
+  assert.match(dmContent, /VIP/);
+  assert.match(dmContent, /Testserver/);
+
+  // Und beim Entziehen genauso
+  h.sentDms.length = 0;
+  await member.roles.remove(externalRole.id);
+  assert.equal(h.sentDms.length, 1, 'Auch das Entziehen einer beliebigen Rolle löst eine DM aus');
+  dmContent = textOf(h.sentDms[0].payload);
+  assert.match(dmContent, /VIP/);
+  assert.match(dmContent, /Testserver/);
+});
+
+test('Rollen-Logging: Bots erhalten keine DM (auch bei beliebigen Rollen)', async () => {
+  const h = await publishFixture();
+  const externalRole = await h.guild.roles.create({ name: 'Automation', mentionable: false });
+  const botMember = h.makeMember('otherbot');
+  botMember.user.bot = true;
+  h.sentDms.length = 0;
+
+  await botMember.roles.add(externalRole.id);
+  assert.equal(h.sentDms.length, 0, 'Bots dürfen niemals eine Rollen-DM bekommen');
+});
+
+test('Rollen-Logging: Integrationsverwaltete Rollen (managed=true) werden übersprungen', async () => {
+  const h = await publishFixture();
+  const managedRole = await h.guild.roles.create({ name: 'Nitro Booster', mentionable: false });
+  managedRole.managed = true;
+  const member = h.makeMember('user1');
+  h.sentDms.length = 0;
+
+  await member.roles.add(managedRole.id);
+  assert.equal(h.sentDms.length, 0, 'Managed-Rollen (Booster/Integrationen) lösen keine DM aus');
 });
 
 test('Rollen-Logging: Bei False werden KEINE DMs gesendet', async () => {
