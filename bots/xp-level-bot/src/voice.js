@@ -247,6 +247,7 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
       user.inactiveDays = 0; // Reset Inaktivitäts-Zähler sofort (wie beim Bonus-Claim)
       user.lastXpGain = user.lastXpGain || 0; // nicht für Cooldown nutzen, aber Feld existiert
       store.setUser(user);
+      const { clearInactiveRoleForUser } = require('./inactive-role');
 
       const lang = cfg.lang || 'de';
       const guild = client.guilds.cache.get(guildId);
@@ -268,10 +269,14 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
           refreshRankNicknames(miniCtx, guild, userId, lang),
           syncLevelRolesForUser({ ctx: miniCtx, guild, userId, level: res.level }),
           maybeRefreshLeaderboard(miniCtx, cfg, guild),
+          clearInactiveRoleForUser(miniCtx, guild, userId),
           levelFlush,
         ]);
       } else if (wasNewUser) {
-        await refreshRankNicknames(miniCtx, guild, userId, lang).catch(()=>{});
+        await Promise.allSettled([
+          refreshRankNicknames(miniCtx, guild, userId, lang),
+          clearInactiveRoleForUser(miniCtx, guild, userId),
+        ]);
       } else {
         try {
           const rankInfo = store.getRank(guildId, userId);
@@ -279,6 +284,7 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
             await maybeRefreshRankNicknames(miniCtx, guild, userId, lang).catch(()=>{});
           }
         } catch {}
+        await clearInactiveRoleForUser(miniCtx, guild, userId).catch(()=>{});
       }
     } catch(e){
       logger.warn('[xp-voice] grant failed:', e.message);

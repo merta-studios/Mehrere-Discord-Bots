@@ -24,6 +24,7 @@
  *  - /rank für alle, /help, /admin_set_bot_profile, /adminpanel (Owner DM)
  *  - /toggle_nicknames (Admin, nach /setup): Level-Tags in Nicknames an/aus (Standard: an)
  *  - /sync_nicknames (Admin, nach /setup): alle Mitglieder-Nicknames mit Ladeanzeige abgleichen
+ *  - /set_inactive_role (Admin, nach /setup): Inaktiv-Rolle nach N Tagen ohne XP, Sync um 0 Uhr + beim Command
  *  - Nicknames: [Lvl X 🥇] Name (Top3 Medaillen), bei Erfolg sofort, 32 Zeichen
  *  - Bei Verlassen: Daten löschen
  *  - Turso: RAM-first, Dirty-Tracking, Batch-Flush bei SIGTERM + alle 5min Backup
@@ -263,7 +264,11 @@ module.exports = {
         user.xp = res.xp;
         user.lastXpGain = now;
         user.lastActivity = now; // Aktivitäts-Stempel für den Inaktivitäts-Decay
+        user.inactiveDays = 0;
         store.setUser(user);
+        void require('./src/inactive-role')
+          .clearInactiveRoleForUser(ctx, msg.guild, msg.author.id)
+          .catch(() => {});
         // Bei einem Levelwechsel sofort persistieren, aber die Discord-Ankündigung
         // NIEMALS auf Turso warten lassen. Ein langsamer DB-Request war bisher in
         // der Lage, die sichtbare Level-Up-Antwort minutenlang zu blockieren.

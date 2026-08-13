@@ -1,6 +1,6 @@
 /**
  * Tests für die Slash-Command-Registrierung und den /help Command des XP-Bots:
- * 1. Discord-API-Validierung aller 9 Commands (inkl. /toggle_nicknames & /sync_nicknames)
+ * 1. Discord-API-Validierung aller 10 Commands (inkl. /set_inactive_role)
  * 2. Saubere globale Registrierung ohne Dev-Gilden-Verwechslung + Shadowing-Cleanup
  * 3. Spezifische Dev-Gilden-Registrierung bei gesetzter XP_BOT_GUILD_ID
  * 4. Whitespace-Toleranz bei Env-Variablen
@@ -103,16 +103,16 @@ function makeCtx(overrides = {}) {
   };
 }
 
-const ALL_CMD_NAMES = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'adminpanel'];
+const ALL_CMD_NAMES = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role', 'adminpanel'];
 
 function fakeCommandList(idFor = (name) => `id-${name}`) {
   const idFn = typeof idFor === 'function' ? idFor : (name) => `${idFor}${name}`;
   return ALL_CMD_NAMES.map((name) => ({ id: idFn(name), name }));
 }
 
-test('alle 9 Command-JSONs sind Discord-API-valide (inkl. /toggle_nicknames & /sync_nicknames)', () => {
+test('alle 10 Command-JSONs sind Discord-API-valide (inkl. /set_inactive_role)', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 9);
+  assert.equal(cmds.length, 10);
   for (const c of cmds) {
     assert.deepEqual(validateCommand(c), [], `Command "${c.name}" würde von Discord abgelehnt`);
   }
@@ -241,6 +241,7 @@ test('ensureCommandIds lädt IDs von Discord REST GET nach wenn RAM und Store le
         { id: '1006', name: 'update_leaderboard' },
         { id: '1008', name: 'toggle_nicknames' },
         { id: '1009', name: 'sync_nicknames' },
+        { id: '1010', name: 'set_inactive_role' },
         { id: '1007', name: 'adminpanel' },
       ];
     },
@@ -335,6 +336,7 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
         { id: '2006', name: 'update_leaderboard' },
         { id: '2008', name: 'toggle_nicknames' },
         { id: '2009', name: 'sync_nicknames' },
+        { id: '2010', name: 'set_inactive_role' },
         { id: '2007', name: 'adminpanel' },
       ];
     },
@@ -368,6 +370,7 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
   assert.ok(text.includes('</level_roles:2005>'), 'level_roles muss klickbar sein');
   assert.ok(text.includes('</toggle_nicknames:2008>'), 'toggle_nicknames muss klickbar sein');
   assert.ok(text.includes('</sync_nicknames:2009>'), 'sync_nicknames muss klickbar sein');
+  assert.ok(text.includes('</set_inactive_role:2010>'), 'set_inactive_role muss klickbar sein');
   assert.ok(text.includes('</help:2003>'), 'help muss klickbar sein');
   // Keine unklickbaren reinen Text-Befehle wie "**/level_roles**" ohne ID
   assert.ok(!text.includes('**`/level_roles`**') && !text.includes('**/level_roles**\n'), 'darf kein Text-Fallback sein');
@@ -469,6 +472,7 @@ test('ensureCommandIds lädt auf normalen Servern GLOBALE Commands, auch wenn De
         { id: '4006', name: 'update_leaderboard' },
         { id: '4008', name: 'toggle_nicknames' },
         { id: '4009', name: 'sync_nicknames' },
+        { id: '4010', name: 'set_inactive_role' },
         { id: '4007', name: 'adminpanel' },
       ];
     },
@@ -498,6 +502,7 @@ test('ensureCommandIds lädt auf der Dev-Gilde die Guild-Commands und verschmutz
         { id: '5006', name: 'update_leaderboard' },
         { id: '5008', name: 'toggle_nicknames' },
         { id: '5009', name: 'sync_nicknames' },
+        { id: '5010', name: 'set_inactive_role' },
         { id: '5007', name: 'adminpanel' },
       ];
     },
@@ -586,6 +591,7 @@ test('ensureCommandIds korrigiert verwaiste Store-Snowflakes gegen Discord REST 
     update_leaderboard: 'DEAD-BEEF-OLD', // ← verwaiste ID aus früherer Registrierung
     toggle_nicknames: '1008',
     sync_nicknames: '1009',
+    set_inactive_role: '1010',
     adminpanel: '1007',
   });
 
@@ -603,6 +609,7 @@ test('ensureCommandIds korrigiert verwaiste Store-Snowflakes gegen Discord REST 
         { id: '2006', name: 'update_leaderboard' },
         { id: '1008', name: 'toggle_nicknames' },
         { id: '1009', name: 'sync_nicknames' },
+        { id: '1010', name: 'set_inactive_role' },
         { id: '1007', name: 'adminpanel' },
       ];
     },
@@ -631,6 +638,7 @@ test('verifizierte IDs werden innerhalb der TTL aus dem Memory genutzt (kein RES
         { id: '6', name: 'update_leaderboard' },
         { id: '8', name: 'toggle_nicknames' },
         { id: '9', name: 'sync_nicknames' },
+        { id: '10', name: 'set_inactive_role' },
         { id: '7', name: 'adminpanel' },
       ];
     },
@@ -669,6 +677,7 @@ test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Sto
     update_leaderboard: 'DEAD-BEEF-OLD', // ← verwaist (der gemeldete Bug)
     toggle_nicknames: '3008',
     sync_nicknames: '3009',
+    set_inactive_role: '3010',
     adminpanel: '3007',
   });
 
@@ -682,6 +691,7 @@ test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Sto
       { id: '4006', name: 'update_leaderboard' }, // frische Snowflake von Discord
       { id: '3008', name: 'toggle_nicknames' },
       { id: '3009', name: 'sync_nicknames' },
+      { id: '3010', name: 'set_inactive_role' },
       { id: '3007', name: 'adminpanel' },
     ],
   };
@@ -975,6 +985,9 @@ function makeAdminInteraction({ commandName, options = {}, guild, perms = true }
     memberPermissions: { has: () => perms },
     options: {
       getBoolean: (name) => options[name],
+      getString: (name) => options[name],
+      getInteger: (name) => options[name],
+      getRole: (name) => options[name],
     },
     deferred: false,
     replied: false,
@@ -1056,4 +1069,138 @@ test('/sync_nicknames braucht Setup, deferrt den Ladebildschirm und gleicht Nick
   assert.equal(alice.nickname, '[Lvl 4 🥇] Alice');
   const last = payloadText(interaction.edits[interaction.edits.length - 1]);
   assert.match(last, /fertig|Sync/i);
+});
+
+
+test('/set_inactive_role ist ein valider Admin-Command mit On/Off, Tagen und Rolle', () => {
+  const cmds = defineCommands().map((c) => c.toJSON());
+  const cmd = cmds.find((c) => c.name === 'set_inactive_role');
+  assert.ok(cmd, '/set_inactive_role muss definiert sein');
+  assert.equal(cmd.default_member_permissions, '8');
+  assert.deepEqual(validateCommand(cmd), []);
+  const mode = (cmd.options || []).find((o) => o.name === 'mode');
+  const days = (cmd.options || []).find((o) => o.name === 'inactive_days');
+  const role = (cmd.options || []).find((o) => o.name === 'role');
+  assert.ok(mode && mode.required, 'mode ist Pflicht');
+  assert.equal(mode.type, 3, 'String-Option');
+  assert.deepEqual((mode.choices || []).map((c) => c.value).sort(), ['off', 'on']);
+  assert.ok(days && !days.required, 'inactive_days optional');
+  assert.equal(days.type, 4, 'Integer-Option');
+  assert.equal(days.min_value, 1);
+  assert.equal(days.max_value, 365);
+  assert.ok(role && !role.required, 'role optional');
+  assert.equal(role.type, 8, 'Role-Option');
+});
+
+test('/set_inactive_role braucht Setup, speichert Config und synct Mitglieder', async () => {
+  const store = createXpStore({ env: () => '' });
+  const noSetup = makeAdminInteraction({
+    commandName: 'set_inactive_role',
+    options: { mode: 'on', inactive_days: 7, role: { id: 'role-inact', managed: false, position: 2 } },
+  });
+  await handleChatInput({ store, logger: { info() {}, warn() {}, error() {} } }, noSetup);
+  assert.match(payloadText(noSetup.replies[0]), /noch kein XP-System|Bitte nutze zuerst/i);
+
+  store.setGuild({ guildId: 'g1', leaderboardChannelId: 'lb', mainChannelId: 'main', lang: 'de' });
+  store.setUser({ guildId: 'g1', userId: 'a', level: 4, xp: 10, lastActivity: 0, inactiveDays: 10 });
+  store.setUser({ guildId: 'g1', userId: 'b', level: 2, xp: 5, lastActivity: Date.now(), inactiveDays: 0 });
+
+  const members = new Map();
+  function makeMember(id, hasRole) {
+    const roles = new Map(hasRole ? [['role-inact', { id: 'role-inact' }]] : []);
+    const m = {
+      id,
+      user: { username: id, bot: false },
+      roles: {
+        cache: roles,
+        highest: { position: 1 },
+        add: async (rid) => { roles.set(rid, { id: rid }); },
+        remove: async (rid) => { roles.delete(rid); },
+      },
+    };
+    members.set(id, m);
+    return m;
+  }
+  makeMember('a', false);
+  makeMember('b', true);
+  const roleObj = { id: 'role-inact', managed: false, position: 2 };
+  const guild = {
+    id: 'g1',
+    ownerId: 'owner',
+    members: {
+      me: { id: 'bot', permissions: { has: () => true }, roles: { highest: { position: 100 } } },
+      fetch: async () => members,
+    },
+    roles: { cache: new Map([['role-inact', roleObj]]), fetch: async () => roleObj },
+  };
+  const interaction = makeAdminInteraction({
+    commandName: 'set_inactive_role',
+    options: { mode: 'on', inactive_days: 7, role: roleObj },
+    guild,
+  });
+  await handleChatInput({ store, logger: { info() {}, warn() {}, error() {} }, client: { user: { id: 'bot' } } }, interaction);
+
+  assert.equal(interaction.deferred, true);
+  const cfg = store.getGuild('g1');
+  assert.equal(cfg.inactiveRoleEnabled, true);
+  assert.equal(cfg.inactiveRoleDays, 7);
+  assert.equal(cfg.inactiveRoleId, 'role-inact');
+  assert.equal(members.get('a').roles.cache.has('role-inact'), true, 'Inaktiver bekommt die Rolle');
+  assert.equal(members.get('b').roles.cache.has('role-inact'), false, 'Aktiver verliert die Rolle');
+  const last = payloadText(interaction.edits[interaction.edits.length - 1]);
+  assert.match(last, /abgeglichen|sync/i);
+});
+
+test('/set_inactive_role off speichert aus und entfernt die Rolle', async () => {
+  const store = createXpStore({ env: () => '' });
+  store.setGuild({
+    guildId: 'g1',
+    leaderboardChannelId: 'lb',
+    mainChannelId: 'main',
+    lang: 'de',
+    inactiveRoleEnabled: true,
+    inactiveRoleDays: 5,
+    inactiveRoleId: 'role-inact',
+  });
+  store.setUser({ guildId: 'g1', userId: 'a', level: 3, xp: 1, lastActivity: 0, inactiveDays: 20 });
+
+  const members = new Map();
+  const roles = new Map([['role-inact', { id: 'role-inact' }]]);
+  members.set('a', {
+    id: 'a',
+    user: { username: 'a', bot: false },
+    roles: {
+      cache: roles,
+      highest: { position: 1 },
+      add: async (rid) => { roles.set(rid, { id: rid }); },
+      remove: async (rid) => { roles.delete(rid); },
+    },
+  });
+  const roleObj = { id: 'role-inact', managed: false, position: 2 };
+  const guild = {
+    id: 'g1',
+    ownerId: 'owner',
+    members: {
+      me: { id: 'bot', permissions: { has: () => true }, roles: { highest: { position: 100 } } },
+      fetch: async () => members,
+    },
+    roles: { cache: new Map([['role-inact', roleObj]]), fetch: async () => roleObj },
+  };
+  const interaction = makeAdminInteraction({
+    commandName: 'set_inactive_role',
+    options: { mode: 'off' },
+    guild,
+  });
+  await handleChatInput({ store, logger: { info() {}, warn() {}, error() {} }, client: { user: { id: 'bot' } } }, interaction);
+  assert.equal(store.getGuild('g1').inactiveRoleEnabled, false);
+  assert.equal(members.get('a').roles.cache.has('role-inact'), false);
+});
+
+test('/set_inactive_role on ohne Tage/Rolle (und ohne gespeicherte Werte) wird abgelehnt', async () => {
+  const store = createXpStore({ env: () => '' });
+  store.setGuild({ guildId: 'g1', leaderboardChannelId: 'lb', mainChannelId: 'main', lang: 'de' });
+  const interaction = makeAdminInteraction({ commandName: 'set_inactive_role', options: { mode: 'on' } });
+  await handleChatInput({ store, logger: { info() {}, warn() {}, error() {} } }, interaction);
+  assert.equal(interaction.deferred, false);
+  assert.match(payloadText(interaction.replies[0]), /Tage|days|Rolle|role/i);
 });

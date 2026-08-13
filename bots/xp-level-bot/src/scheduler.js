@@ -333,6 +333,18 @@ async function applyDailyDecayForGuild(ctx, entry, guild) {
   }
   await decayFlush;
 
+  if (entry.inactiveRoleId) {
+    try {
+      const { applyInactiveRolesAfterDecay } = require('./inactive-role');
+      await applyInactiveRolesAfterDecay(ctx, guild, entry);
+    } catch (err) {
+      ctx.logger.warn(
+        `[xp-level-bot] Inaktiv-Rolle nach Decay fehlgeschlagen (${guild.name}):`,
+        err?.message || err
+      );
+    }
+  }
+
   // Nach dem Decay ist das Board ohnehin frisch; das zählt legitim als
   // Stunden-Refresh und verhindert einen zweiten gleichzeitigen Mitternachts-Edit.
   await refreshLeaderboard(ctx, entry, guild, new Date(), { isHourly: true });

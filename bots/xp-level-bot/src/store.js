@@ -12,7 +12,7 @@ const { decodeHidden } = require('./zw-marker');
 const LEADERBOARD_MARKER = 'xp_leader::v1::';
 
 function createXpStore({ logger, env } = {}) {
-  const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, lang, leaderboardMessageId, lastDailyDecay, nicknamesEnabled}
+  const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, lang, leaderboardMessageId, lastDailyDecay, nicknamesEnabled, inactiveRoleEnabled, inactiveRoleDays, inactiveRoleId}
   const users = new Map(); // guildId -> Map(userId -> {guildId,userId,level,xp,lastXpGain})
   let commandIds = {}; // cmdName -> id  (NUR globale Command-IDs!)
   const guildCommandIds = new Map(); // guildId -> { [cmdName]: id } (nur Dev-Gilde)
@@ -77,7 +77,10 @@ function createXpStore({ logger, env } = {}) {
       bonus_state TEXT,
       last_leaderboard_refresh INTEGER,
       last_hourly_leaderboard_refresh INTEGER,
-      nicknames_enabled INTEGER
+      nicknames_enabled INTEGER,
+      inactive_role_enabled INTEGER,
+      inactive_role_days INTEGER,
+      inactive_role_id TEXT
     );`);
     // Migration für Bestands-Tabellen. Allgemeiner und stündlicher
     // Leaderboard-Zeitstempel sind absichtlich getrennt: Level-Ups dürfen den
@@ -90,6 +93,9 @@ function createXpStore({ logger, env } = {}) {
       'last_leaderboard_refresh INTEGER',
       'last_hourly_leaderboard_refresh INTEGER',
       'nicknames_enabled INTEGER',
+      'inactive_role_enabled INTEGER',
+      'inactive_role_days INTEGER',
+      'inactive_role_id TEXT',
     ]) {
       try { await db.execute(`ALTER TABLE guild_configs ADD COLUMN ${col}`); } catch {}
     }
@@ -126,6 +132,17 @@ function createXpStore({ logger, env } = {}) {
     return true;
   }
 
+  /** Standard: aus. Nur ein explizites true/1 schaltet die Inaktiv-Rolle ein. */
+  function parseInactiveRoleEnabled(value) {
+    return value === true || value === 1 || value === '1' || value === 'true';
+  }
+
+  function parseInactiveRoleDays(value) {
+    const n = Math.floor(Number(value));
+    if (!Number.isFinite(n) || n < 1) return null;
+    return n;
+  }
+
   async function loadFromDb() {
     if (!db) return;
     const gRes = await db.execute('SELECT * FROM guild_configs');
@@ -147,6 +164,9 @@ function createXpStore({ logger, env } = {}) {
           ? Number(row.last_hourly_leaderboard_refresh)
           : null,
         nicknamesEnabled: parseNicknamesEnabled(row.nicknames_enabled),
+        inactiveRoleEnabled: parseInactiveRoleEnabled(row.inactive_role_enabled),
+        inactiveRoleDays: parseInactiveRoleDays(row.inactive_role_days),
+        inactiveRoleId: row.inactive_role_id || null,
       });
     }
     const uRes = await db.execute('SELECT * FROM user_levels');
@@ -425,8 +445,8 @@ function createXpStore({ logger, env } = {}) {
           const g = guilds.get(gid);
           if (!g) continue;
           statements.push({
-            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids, bonus_state, last_leaderboard_refresh, last_hourly_leaderboard_refresh)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids, bonus_state, last_leaderboard_refresh, last_hourly_leaderboard_refresh, nicknames_enabled, inactive_role_enabled, inactive_role_days, inactive_role_id)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id) DO UPDATE SET
                     leaderboard_channel_id=excluded.leaderboard_channel_id,
                     main_channel_id=excluded.main_channel_id,
@@ -438,7 +458,11 @@ function createXpStore({ logger, env } = {}) {
                     level_role_ids=excluded.level_role_ids,
                     bonus_state=excluded.bonus_state,
                     last_leaderboard_refresh=excluded.last_leaderboard_refresh,
-                    last_hourly_leaderboard_refresh=excluded.last_hourly_leaderboard_refresh`,
+                    last_hourly_leaderboard_refresh=excluded.last_hourly_leaderboard_refresh,
+                    nicknames_enabled=excluded.nicknames_enabled,
+                    inactive_role_enabled=excluded.inactive_role_enabled,
+                    inactive_role_days=excluded.inactive_role_days,
+                    inactive_role_id=excluded.inactive_role_id`,
             args: [
               g.guildId,
               g.leaderboardChannelId || '',
@@ -452,6 +476,10 @@ function createXpStore({ logger, env } = {}) {
               g.bonusState ? JSON.stringify(g.bonusState) : null,
               g.lastLeaderboardRefresh || g.lastLeaderboardUpdate || null,
               g.lastHourlyLeaderboardRefresh || null,
+              g.nicknamesEnabled === false ? 0 : 1,
+              g.inactiveRoleEnabled ? 1 : 0,
+              g.inactiveRoleDays || null,
+              g.inactiveRoleId || null,
             ]
           });
         }
