@@ -31,7 +31,7 @@
  * ============================================================================
  */
 
-const { GatewayIntentBits, ActivityType, Events, MessageFlags, Routes } = require('discord.js');
+const { GatewayIntentBits, ActivityType, Events, MessageFlags } = require('discord.js');
 
 const { createXpStore } = require('./src/store');
 const { registerCommands } = require('./src/commands');
@@ -135,16 +135,10 @@ module.exports = {
           `${client.guilds.cache.size} Server, ${store.getAllUsersCount()} Nutzer im RAM`
       );
 
-      // Laute, sofort sichtbare Warnung: mit gesetztem Dev-Guild-Scope werden
-      // ALLE Commands (inkl. /toggle_nicknames & /sync_nicknames) NUR in dieser
-      // einen Gilde registriert – auf normalen Servern fehlen sie dann und
-      // Discord meldet beim Anklicken „Kein Befehl gefunden“. Häufige Ursache
-      // für genau den gemeldeten Fehler!
       if (ctx.devGuildId) {
-        logger.warn(
-          `[xp-level-bot] XP_BOT_GUILD_ID ist gesetzt (${ctx.devGuildId}) – die Commands existieren NUR in dieser einen Gilde. ` +
-            'Auf allen anderen Servern erscheinen /toggle_nicknames, /sync_nicknames & Co. NICHT. ' +
-            'Für den Produktivbetrieb die Variable in Render leeren/entfernen, damit global registriert wird!'
+        logger.info(
+          `[xp-level-bot] XP_BOT_GUILD_ID=${ctx.devGuildId} – diese Gilde wird zusätzlich sofort beschrieben. ` +
+            'Die Commands werden trotzdem global UND auf allen anderen Servern registriert.'
         );
       }
 
