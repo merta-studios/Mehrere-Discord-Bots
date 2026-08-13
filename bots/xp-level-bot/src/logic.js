@@ -468,8 +468,8 @@ function isVoiceEligible(memberVoiceState, channelMemberCount) {
 //  - nur zwischen 06:00 und 23:59 Uhr Ortszeit (eindeutig derselbe Kalendertag)
 //  - ein Drop ist 1 Stunde lang einsammelbar (BONUS_CLAIM_MS) und verfällt dann
 
-const BONUS_XP_MIN = 20;
-const BONUS_XP_MAX = 40;
+const BONUS_XP_MIN = 30;
+const BONUS_XP_MAX = 70;
 const BONUS_CLAIM_MS = 60 * 60 * 1000; // Belohnung ist 1 Stunde gültig
 // Geplante Termine (Minuten ab 0:00 Uhr Ortszeit): 06:00 bis 23:59.
 // Das alte Maximum 00:30 (= Minute 1470) gehörte bereits zum Folgetag, während
@@ -484,7 +484,7 @@ const BONUS_COUNT_MAX = 4;
 // vor Render-Schlaf, Deployments und vorübergehenden Discord-Ausfällen.
 const BONUS_SLOT_GRACE_MIN = 60;
 
-/** Zufällige Bonus-Höhe (20–40 XP, Ganzzahl). rng injizierbar für Tests. */
+/** Zufällige Bonus-Höhe (30–70 XP, Ganzzahl). rng injizierbar für Tests. */
 function rollBonusXp(rng = Math.random) {
   return BONUS_XP_MIN + Math.floor(rng() * (BONUS_XP_MAX - BONUS_XP_MIN + 1));
 }

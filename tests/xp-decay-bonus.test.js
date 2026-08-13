@@ -103,14 +103,14 @@ test('nextDecayInfo: wer auf Level 1 mit 0 XP steht, verliert nichts', () => {
 // Bonus: XP-Höhe, geplanter Tagesplan (2–4 Slots, 1h Abstand, 06:00–23:59)
 // ---------------------------------------------------------------------------
 
-test('rollBonusXp: immer ganzzahlig zwischen 20 und 40 (inkl. Grenzen)', () => {
+test('rollBonusXp: immer ganzzahlig zwischen 30 und 70 (inkl. Grenzen)', () => {
   assert.equal(rollBonusXp(() => 0), BONUS_XP_MIN);
   assert.equal(rollBonusXp(() => 0.9999), BONUS_XP_MAX);
-  assert.equal(rollBonusXp(() => 0.5), 30);
+  assert.equal(rollBonusXp(() => 0.5), 50);
   for (let i = 0; i < 500; i++) {
     const v = rollBonusXp();
     assert.ok(Number.isInteger(v));
-    assert.ok(v >= 20 && v <= 40, `außerhalb: ${v}`);
+    assert.ok(v >= 30 && v <= 70, `außerhalb: ${v}`);
   }
 });
 
@@ -225,7 +225,7 @@ test('Bonus-Drop: geplanter Slot zur Fälligkeit sendet Belohnung mit XP-Zahl & 
   assert.equal(h.sentMessages.length, 1, 'genau ein Drop');
   const text = payloadText(h.sentMessages[0].components);
   assert.ok(!text.includes('xp-bonus:'), 'kein sichtbarer Speicher-Marker mehr');
-  assert.ok(text.includes('**22 XP**'), 'gewürfelte XP-Zahl (rng 0.1 → 22) steht im Text');
+  assert.ok(text.includes('**34 XP**'), 'gewürfelte XP-Zahl (rng 0.1 → 34) steht im Text');
   assert.ok(text.includes(BONUS_CLAIM_PREFIX), 'Einsammeln-Button vorhanden');
   assert.ok(text.includes('Einsammeln'), 'Button-Label sagt „Einsammeln“');
   assert.deepEqual(h.cfg.bonusState.firedSlots, [slot], 'Slot als gesendet markiert');
@@ -358,7 +358,7 @@ test('Bonus-Drop: der ERSTE Klick gewinnt und setzt den Decay auf 5% (inactiveDa
 
   await h.dropper.handleClaim(makeClaim('schnell1'));
   const winner = h.store.getUser('g1', 'schnell1');
-  assert.equal(winner.xp, 22, 'Gewinner bekam genau die angekündigten 22 XP');
+  assert.equal(winner.xp, 34, 'Gewinner bekam genau die angekündigten 34 XP');
   assert.equal(winner.lastActivity > 0, true, 'zählt als Aktivität');
   assert.equal(winner.inactiveDays, 0, 'Decay fällt zurück auf 5% (inactiveDays=0)');
   assert.equal(nextDecayInfo(winner, Date.now()).percent, 5, 'nächster Decay = 5%');
@@ -366,7 +366,7 @@ test('Bonus-Drop: der ERSTE Klick gewinnt und setzt den Decay auf 5% (inactiveDa
   const claimedText = payloadText(updates[0].components);
   assert.ok(claimedText.includes('<@schnell1>'), 'Ping auf den Schnelleren steht in der Nachricht');
   assert.ok(claimedText.includes('"disabled":true'), 'Button ist noch da, aber deaktiviert');
-  assert.ok(claimedText.includes('**22 XP**'), 'Belohnungshöhe bleibt sichtbar');
+  assert.ok(claimedText.includes('**34 XP**'), 'Belohnungshöhe bleibt sichtbar');
   assert.equal(followUps.length, 1, 'Gewinner bekommt eine Bestätigung');
 
   // Zweiter Klick ist zu spät
@@ -508,7 +508,7 @@ test('Bonus-Drop: offener Einsammeln-Button funktioniert nach Bot-Neustart weite
     reply: async () => assert.fail('gültiger Drop darf nicht als verschwunden gelten'),
   });
 
-  assert.equal(h.store.getUser('g1', 'after-restart').xp, 22);
+  assert.equal(h.store.getUser('g1', 'after-restart').xp, 34);
   assert.equal(updates.length, 1);
   assert.equal(h.cfg.bonusState.activeDrop, null, 'persistierter offene Drop wurde abgeschlossen');
 });

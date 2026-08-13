@@ -1,12 +1,12 @@
 /**
- * Owner-Admin-Panel (/adminpanel) des Verify-Bots – nur im Privatchat
+ * Owner-Admin-Panel (/adminpanel) des Minigames-Bots – nur im Privatchat
  * mit dem Bot-Owner, bewusst auf Deutsch (wie bei den anderen Bots).
  *
  * Verwendet moderne Container & Layout-Komponenten (Components V2).
  *
  * - Serverliste mit Seiten (◀ ▶), sortiert: erst Server ohne den
  *   Bot-Owner (🔴), dann nach Mitgliederzahl (absteigend).
- * - Server-Detail: Owner-Mention, Name, Mitglieder, Verify-Status.
+ * - Server-Detail: Owner-Mention, Name, Mitglieder und laufende Battles.
  * - Buttons: Zurück, Einladung (1h, 1× nutzbar), Verlassen
  *   (mit Sicherheitsabfrage).
  */
@@ -27,7 +27,7 @@ const { t } = require('./languages');
 const { smallContainer } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 
-const PANEL_PREFIX = 'vrfap_';
+const PANEL_PREFIX = 'mgap_';
 const PAGE_SIZE = 5;
 
 // ---------------------------------------------------------------------------
@@ -178,8 +178,7 @@ async function renderDetailPayload(ctx, userId, guildId) {
     return renderListPayload(ctx, userId);
   }
 
-  const messages = ctx.store.countMessages(guildId);
-  const setup = messages > 0;
+  const games = ctx.store.countGames(guildId);
 
   const lines = [
     `# ${t('apDetailTitle', 'de')}`,
@@ -188,11 +187,8 @@ async function renderDetailPayload(ctx, userId, guildId) {
     t('apDetailOwner', 'de', { mention: `<@${guild.ownerId}>` }),
     t('apDetailMembers', 'de', { count: guild.memberCount.toLocaleString('de-DE') }),
     '',
-    t('apDetailSetup', 'de', { status: setup ? t('apSetupYes', 'de') : t('apSetupNo', 'de') }),
+    t('apDetailGames', 'de', { count: games }),
   ];
-  if (setup) {
-    lines.push(t('apDetailMessages', 'de', { count: messages }));
-  }
 
   if (session.leaving) {
     lines.push('', `⚠️ ${t('apLeaveAsk', 'de', { name: guild.name })}`);
@@ -321,7 +317,8 @@ async function handlePanelButton(ctx, interaction) {
         return interaction.editReply(await renderListPayload(ctx, userId));
       }
       const name = guild.name;
-      ctx.store.deleteGuild(guild.id);
+      if (ctx.gameManager?.deleteGuild) ctx.gameManager.deleteGuild(guild.id);
+      else ctx.store.deleteGuild(guild.id);
       await guild.leave().catch(() => {});
       session.guildId = null;
       session.leaving = false;
@@ -359,7 +356,7 @@ async function handlePanelSelect(ctx, interaction) {
 
 async function sendJoinNotice(ctx, guild) {
   if (!ctx.ownerId) {
-    ctx.logger.warn('[verify-bot] Join-Notice übersprungen: keine Owner-ID konfiguriert.');
+    ctx.logger.warn('[minigames-bot] Join-Notice übersprungen: keine Owner-ID konfiguriert.');
     return;
   }
   try {
@@ -375,11 +372,11 @@ async function sendJoinNotice(ctx, guild) {
       await dm.send(componentsV2Payload([container]));
     } catch (componentErr) {
       await dm.send({ content: `👋 Neuer Server!\n\n${notice.replace(/\*\*/g, '')}` });
-      ctx.logger.warn('[verify-bot] Join-Notice nur als Text gesendet:', componentErr.message);
+      ctx.logger.warn('[minigames-bot] Join-Notice nur als Text gesendet:', componentErr.message);
     }
-    ctx.logger.info(`[verify-bot] Join-Notice an Owner für ${guild.name} gesendet.`);
+    ctx.logger.info(`[minigames-bot] Join-Notice an Owner für ${guild.name} gesendet.`);
   } catch (err) {
-    ctx.logger.warn('[verify-bot] Join-Notice konnte nicht gesendet werden:', err.message);
+    ctx.logger.warn('[minigames-bot] Join-Notice konnte nicht gesendet werden:', err.message);
   }
 }
 

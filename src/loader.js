@@ -49,13 +49,19 @@ async function startAll({ logger, env }) {
 
     const botId = bot.id || dirName;
     const tokenEnv = bot.tokenEnv || `${dirName.toUpperCase().replace(/-/g, '_')}_TOKEN`;
-    const token = env(tokenEnv, '');
+    const tokenEnvs = [tokenEnv, ...(Array.isArray(bot.tokenEnvFallbacks) ? bot.tokenEnvFallbacks : [])];
+    const selectedTokenEnv = tokenEnvs.find((name) => env(name, ''));
+    const token = selectedTokenEnv ? env(selectedTokenEnv, '') : '';
 
     if (!token) {
       logger.warn(
-        `[${botId}] Kein Token gefunden (Umgebungsvariable „${tokenEnv}“ leer) – Bot wird übersprungen.`
+        `[${botId}] Kein Token gefunden (Umgebungsvariable${tokenEnvs.length > 1 ? 'n' : ''} ` +
+          `${tokenEnvs.map((name) => `„${name}“`).join(', ')} leer) – Bot wird übersprungen.`
       );
       continue;
+    }
+    if (selectedTokenEnv !== tokenEnv) {
+      logger.info(`[${botId}] Nutzt aus Kompatibilitätsgründen Token aus „${selectedTokenEnv}“`);
     }
 
     const client = new Client({ intents: bot.intents || [GatewayIntentBits.Guilds] });

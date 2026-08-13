@@ -12,7 +12,7 @@
  *    Sync bei Level Up/Down (mehrere Rollen, nie entfernen)
  *  - Level-Kurve: Lvl1->2 80XP, Lvl99->100 ~2000XP, sanft quadratisch
  *  - Bonus-Drops: Geplant 2–4×/Tag (06:00–23:59 Ortszeit) PLUS Nachholung beim
- *    Chatten, falls ein Termin verpasst wurde. 20–40 XP, „Einsammeln“-Button,
+ *    Chatten, falls ein Termin verpasst wurde. 30–70 XP, „Einsammeln“-Button,
  *    erster Klick gewinnt, 1 Stunde gültig, überlebt Restarts. Einsammeln setzt
  *    den Decay wieder auf 5%
  *  - Täglich 0 Uhr (TZ pro Sprache): 5% Decay; wer 24h keine XP verdient hat,

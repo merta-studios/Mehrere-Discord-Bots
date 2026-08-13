@@ -27,6 +27,15 @@ test('Bot-Module haben die erwartete Form', () => {
   assert.equal(selfRoles.tokenEnv, 'SELF_ROLES_BOT_TOKEN');
   assert.equal(typeof selfRoles.create, 'function');
   assert.ok(Array.isArray(selfRoles.intents));
+
+
+  const minigames = require('../bots/minigames-bot/index.js');
+  assert.equal(minigames.id, 'minigames-bot');
+  assert.equal(minigames.name, 'Minigames Bot');
+  assert.equal(minigames.tokenEnv, 'MINIGAMES_BOT_TOKEN');
+  assert.deepEqual(minigames.tokenEnvFallbacks, ['VERIFY_BOT_TOKEN']);
+  assert.equal(typeof minigames.create, 'function');
+  assert.ok(Array.isArray(minigames.intents));
 });
 
 test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 9 Commands)', () => {

@@ -47,7 +47,14 @@ services:
         sync: false
       - key: SELF_ROLES_BOT_GUILD_ID
         sync: false
-      # --- Verify-Bot ✅ (ohne Datenbank) ---
+      # --- Minigames-Bot 🎮 (ohne Datenbank) ---
+      - key: MINIGAMES_BOT_TOKEN
+        sync: false
+      - key: MINIGAMES_BOT_OWNER_ID
+        sync: false
+      - key: MINIGAMES_BOT_GUILD_ID
+        sync: false
+      # Alte Verify-Werte bleiben als Deployment-Fallback erhalten.
       - key: VERIFY_BOT_TOKEN
         sync: false
       - key: VERIFY_BOT_OWNER_ID
