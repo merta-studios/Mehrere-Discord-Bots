@@ -19,7 +19,7 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 | 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons im Container). 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche (**Glückwunsch-Liste kompakt nebeneinander mit Uhrzeit**), **7-Tage-Aufräumregel unter der Liste**, Owner-Admin-Panel im DM. |
 | ⭐ **XP Level Bot** | **RAM-first & Turso-persistiert** – XP pro Wort (Spam-Erkennung krass, 3 XP/Wort, max 30, 30s Cooldown) + **15 XP für Bilder/Videos/Sprachnachrichten**, Level-Kurve 80→1999 XP, täglicher 5%-Basis-Schwund (bei Inaktivität steigend), Voice 25 XP/Min, Top15-Leaderboard **stündlich + bei Level-Ups**, Nicknames `[Lvl X 🥇]` (Top 3, **an/aus per `/toggle_nicknames`**, **`/sync_nicknames` mit Ladebalken**), **Level-Belohnungsrollen via Formular** (`/level_roles`), **`/update_leaderboard` (Admin, 5-Min-Cooldown)**, /rank + /setup (2 Kanäle) + Adminpanel. |
 | 🎭 **Self Roles Bot** | Rollen zum Selbstbedienen – **komplett ohne Datenbank** (Konfiguration steckt unsichtbar in der Nachricht). `/create_self_role [channel]` → Formular (große Textbox + Titel) → **Bearbeitungs-/Bestätigungs-Nachricht** mit Kanal, Titel, Beschreibung (immer einzeilig) und Rollenliste. **2–20 Rollen** pro Nachricht, **max. 10 Nachrichten** pro Server, Rollen werden **erst beim Absenden** erstellt (ganz unten, erwähnbar). Buttons in Grau mit **live aktualisierter Anzahl** – auch bei manueller Rollenvergabe. `/edit_self_role`, Einzel- oder Mehrfachauswahl, 10 Sprachen, Admin-Panel + /help wie die anderen Bots. |
-| 🎮 **Minigames Bot** | Interaktive Battles direkt im Channel: `/play [game] [gegner]` mit **Tic-Tac-Toe** und **Vier Gewinnt**, öffentlicher Gegner-Ping, Annehmen/Ablehnen, 1-Stunden-Ablauf und aufgeräumte Spielfelder, die komplett aus Buttons bestehen. Spielstände stecken unsichtbar in der Nachricht und überleben Neustarts. 10 Sprachen, `/set_language`, Admin-Panel, `/help` und Profilbild-Command. |
+| 🎮 **Minigames Bot** | Interaktive Battles direkt im Channel: `/play [game] (gegner)` mit **Tic-Tac-Toe** und **Vier Gewinnt** – **Gegner optional** (ohne Angabe darf jeder antreten), **ausgeloster Startspieler**, Annehmen/Ablehnen, 1-Stunden-Ablauf. Vier Gewinnt in **klassischen 7×6** mit Zeiger-Steuerung (`⏮️ ◀️ ⬇️ ▶️ ⏭️`) in einer perfekt bündigen Reihe. Dazu das **Counting-Spiel** (`/set_counting_channel`) – Zählstand steckt im Kanal-Thema, ✅/❌-Reaktionen, kein Doppelzählen, Neustart mit wechselnden Spott-Sprüchen. Spielstände stecken unsichtbar in der Nachricht und überleben Neustarts. 10 Sprachen, `/set_language`, Admin-Panel, `/help` und Profilbild-Command. |
 | 🛠️ **Multi-Bot-Hoster** | Loader, der alle Bots im `bots/`-Ordner automatisch startet (nur die mit gesetztem Token), plus Health-Server für UptimeRobot. |
 
 ## 🗂️ Projektstruktur
@@ -42,9 +42,9 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 │   ├── self-roles-bot/       # 🎭 Self-Roles-Bot (ohne Datenbank, wie der Birthday-Bot)
 │   │   ├── index.js
 │   │   └── src/              # Editor, Store, Zähler-Sync, 10 Sprachen
-│   └── minigames-bot/        # 🎮 Tic-Tac-Toe & Vier Gewinnt
+│   └── minigames-bot/        # 🎮 Tic-Tac-Toe, Vier Gewinnt & Counting
 │       ├── index.js
-│       └── src/              # Spiellogik, UI, Recovery, 10 Sprachen
+│       └── src/              # Spiellogik, UI, Counting, Recovery, 10 Sprachen
 │
 ├── tests/                    # Tests (npm test) – ohne Discord-Verbindung
 ├── render.yaml               # Render-Blueprint (Deployment-Config)
@@ -93,7 +93,7 @@ In `.env` eintragen:
 | `SELF_ROLES_BOT_GUILD_ID` | optional: Dev-Server für sofortige Self-Roles-Command-Registrierung |
 | `MINIGAMES_BOT_TOKEN` | Token des Minigames-Bots (Fallback: bestehendes `VERIFY_BOT_TOKEN`) |
 | `MINIGAMES_BOT_OWNER_ID` | optional: Owner fürs Minigames-`/adminpanel` (Fallbacks: Verify/Birthday-Owner) |
-| `MINIGAMES_BOT_GUILD_ID` | optional: Dev-Server für sofortige Minigames-Command-Registrierung |
+| `MINIGAMES_BOT_GUILD_ID` | optional: Dev-Server für sofortige Minigames-Command-Registrierung (Counting braucht zusätzlich den **Message Content Intent**) |
 | `PORT` | Port für den Health-Server (Standard 10000) |
 
 **Deine Discord-ID findest du so:** Discord → Einstellungen → Erweitert → „Entwicklermodus“
@@ -286,14 +286,27 @@ Details siehe [`bots/minigames-bot/README.md`](bots/minigames-bot/README.md):
 
 - Der frühere Verify-Bot wurde **vollständig ersetzt**; Regeln, Rollen und
   Verifizierungsabläufe sind entfernt.
-- **`/play [game] [gegner]`** erstellt im aktuellen Channel eine öffentliche
-  Herausforderung für **Tic-Tac-Toe** oder **Vier Gewinnt** und pingt den Gegner.
-- Nur der gewählte Gegner kann annehmen oder ablehnen. Ohne Antwort läuft die
-  Battle-Anfrage nach **einer Stunde** sichtbar ab.
+- **`/play [game] (gegner)`** erstellt im aktuellen Channel eine öffentliche
+  Herausforderung für **Tic-Tac-Toe** oder **Vier Gewinnt**.
+- **Der Gegner ist optional.** Mit Gegner wird die Person gepingt und nur sie
+  darf annehmen oder ablehnen. Ohne Gegner sucht der Spieler sichtbar jemanden
+  und **jeder** darf antreten – wer zuerst klickt, spielt; der Herausforderer
+  selbst kann nur abbrechen.
+- **Wer anfängt, wird ausgelost** – nicht automatisch der Command-Nutzer.
+- Ohne Antwort läuft die Battle-Anfrage nach **einer Stunde** sichtbar ab.
 - Nach Annahme wird dieselbe Nachricht zum interaktiven Spielfeld – jeweils
   **genau ein** Feld: bei Tic-Tac-Toe sind die 3×3 Buttons selbst das Brett,
-  bei Vier Gewinnt liegt unter dem 5×6-Board eine einzige Reihe aus fünf
-  ⬇️-Buttons, einer pro Spalte.
+  Vier Gewinnt läuft in **klassischen 7×6**. Weil Discord hart nur fünf Buttons
+  pro Reihe erlaubt, steuert ein 🔽-Zeiger über dem Brett die sieben Spalten:
+  `⏮️ ◀️ ⬇️ ▶️ ⏭️` in einer einzigen Reihe, volle Spalten werden übersprungen.
+  Brett und Zeiger nutzen gleich breite Emoji – nichts verrutscht mehr.
+- **`/set_counting_channel [channel]`** startet das Counting-Spiel in einem
+  Textkanal: Start bei 1, ✅ für richtig, ❌ für falsch, **kein Doppelzählen**
+  (Nachricht wird nur gelöscht), Text wird gelöscht, Bots und Webhooks zählen
+  nicht mit. Bei einer falschen Zahl geht es zurück auf 1 und der Bot outet die
+  Person mit einem von sechs wechselnden Sprüchen. Der Zählstand steht sichtbar
+  im **Kanal-Thema** (`🔢 Counting-Channel | Aktuelle Zahl: 42`) plus
+  unsichtbarem Marker – wieder **ohne Datenbank**.
 - Zugreihenfolge, belegte Felder, volle Spalten, Siege in allen Richtungen und
   Unentschieden werden serverseitig geprüft; fremde Zuschauer können nicht ziehen.
 - Spielstand und Ablaufzeit liegen als unsichtbarer Marker in der Nachricht.

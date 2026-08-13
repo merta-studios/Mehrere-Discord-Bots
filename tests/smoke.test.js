@@ -6,6 +6,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
+const { GatewayIntentBits } = require('discord.js');
 
 let healthServer = null;
 const logger = { info: () => {}, warn: () => {}, error: () => {} };
@@ -36,6 +37,12 @@ test('Bot-Module haben die erwartete Form', () => {
   assert.deepEqual(minigames.tokenEnvFallbacks, ['VERIFY_BOT_TOKEN']);
   assert.equal(typeof minigames.create, 'function');
   assert.ok(Array.isArray(minigames.intents));
+  assert.equal(minigames.intents.length, 5);
+  assert.ok(
+    minigames.intents.includes(GatewayIntentBits.MessageContent),
+    'Counting braucht den MessageContent-Intent',
+  );
+  assert.ok(minigames.intents.includes(GatewayIntentBits.GuildMessages));
 });
 
 test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 9 Commands)', () => {

@@ -21,6 +21,7 @@ function startScheduler({ ctx }) {
   return () => {
     clearInterval(timer);
     ctx.gameManager?.shutdown?.();
+    ctx.countingManager?.shutdown?.();
   };
 }
 

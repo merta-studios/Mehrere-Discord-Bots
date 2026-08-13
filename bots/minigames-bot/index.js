@@ -2,14 +2,16 @@
  * 🎮 Minigames Bot
  *
  * Der frühere Verify-Bot wurde vollständig durch einen Spiele-Bot ersetzt.
- * Enthalten sind zunächst Tic-Tac-Toe und Vier Gewinnt. Spielstände liegen
- * unsichtbar in der jeweiligen Discord-Nachricht und überleben Neustarts.
+ * Enthalten sind Tic-Tac-Toe, Vier Gewinnt und das Counting-Spiel. Spielstände
+ * liegen unsichtbar in der jeweiligen Discord-Nachricht (bzw. beim Counting im
+ * Kanal-Thema) und überleben Neustarts.
  */
 
 const { GatewayIntentBits, ActivityType, Events, REST } = require('discord.js');
 
 const { createStore } = require('./src/store');
 const { createGameManager } = require('./src/game-manager');
+const { createCountingManager } = require('./src/counting');
 const { startScheduler } = require('./src/scheduler');
 const { registerCommands } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
@@ -24,6 +26,8 @@ module.exports = {
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    // Für das Counting-Spiel müssen die Zahlen im Channel gelesen werden.
+    GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
   ],
 
@@ -47,6 +51,7 @@ module.exports = {
       commandIds: {},
     };
     ctx.gameManager = createGameManager(ctx);
+    ctx.countingManager = createCountingManager(ctx);
 
     const updatePresence = () => {
       const activeGames = ctx.store.allGames().length;
@@ -92,6 +97,13 @@ module.exports = {
       void handleInteraction(ctx, interaction);
     });
 
+    client.on(Events.MessageCreate, (message) => {
+      if (!message.guildId) return;
+      void ctx.countingManager.handleMessage(message).catch((err) => {
+        logger.warn('[minigames-bot] Counting-Fehler:', err.message);
+      });
+    });
+
     client.on(Events.MessageDelete, (message) => {
       if (!message.guildId) return;
       ctx.gameManager.untrack(message.guildId, message.channelId, message.id);
@@ -104,6 +116,7 @@ module.exports = {
 
     client.on(Events.GuildDelete, (guild) => {
       ctx.gameManager.deleteGuild(guild.id);
+      ctx.countingManager.forgetGuild(guild.id);
       logger.info(`[minigames-bot] Server „${guild.name}“ verlassen/entfernt – Cache bereinigt.`);
     });
 
