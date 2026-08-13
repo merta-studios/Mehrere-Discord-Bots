@@ -36,18 +36,38 @@ weiter; eine Datenbank ist nicht erforderlich.
 
 ### ❌ Tic-Tac-Toe ⭕
 
-- 3×3-Button-Spielfeld direkt in der Nachricht
+- **Genau ein Spielfeld:** das 3×3-Raster besteht selbst aus Buttons. Es gibt
+  kein zusätzliches Text-Brett mehr über den Buttons.
 - Herausforderer spielt ❌ und beginnt, Gegner spielt ⭕
-- Gewinnlinien werden grün hervorgehoben
-- Sieg und Unentschieden werden als Battle-Finale dargestellt
+- Belegte Felder werden deaktiviert, die Gewinnlinie wird grün
+- Sieg und Unentschieden erscheinen als kurze Zeile unter dem Feld
 
 ### 🔴 Vier Gewinnt 🟡
 
-- 7×6-Spielfeld mit roten und gelben Chips
-- Sieben Spalten-Buttons, auf zwei Reihen verteilt
-- Chips fallen automatisch auf das unterste freie Feld
-- Volle Spalten werden deaktiviert
-- Horizontale, vertikale und diagonale Viererreihen werden erkannt
+- **5×6-Spielfeld** – bewusst fünf statt sieben Spalten, weil Discord genau
+  fünf Buttons pro Reihe erlaubt.
+- **Alle fünf Drop-Buttons stehen dadurch in einer einzigen Reihe** direkt
+  unter dem Brett: der erste Button gehört zur ersten Spalte, der zweite zur
+  zweiten und so weiter. Spaltennummern muss niemand mehr abzählen.
+- Jeder Button zeigt nur ⬇️ – anklicken, Chip fällt auf das unterste freie Feld
+- Volle Spalten werden ausgegraut und deaktiviert
+- Horizontale, vertikale und diagonale Viererreihen werden erkannt und als
+  🟥/🟨 hervorgehoben
+
+## Design-Prinzip der Spielfelder
+
+Beide Spiele nutzen dieselbe, absichtlich schlanke Struktur:
+
+```
+## <Symbole> <Spielname>
+❌ @Spieler1   ⭕ @Spieler2
+⚡ Am Zug: @Spieler1 ❌
+────────────────
+[ Spielfeld-Buttons ]
+```
+
+Keine doppelten Bretter, keine Legenden, keine langen Erklärtexte – nur
+Titel, Spieler, Zug-Anzeige und das Feld selbst.
 
 ## Sprachen
 
