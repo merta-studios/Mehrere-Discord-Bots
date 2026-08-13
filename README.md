@@ -19,7 +19,7 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 | 🎂 **Birthday Bot** | Kompletter Geburtstags-Bot **ohne Datenbank** – modernes Container-Layout (Components V2, kein Farbrand, Trennlinien & Buttons im Container). 10 Sprachen, Fuzzy-Monatserkennung, 7-Tage-Regel, tägliche Geburtstags-Glückwünsche (**Glückwunsch-Liste kompakt nebeneinander mit Uhrzeit**), **7-Tage-Aufräumregel unter der Liste**, Owner-Admin-Panel im DM. |
 | ⭐ **XP Level Bot** | **RAM-first & Turso-persistiert** – XP pro Wort (Spam-Erkennung krass, 3 XP/Wort, max 30, 30s Cooldown) + **15 XP für Bilder/Videos/Sprachnachrichten**, Level-Kurve 80→1999 XP, täglicher 5%-Basis-Schwund (bei Inaktivität steigend), Voice 25 XP/Min, Top15-Leaderboard **stündlich + bei Level-Ups**, Nicknames `[Lvl X 🥇]` (Top 3, **an/aus per `/toggle_nicknames`**, **`/sync_nicknames` mit Ladebalken**), **Level-Belohnungsrollen via Formular** (`/level_roles`), **`/update_leaderboard` (Admin, 5-Min-Cooldown)**, /rank + /setup (2 Kanäle) + Adminpanel. |
 | 🎭 **Self Roles Bot** | Rollen zum Selbstbedienen – **komplett ohne Datenbank** (Konfiguration steckt unsichtbar in der Nachricht). `/create_self_role [channel]` → Formular (große Textbox + Titel) → **Bearbeitungs-/Bestätigungs-Nachricht** mit Kanal, Titel, Beschreibung (immer einzeilig) und Rollenliste. **2–20 Rollen** pro Nachricht, **max. 10 Nachrichten** pro Server, Rollen werden **erst beim Absenden** erstellt (ganz unten, erwähnbar). Buttons in Grau mit **live aktualisierter Anzahl** – auch bei manueller Rollenvergabe. `/edit_self_role`, Einzel- oder Mehrfachauswahl, 10 Sprachen, Admin-Panel + /help wie die anderen Bots. |
-| ✅ **Verify Bot** | Regeln & Verifizierung – **komplett ohne Datenbank** (alles steckt unsichtbar in der Nachricht). `/create_verify_rules` + `/create_classic_rules` (Formular mit großer Textbox, Bild/Banner per Anhang), grüner Verifizier-Button (UNVERIFIED → VERIFIED + Log-Kanal), `/set_verify_form` (keine Prüfung / Prüfung mit Annehmen-Ablehnen / Prüfung mit eigenem Formular), `/set_language`, 10 Sprachen, Admin-Panel + /help + Profilbild-Command wie die anderen Bots. |
+| 🎮 **Minigames Bot** | Interaktive Battles direkt im Channel: `/play [game] [gegner]` mit **Tic-Tac-Toe** und **Vier Gewinnt**, öffentlicher Gegner-Ping, Annehmen/Ablehnen, 1-Stunden-Ablauf und klickbare Spielfelder. Spielstände stecken unsichtbar in der Nachricht und überleben Neustarts. 10 Sprachen, `/set_language`, Admin-Panel, `/help` und Profilbild-Command. |
 | 🛠️ **Multi-Bot-Hoster** | Loader, der alle Bots im `bots/`-Ordner automatisch startet (nur die mit gesetztem Token), plus Health-Server für UptimeRobot. |
 
 ## 🗂️ Projektstruktur
@@ -39,12 +39,12 @@ Node.js-Prozess, damit ein einziger Render-Free-Dyno genügt.
 │   ├── xp-level-bot/         # ⭐ XP-Level-Bot (Turso-persistiert)
 │   │   ├── index.js
 │   │   └── src/              # gesamte Bot-Logik
-│   └── self-roles-bot/       # 🎭 Self-Roles-Bot (ohne Datenbank, wie der Birthday-Bot)
+│   ├── self-roles-bot/       # 🎭 Self-Roles-Bot (ohne Datenbank, wie der Birthday-Bot)
+│   │   ├── index.js
+│   │   └── src/              # Editor, Store, Zähler-Sync, 10 Sprachen
+│   └── minigames-bot/        # 🎮 Tic-Tac-Toe & Vier Gewinnt
 │       ├── index.js
-│       └── src/              # Editor, Store, Zähler-Sync, 10 Sprachen
-│   └── verify-bot/           # ✅ Verify-Bot (ohne Datenbank – Regeln & Verifizierung)
-│       ├── index.js
-│       └── src/              # Editor, Formular-Editor, Store, 10 Sprachen
+│       └── src/              # Spiellogik, UI, Recovery, 10 Sprachen
 │
 ├── tests/                    # Tests (npm test) – ohne Discord-Verbindung
 ├── render.yaml               # Render-Blueprint (Deployment-Config)
@@ -91,9 +91,9 @@ In `.env` eintragen:
 | `SELF_ROLES_BOT_TOKEN` | Token des Self-Roles-Bots (**braucht keine Datenbank!**) |
 | `SELF_ROLES_BOT_OWNER_ID` | optional: Owner fürs Self-Roles-`/adminpanel` (Fallback: Birthday-Owner) |
 | `SELF_ROLES_BOT_GUILD_ID` | optional: Dev-Server für sofortige Self-Roles-Command-Registrierung |
-| `VERIFY_BOT_TOKEN` | Token des Verify-Bots (**braucht keine Datenbank!**) |
-| `VERIFY_BOT_OWNER_ID` | optional: Owner fürs Verify-`/adminpanel` (Fallback: Birthday-Owner) |
-| `VERIFY_BOT_GUILD_ID` | optional: Dev-Server für sofortige Verify-Command-Registrierung |
+| `MINIGAMES_BOT_TOKEN` | Token des Minigames-Bots (Fallback: bestehendes `VERIFY_BOT_TOKEN`) |
+| `MINIGAMES_BOT_OWNER_ID` | optional: Owner fürs Minigames-`/adminpanel` (Fallbacks: Verify/Birthday-Owner) |
+| `MINIGAMES_BOT_GUILD_ID` | optional: Dev-Server für sofortige Minigames-Command-Registrierung |
 | `PORT` | Port für den Health-Server (Standard 10000) |
 
 **Deine Discord-ID findest du so:** Discord → Einstellungen → Erweitert → „Entwicklermodus“
@@ -234,7 +234,7 @@ Kurzfassung – Details siehe [`bots/xp-level-bot/README.md`](bots/xp-level-bot/
 - **`/rank`** (alle): Platz, Level, `xp/needed`, Balken & fehlende XP.
 - **`/update_leaderboard`** (nur Admins): rendert das Leaderboard **sofort** neu
   (z. B. nach manuellen Änderungen) – **5-Minuten-Cooldown** gegen Spam.
-- **Bonus-Geschenke**: 2–4 geplante Drops/Tag im Haupt-Chat (20–40 XP, Einsammeln-Button). Verpasste Termine werden nachgeholt, sobald jemand schreibt – nicht nur vom Minuten-Timer.
+- **Bonus-Geschenke**: 2–4 geplante Drops/Tag im Haupt-Chat (30–70 XP, Einsammeln-Button). Verpasste Termine werden nachgeholt, sobald jemand schreibt – nicht nur vom Minuten-Timer.
 - **`/help` + `/admin_set_bot_profile` + `/adminpanel`** – identisch zum Birthday Bot, mit XP-Details.
 - **Nicknames**: `[Lvl X 🥇] Name` – nur Top 3 mit Medaille, bei Auf-/Abstieg sofort. **Verrückte Plätze werden zuverlässig nachgezogen** (Top-5-Refresh bei jedem Level-Change, XP-only-Überholer alle 2 Min geprüft), 32-Zeichen-Cap, Rechte-Fehler → Ping im Haupt-Chat (außer für den Server-Owner).
 - **Turso**: **RAM-first**, ein Batch-Load beim Start, alle Ops im RAM, Flush nur bei `SIGTERM`, alle 5 Min & bei Level-Change – spart Limits extrem.
@@ -280,34 +280,27 @@ Details siehe [`bots/self-roles-bot/README.md`](bots/self-roles-bot/README.md):
 
 ---
 
-## ✅ Verify Bot – alle Funktionen
+## 🎮 Minigames Bot – alle Funktionen
 
-Details siehe [`bots/verify-bot/README.md`](bots/verify-bot/README.md):
+Details siehe [`bots/minigames-bot/README.md`](bots/minigames-bot/README.md):
 
-- **Komplett ohne Datenbank** – Modus, Rollen, Log-Kanal, Prüf-Modus,
-  Formularfelder und Bild-/Banner-URL stecken als unsichtbarer
-  Zero-Width-Blob in der Nachricht selbst. Neustarts egal (Self-Healing).
-- **`/create_verify_rules [channel] [logging] [unverified] [verified]`** (nur
-  Admins): Formular mit **großer Textbox** für die Regeln + Button-Name.
-  Existieren schon Regeln, ist das Formular **vorbefüllt**. Beim Absenden
-  werden alte Regeln **überall auf dem Server gelöscht**.
-- **`/create_classic_rules [channel]`** (nur Admins): gleiche Regeln, aber
-  klassisch – ohne Button, ohne Rollen.
-- **Bild & Banner ohne URL**: im Editor per Anhang hochladen – Bild oben
-  rechts (Thumbnail), Banner oben (Media-Gallery). Beides optional.
-- **Grüner Verifizier-Button**: entfernt `UNVERIFIED`, gibt `VERIFIED` und
-  loggt im Log-Kanal für Admins. Wer schon verifiziert ist (Rollenabgleich),
-  wird nicht erneut geloggt. Verifizieren geht **nur mit der UNVERIFIED-Rolle**.
-- **`/set_verify_form`** (nur Admins, nur wenn Verify-Regeln existieren):
-  - *Keine Überprüfung* – direkt verifizieren.
-  - *Überprüfung ohne Formular* – Anfrage im Log-Kanal mit **Annehmen/Ablehnen**
-    (nur Admins). Ablehnen öffnet ein Grund-Formular; der Nutzer wird **anonym**
-    benachrichtigt und kann es erneut versuchen. Keine zweite Anfrage, solange
-    eine offen ist.
-  - *Überprüfung mit Formular* – eigener **Formular-Editor** (Frage, Platzhalter,
-    vorausgefüllter Wert, kurzes/großes Textfeld, Pflichtfeld).
-- **`/set_language [sprache]`** – Sprache pro Server (10 Sprachen).
-- `/help` + `/admin_set_bot_profile` + `/adminpanel` – wie bei den anderen Bots.
+- Der frühere Verify-Bot wurde **vollständig ersetzt**; Regeln, Rollen und
+  Verifizierungsabläufe sind entfernt.
+- **`/play [game] [gegner]`** erstellt im aktuellen Channel eine öffentliche
+  Herausforderung für **Tic-Tac-Toe** oder **Vier Gewinnt** und pingt den Gegner.
+- Nur der gewählte Gegner kann annehmen oder ablehnen. Ohne Antwort läuft die
+  Battle-Anfrage nach **einer Stunde** sichtbar ab.
+- Nach Annahme wird dieselbe Nachricht zum interaktiven Spielfeld: 3×3 Buttons
+  für Tic-Tac-Toe beziehungsweise 7×6 Board plus Spalten-Buttons für Vier Gewinnt.
+- Zugreihenfolge, belegte Felder, volle Spalten, Siege in allen Richtungen und
+  Unentschieden werden serverseitig geprüft; fremde Zuschauer können nicht ziehen.
+- Spielstand und Ablaufzeit liegen als unsichtbarer Marker in der Nachricht.
+  Neustarts brauchen deshalb keine Datenbank; ein Scheduler stellt offene Spiele
+  wieder her und deaktiviert abgelaufene Anfragen.
+- **10 Sprachen** und `/set_language`, außerdem `/help`,
+  `/admin_set_bot_profile` und das Owner-`/adminpanel`.
+- Neue Variablen heißen `MINIGAMES_BOT_*`; vorhandene `VERIFY_BOT_*`-Werte
+  funktionieren als Fallback weiter, damit beim Deployment kein Token verloren geht.
 
 ---
 
