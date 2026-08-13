@@ -126,10 +126,18 @@ function createXpStore({ logger, env } = {}) {
     try { return JSON.parse(value); } catch { return fallback; }
   }
 
-  /** Standard: an. Nur ein explizites false/0 schaltet die Tags aus. */
+  /**
+   * Standard: an. Nur ein explizites Aus schaltet die Tags ab.
+   * Turso/libsql liefert INTEGER oft als BigInt (0n !== 0) – das hat nach
+   * Restarts /toggle_nicknames off wieder als „an“ interpretiert.
+   */
   function parseNicknamesEnabled(value) {
-    if (value === false || value === 0 || value === '0' || value === 'false') return false;
-    return true;
+    if (value == null || value === '') return true;
+    if (typeof value === 'bigint') return value !== 0n;
+    if (typeof value === 'number') return value !== 0 && Number.isFinite(value);
+    if (typeof value === 'boolean') return value;
+    const s = String(value).trim().toLowerCase();
+    return !(s === '0' || s === 'false' || s === 'off' || s === 'no');
   }
 
   /** Standard: aus. Nur ein explizites true/1 schaltet die Inaktiv-Rolle ein. */
@@ -219,7 +227,12 @@ function createXpStore({ logger, env } = {}) {
     if (!data) return;
     try {
       if (data.guilds) {
-        for (const [gid, cfg] of Object.entries(data.guilds)) guilds.set(gid, cfg);
+        for (const [gid, cfg] of Object.entries(data.guilds)) {
+          const next = cfg && typeof cfg === 'object' ? { ...cfg } : { guildId: gid };
+          next.guildId = next.guildId || gid;
+          next.nicknamesEnabled = parseNicknamesEnabled(next.nicknamesEnabled);
+          guilds.set(String(gid), next);
+        }
       }
       if (data.users) {
         for (const [gid, umap] of Object.entries(data.users)) {
@@ -326,11 +339,24 @@ function createXpStore({ logger, env } = {}) {
   }
 
   // ----------------- Guild API -----------------
-  function getGuild(guildId) { return guilds.get(guildId) || null; }
+  function getGuild(guildId) { return guilds.get(String(guildId)) || null; }
   function setGuild(cfg) {
-    guilds.set(cfg.guildId, cfg);
-    dirtyGuilds.add(cfg.guildId);
-    deletedGuilds.delete(cfg.guildId);
+    if (!cfg?.guildId) return;
+    const id = String(cfg.guildId);
+    let target = guilds.get(id);
+    // In-Place mergen: Bonus/Scheduler halten oft dieselbe Objektreferenz
+    // und mutieren danach weiter. Ein Austausch würde die Flagge verlieren.
+    if (!target) {
+      target = { guildId: id, nicknamesEnabled: true };
+      guilds.set(id, target);
+    }
+    const keepNicknames = !Object.prototype.hasOwnProperty.call(cfg, 'nicknamesEnabled');
+    const prevNick = target.nicknamesEnabled;
+    if (target !== cfg) Object.assign(target, cfg);
+    target.guildId = id;
+    target.nicknamesEnabled = parseNicknamesEnabled(keepNicknames ? prevNick : cfg.nicknamesEnabled);
+    dirtyGuilds.add(id);
+    deletedGuilds.delete(id);
   }
   function deleteGuild(guildId) {
     guilds.delete(guildId);
@@ -611,6 +637,7 @@ function createXpStore({ logger, env } = {}) {
     flush,
     startBackupInterval, stopBackupInterval,
     findLeaderboardMessage,
+    parseNicknamesEnabled,
     _guilds: guilds,
     _users: users,
     _dirtyGuilds: dirtyGuilds,

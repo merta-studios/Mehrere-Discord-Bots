@@ -130,6 +130,9 @@ async function ensureNickname(ctx, guild, userId, level, lang) {
  * @returns {Promise<'updated'|'unchanged'|'failed'>}
  */
 async function applyExpectedNickname(ctx, guild, member, lang, { level, silent = false } = {}) {
+  // Zweite Sicherung: auch direkte Aufrufe (nicht nur refreshRankNicknames)
+  // dürfen nach /toggle_nicknames off keine Tags mehr setzen.
+  if (!areNicknamesEnabled(ctx.store, guild.id)) return 'unchanged';
   const stored = ctx.store.getUser(guild.id, member.id);
   const resolvedLevel = level ?? stored?.level ?? 1;
   const newNick = expectedNicknameForMember(ctx.store, guild.id, member.id, resolvedLevel, member);
