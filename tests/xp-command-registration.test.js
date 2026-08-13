@@ -118,12 +118,12 @@ test('alle 10 Command-JSONs sind Discord-API-valide (inkl. /set_inactive_role)',
   }
 });
 
-test('registerCommands registriert global (inkl. /level_roles) und räumt alte Guild-Commands auf', async () => {
+test('registerCommands registriert global UND schreibt /set_inactive_role sofort auf jede Gilde', async () => {
   const calls = [];
   const fakeRest = {
     put: async (route, { body }) => {
       calls.push({ route, body });
-      return (body || []).map((c, i) => ({ id: `id-${c.name}`, name: c.name }));
+      return (body || []).map((c) => ({ id: `id-${c.name}`, name: c.name }));
     },
   };
   const ctx = makeCtx();
@@ -132,51 +132,47 @@ test('registerCommands registriert global (inkl. /level_roles) und räumt alte G
   assert.equal(ok, true);
   assert.equal(ctx.commandsRegistered, true);
 
-  // Erster Call: globaler PUT mit ALLEN Commands
+  // Erster Call: globaler PUT mit ALLEN Commands inkl. /set_inactive_role
   assert.equal(calls[0].route, Routes.applicationCommands('app1'));
   const names = calls[0].body.map((c) => c.name);
-  assert.ok(names.includes('level_roles'), `/level_roles fehlt im Registrierungs-Payload! Enthalten: ${names.join(', ')}`);
+  assert.ok(names.includes('set_inactive_role'), `/set_inactive_role fehlt im globalen Payload! Enthalten: ${names.join(', ')}`);
   assert.deepEqual(names, ALL_CMD_NAMES);
 
-  // Zweiter Call: alte Guild-Commands auf g1 geleert ({ body: [] }), damit kein Shadowing entsteht
+  // Zweiter Call: voller Guild-Satz (nicht leer!) – sonst bleibt ein alter 9er-Satz
+  // stehen und überschattet das neue globale /set_inactive_role.
   assert.equal(calls[1].route, Routes.applicationGuildCommands('app1', 'g1'));
-  assert.deepEqual(calls[1].body, []);
+  const guildNames = calls[1].body.map((c) => c.name);
+  assert.ok(guildNames.includes('set_inactive_role'));
+  assert.ok(!guildNames.includes('adminpanel'), '/adminpanel bleibt nur global (DM)');
+  assert.ok(calls[1].body.length > 0);
 
-  // IDs in memory und im Store gespeichert
   assert.equal(ctx.commandIds.level_roles, 'id-level_roles');
   assert.equal(ctx.store.getCommandId('level_roles'), 'id-level_roles');
+  assert.equal(ctx.guildCommandIds.get('g1').set_inactive_role, 'id-set_inactive_role');
 });
 
-test('registerCommands mit Dev-Gilde registriert gezielt dort inkl. /level_roles', async () => {
+test('registerCommands mit Dev-Gilde registriert TROTZDEM global plus jede Gilde inkl. /set_inactive_role', async () => {
   const calls = [];
   const fakeRest = {
     put: async (route, { body }) => {
       calls.push({ route, body });
-      return (body || []).map((c) => ({ id: `dev-id-${c.name}`, name: c.name }));
+      return (body || []).map((c) => ({ id: `id-${c.name}`, name: c.name }));
     },
   };
   const ctx = makeCtx({ devGuildId: '123456789012345678' });
   const ok = await registerCommands(ctx, { restFactory: () => fakeRest, retryDelays: [0] });
 
   assert.equal(ok, true);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].route, Routes.applicationGuildCommands('app1', '123456789012345678'));
-  assert.ok(calls[0].body.some((c) => c.name === 'level_roles'));
+  assert.ok(calls.length >= 2);
+  assert.equal(calls[0].route, Routes.applicationCommands('app1'));
+  assert.ok(calls[0].body.some((c) => c.name === 'set_inactive_role'));
+  assert.ok(calls.some((c) => c.route === Routes.applicationGuildCommands('app1', '123456789012345678')));
+  assert.ok(calls.some((c) => c.route === Routes.applicationGuildCommands('app1', 'g1')));
 
-  // WICHTIG (Versuch 5): Dev-Guild-IDs gehören NUR in den Guild-Slot –
-  // der globale Slot und der Store-Global-Slot dürfen NICHT verschmutzt werden,
-  // sonst rendert /help auf normalen Servern </level_roles:DEV_GUILD_ID>
-  // („Kein Befehl gefunden").
-  assert.equal(ctx.commandIds?.level_roles, undefined, 'Dev-ID darf nicht im globalen Memory-Slot landen');
-  assert.equal(ctx.store.getCommandId('level_roles'), null, 'Dev-ID darf nicht im globalen Store-Slot landen');
-
-  // Guild-Slot enthält die Dev-Guild-IDs
-  assert.equal(ctx.guildCommandIds.get('123456789012345678').level_roles, 'dev-id-level_roles');
-  assert.equal(ctx.store.getGuildCommandIds('123456789012345678').level_roles, 'dev-id-level_roles');
-
-  // Scope ist als Guild-Scope markiert
-  assert.equal(ctx.commandIdScope, 'guild:123456789012345678');
-  assert.equal(ctx.store.getCommandIdScope(), 'guild:123456789012345678');
+  assert.equal(ctx.commandIds.set_inactive_role, 'id-set_inactive_role');
+  assert.equal(ctx.store.getCommandId('set_inactive_role'), 'id-set_inactive_role');
+  assert.equal(ctx.commandIdScope, 'global');
+  assert.equal(ctx.guildCommandIds.get('123456789012345678').set_inactive_role, 'id-set_inactive_role');
 });
 
 test('registerCommands ignoriert leere/Whitespace Dev-Gilde und registriert global', async () => {
@@ -278,7 +274,7 @@ test('commandMention: Guild-IDs NUR auf der Dev-Gilde, sonst zwingend globale ID
   assert.equal(commandMention(ctx, 'missing', 'g1'), '/missing');
 });
 
-test('commandMention: ohne Dev-Gilde werden vorhandene Guild-IDs komplett ignoriert', () => {
+test('commandMention: auf einem Server gelten die IDs DIESER Gilde, nie die einer fremden', () => {
   const store = createXpStore({ env: () => '' });
   store.setGuildCommandIds('g1', { level_roles: 'stored-guild-level' });
 
@@ -289,10 +285,10 @@ test('commandMention: ohne Dev-Gilde werden vorhandene Guild-IDs komplett ignori
     guildCommandIds: new Map([['g1', { level_roles: 'guild-level' }]]),
   };
 
-  // Keine Dev-Gilde konfiguriert -> Guild-IDs dürfen nie verwendet werden
-  assert.equal(commandMention(ctx, 'level_roles', 'g1'), '</level_roles:global-level>');
-  // Wenn keine globale ID existiert: reiner Text-Fallback, NICHT die fremde Guild-ID
-  assert.equal(commandMention(ctx, 'level_roles', 'g1').includes('guild-level'), false);
+  // Auf g1: Guild-Command-ID (Guild überschattet Global)
+  assert.equal(commandMention(ctx, 'level_roles', 'g1'), '</level_roles:guild-level>');
+  // Auf einem anderen Server: globale ID, niemals g1s Snowflake
+  assert.equal(commandMention(ctx, 'level_roles', 'g2'), '</level_roles:global-level>');
 });
 
 test('commandMention: Dev-Guild-ID aus Store wird auf normalen Servern nie verwendet (Prüfpunkt 1)', () => {
@@ -325,21 +321,18 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
   // Simulation Bot-Restart: ctx.commandIds ist anfangs leer und wird per REST
   // verifiziert/korrigiert geladen (NICHT mehr blind aus dem Store übernommen).
   const fakeRest = {
-    get: async (route) => {
-      assert.equal(route, Routes.applicationCommands('app1'));
-      return [
-        { id: '2001', name: 'setup' },
-        { id: '2002', name: 'rank' },
-        { id: '2003', name: 'help' },
-        { id: '2004', name: 'admin_set_bot_profile' },
-        { id: '2005', name: 'level_roles' },
-        { id: '2006', name: 'update_leaderboard' },
-        { id: '2008', name: 'toggle_nicknames' },
-        { id: '2009', name: 'sync_nicknames' },
-        { id: '2010', name: 'set_inactive_role' },
-        { id: '2007', name: 'adminpanel' },
-      ];
-    },
+    get: async () => [
+      { id: '2001', name: 'setup' },
+      { id: '2002', name: 'rank' },
+      { id: '2003', name: 'help' },
+      { id: '2004', name: 'admin_set_bot_profile' },
+      { id: '2005', name: 'level_roles' },
+      { id: '2006', name: 'update_leaderboard' },
+      { id: '2008', name: 'toggle_nicknames' },
+      { id: '2009', name: 'sync_nicknames' },
+      { id: '2010', name: 'set_inactive_role' },
+      { id: '2007', name: 'adminpanel' },
+    ],
   };
   const ctx = {
     store,
@@ -425,7 +418,7 @@ test('/level_roles ist ein valider Admin-Command für globale Registrierung (Pr�
   assert.deepEqual(validateCommand(cmd), [], 'level_roles-JSON muss Discord-API-valide sein');
 });
 
-test('globale Registrierung löscht alte Guild-Command-IDs aus dem Store (Prüfpunkt 3)', async () => {
+test('globale Registrierung schreibt den aktuellen Guild-Satz inkl. /set_inactive_role (kein leeres Wipe)', async () => {
   const calls = [];
   const fakeRest = {
     put: async (route, { body }) => {
@@ -433,29 +426,18 @@ test('globale Registrierung löscht alte Guild-Command-IDs aus dem Store (Prüfp
       return (body || []).map((c) => ({ id: `global-${c.name}`, name: c.name }));
     },
   };
-  const ctx = makeCtx({
-    // Simuliert veralteten Store aus der Dev-Gilden-Zeit:
-    store: (() => {
-      const s = createXpStore({ env: () => '' });
-      s.setGuildCommandIds('111111111', { level_roles: 'old-dev-id', setup: 'old-dev-setup' });
-      s.setGuildCommandIds('222222222', { level_roles: 'old-dev-id-2' });
-      return s;
-    })(),
-    guildCommandIds: new Map([['111111111', { level_roles: 'old-dev-id' }]]),
-  });
+  const ctx = makeCtx();
 
   const ok = await registerCommands(ctx, { restFactory: () => fakeRest, retryDelays: [0] });
   assert.equal(ok, true);
 
-  // Alte Guild-IDs sind aus Memory UND Store entfernt
-  assert.equal(ctx.guildCommandIds.size, 0);
-  assert.deepEqual(ctx.store.getAllGuildCommandIds(), {}, 'keine Guild-IDs mehr im Store');
-  // Globale IDs sind die einzige Quelle
-  assert.equal(ctx.commandIds.level_roles, 'global-level_roles');
-  assert.equal(ctx.store.getCommandId('level_roles'), 'global-level_roles');
-  // Scope als global markiert
+  const guildPut = calls.find((c) => String(c.route).includes('/guilds/'));
+  assert.ok(guildPut, 'Guild-PUT muss stattfinden');
+  assert.ok(guildPut.body.some((c) => c.name === 'set_inactive_role'));
+  assert.ok(guildPut.body.length > 0, 'kein leeres Wipe mehr');
+  assert.equal(ctx.commandIds.set_inactive_role, 'global-set_inactive_role');
+  assert.equal(ctx.guildCommandIds.get('g1').set_inactive_role, 'global-set_inactive_role');
   assert.equal(ctx.commandIdScope, 'global');
-  assert.equal(ctx.store.getCommandIdScope(), 'global');
 });
 
 test('ensureCommandIds lädt auf normalen Servern GLOBALE Commands, auch wenn Dev-Gilde gesetzt ist (Prüfpunkt 1)', async () => {
@@ -481,10 +463,10 @@ test('ensureCommandIds lädt auf normalen Servern GLOBALE Commands, auch wenn De
   const ctx = makeCtx({ devGuildId: '123456789012345678', rest: fakeRest, commandIds: {} });
   const ids = await ensureCommandIds(ctx, 'g2');
 
-  assert.equal(routes.length, 1, 'exakt ein REST-Aufruf');
-  assert.equal(routes[0], Routes.applicationCommands('app1'), 'muss die GLOBALE Route laden, nicht die Dev-Gilden-Route');
+  assert.equal(routes[0], Routes.applicationGuildCommands('app1', 'g2'), 'auf einem Server zählen die Guild-Commands');
   assert.equal(ids.level_roles, '4005');
-  // Keine Dev-Guild-IDs im globalen Slot
+  assert.equal(ctx.guildCommandIds.get('g2').level_roles, '4005');
+  // Dev-Gilde wurde nicht angefasst
   assert.equal(ctx.guildCommandIds.has('123456789012345678'), false);
 });
 
@@ -618,10 +600,10 @@ test('ensureCommandIds korrigiert verwaiste Store-Snowflakes gegen Discord REST 
   const ctx = makeCtx({ store, rest: fakeRest, commandIds: store.getCommandIds() });
   const ids = await ensureCommandIds(ctx, 'g1');
 
-  assert.equal(routes[0], Routes.applicationCommands('app1'), 'muss gegen Discord verifizieren (global)');
+  assert.equal(routes[0], Routes.applicationGuildCommands('app1', 'g1'), 'auf einem Server gegen die Guild-Commands prüfen');
   assert.equal(ids.update_leaderboard, '2006', 'verwaiste ID muss durch die frische ersetzt werden');
-  assert.equal(ctx.commandIds.update_leaderboard, '2006');
-  assert.equal(ctx.store.getCommandId('update_leaderboard'), '2006', 'Store muss korrigiert werden');
+  assert.equal(ctx.guildCommandIds.get('g1').update_leaderboard, '2006');
+  assert.equal(ctx.store.getGuildCommandIds('g1').update_leaderboard, '2006', 'Guild-Store muss korrigiert werden');
 });
 
 test('verifizierte IDs werden innerhalb der TTL aus dem Memory genutzt (kein REST-Spam bei /help)', async () => {
@@ -852,9 +834,9 @@ test('/help heilt Store-Leiche automatisch: fehlende Nickname-Commands werden na
   assert.ok(text.includes('</toggle_nicknames:fresh-toggle_nicknames>'), 'frische toggle_nicknames-ID wird gerendert');
   assert.ok(text.includes('</sync_nicknames:fresh-sync_nicknames>'), 'frische sync_nicknames-ID wird gerendert');
   assert.ok(!text.includes('STALE-'), 'keine verwaiste ID im Output');
-  // Store wurde geheilt
-  assert.equal(store.getCommandId('toggle_nicknames'), 'fresh-toggle_nicknames');
-  assert.equal(store.getCommandId('sync_nicknames'), 'fresh-sync_nicknames');
+  // Guild-Store wurde geheilt (Server-Commands leben im Guild-Slot)
+  assert.equal(store.getGuildCommandIds('g1').toggle_nicknames, 'fresh-toggle_nicknames');
+  assert.equal(store.getGuildCommandIds('g1').sync_nicknames, 'fresh-sync_nicknames');
 });
 
 test('/help auf der Dev-Gilde rendert keine ungeprüften Guild-Store-IDs bei REST-Ausfall', async () => {
