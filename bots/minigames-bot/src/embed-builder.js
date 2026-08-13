@@ -129,8 +129,8 @@ function challengeContainer(state) {
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   container.addActionRowComponents(
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(CID.accept).setStyle(ButtonStyle.Success).setLabel(t('btnAccept', lang)),
-      new ButtonBuilder().setCustomId(CID.decline).setStyle(ButtonStyle.Secondary).setLabel(t('btnDecline', lang))
+      new ButtonBuilder().setCustomId(CID.accept).setStyle(ButtonStyle.Success).setLabel(`   ${t('btnAccept', lang)}   `),
+      new ButtonBuilder().setCustomId(CID.decline).setStyle(ButtonStyle.Danger).setLabel(`   ${t('btnDecline', lang)}   `)
     )
   );
   return container;
@@ -154,12 +154,31 @@ function outcomeText(state) {
   return '';
 }
 
+/** Gleich breite Button-Labels: ideografische Leerräume + immer ein Emoji. */
+const PAD = '\u3000';
+function wideLabel(emoji) {
+  return `${PAD}${emoji}${PAD}`;
+}
+
+const TTT_EMPTY = '⬜';
+const TTT_P1 = '❌';
+const TTT_P2 = '⭕';
+const TTT_WIN_P1 = '❎';
+const TTT_WIN_P2 = '🔵';
+
+const C4_EMPTY = '⬛';
+const C4_P1 = '🔴';
+const C4_P2 = '🟡';
+const C4_WIN_P1 = '🟥';
+const C4_WIN_P2 = '🟨';
+const C4_COLS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣'];
+
 function battleHeader(state) {
   const lang = state.lang;
   const title = t(state.game === GAME_CONNECT4 ? 'c4Title' : 'tttTitle', lang);
   const symbols = state.game === GAME_CONNECT4
-    ? `🔴 ${mention(state.challengerId)}   •   🟡 ${mention(state.opponentId)}`
-    : `❌ ${mention(state.challengerId)}   •   ⭕ ${mention(state.opponentId)}`;
+    ? `${C4_P1} ${mention(state.challengerId)}\n${C4_P2} ${mention(state.opponentId)}`
+    : `${TTT_P1} ${mention(state.challengerId)}\n${TTT_P2} ${mention(state.opponentId)}`;
   const lines = [
     `# ${title}`,
     '',
@@ -174,23 +193,44 @@ function battleHeader(state) {
   return lines.join('\n');
 }
 
+function tttGlyph(state, cell) {
+  const token = state.board[cell];
+  const win = state.winningCells.includes(cell);
+  if (token === 1) return win ? TTT_WIN_P1 : TTT_P1;
+  if (token === 2) return win ? TTT_WIN_P2 : TTT_P2;
+  return TTT_EMPTY;
+}
+
+function tttBoard(state) {
+  const rows = [];
+  for (let row = 0; row < 3; row += 1) {
+    const cells = [0, 1, 2].map((col) => tttGlyph(state, row * 3 + col));
+    rows.push(cells.join(' ┃ '));
+    if (row < 2) rows.push('━━━━╋━━━━╋━━━━');
+  }
+  return rows.join('\n');
+}
+
 function tttCellButton(state, cell) {
   const token = state.board[cell];
   const complete = state.status !== STATUS_ACTIVE;
+  const win = state.winningCells.includes(cell);
   let style = ButtonStyle.Secondary;
   if (token === 1) style = ButtonStyle.Danger;
   if (token === 2) style = ButtonStyle.Primary;
-  if (state.winningCells.includes(cell)) style = ButtonStyle.Success;
+  if (win) style = ButtonStyle.Success;
   return new ButtonBuilder()
     .setCustomId(CID.tttMove(cell))
     .setStyle(style)
-    .setLabel(token === 1 ? '❌' : token === 2 ? '⭕' : '·')
+    .setLabel(wideLabel(tttGlyph(state, cell)))
     .setDisabled(complete || Boolean(token));
 }
 
 function tttContainer(state) {
   const container = new ContainerBuilder().setAccentColor(COLORS[state.status] || COLORS.active);
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(battleHeader(state)));
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`${battleHeader(state)}\n\n${tttBoard(state)}`)
+  );
   if (state.status === STATUS_WON || state.status === STATUS_DRAW) {
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(outcomeText(state)));
@@ -209,29 +249,47 @@ function tttContainer(state) {
   return container;
 }
 
-function connect4Board(board) {
-  const lines = ['╭  1  2  3  4  5  6  7  ╮'];
+function c4Glyph(board, cell, winningCells = []) {
+  const token = board[cell];
+  const win = winningCells.includes(cell);
+  if (token === 1) return win ? C4_WIN_P1 : C4_P1;
+  if (token === 2) return win ? C4_WIN_P2 : C4_P2;
+  return C4_EMPTY;
+}
+
+function connect4Board(board, winningCells = []) {
+  const header = C4_COLS.join(' ');
+  const rows = [];
   for (let row = 0; row < 6; row += 1) {
-    const cells = board.slice(row * 7, row * 7 + 7).map((token) => (token === 1 ? '🔴' : token === 2 ? '🟡' : '⚫'));
-    lines.push(`│ ${cells.join(' ')} │`);
+    const cells = [];
+    for (let col = 0; col < 7; col += 1) {
+      cells.push(c4Glyph(board, row * 7 + col, winningCells));
+    }
+    rows.push(cells.join(' '));
   }
-  lines.push('╰━━━━━━━━━━━━━━━━━━━━━╯');
-  return lines.join('\n');
+  return [header, ...rows].join('\n');
 }
 
 function columnButton(state, column) {
   const full = Boolean(state.board[column]);
+  const style = full
+    ? ButtonStyle.Secondary
+    : column % 2 === 0
+      ? ButtonStyle.Primary
+      : ButtonStyle.Success;
   return new ButtonBuilder()
     .setCustomId(CID.connect4Move(column))
-    .setStyle(column % 2 === 0 ? ButtonStyle.Primary : ButtonStyle.Secondary)
-    .setLabel(`▼ ${column + 1}`)
+    .setStyle(style)
+    .setLabel(wideLabel(C4_COLS[column]))
     .setDisabled(state.status !== STATUS_ACTIVE || full);
 }
 
 function connect4Container(state) {
   const container = new ContainerBuilder().setAccentColor(COLORS[state.status] || COLORS.active);
   container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`${battleHeader(state)}\n\n${connect4Board(state.board)}`)
+    new TextDisplayBuilder().setContent(
+      `${battleHeader(state)}\n\n${connect4Board(state.board, state.winningCells)}`
+    )
   );
   if (state.status === STATUS_ACTIVE) {
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`*${t('c4Drop', state.lang)}*`));

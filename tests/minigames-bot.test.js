@@ -186,6 +186,17 @@ test('Challenge-UI pingt Gegner, zeigt Deadline und hat Annahme-/Ablehnen-Button
   assert.deepEqual(parseGameMessage(asMessage(container)), state);
 });
 
+function collectButtons(value, out = []) {
+  if (!value) return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectButtons(item, out);
+  } else if (typeof value === 'object') {
+    if (value.custom_id && value.label) out.push(value);
+    if (value.components) collectButtons(value.components, out);
+  }
+  return out;
+}
+
 test('Tic-Tac-Toe-UI hat neun Zellen; Vier-Gewinnt-UI sieben Spalten', () => {
   const ttt = buildGameContainer(startTtt()).toJSON();
   assert.equal(customIds(ttt).filter((id) => id.startsWith('mg_ttt_')).length, 9);
@@ -195,6 +206,36 @@ test('Tic-Tac-Toe-UI hat neun Zellen; Vier-Gewinnt-UI sieben Spalten', () => {
   ).state;
   const c4 = buildGameContainer(c4State).toJSON();
   assert.equal(customIds(c4).filter((id) => id.startsWith('mg_c4_')).length, 7);
+});
+
+test('Tic-Tac-Toe-Buttons bleiben nach einem Zug gleich breit', () => {
+  let state = startTtt();
+  const emptyLabels = collectButtons(buildGameContainer(state).toJSON())
+    .filter((btn) => btn.custom_id.startsWith('mg_ttt_'))
+    .map((btn) => btn.label);
+  assert.equal(new Set(emptyLabels.map((label) => [...label].length)).size, 1);
+
+  state = applyMove(state, 'u1', 4).state;
+  const after = collectButtons(buildGameContainer(state).toJSON())
+    .filter((btn) => btn.custom_id.startsWith('mg_ttt_'));
+  assert.equal(new Set(after.map((btn) => [...btn.label].length)).size, 1);
+  assert.equal([...after[0].label].length, [...emptyLabels[0]].length);
+});
+
+test('Vier-Gewinnt-Brett zeigt Spaltennummern und alle sieben Drop-Buttons gleich breit', () => {
+  const state = acceptChallenge(
+    createChallenge({ game: GAME_CONNECT4, challengerId: 'u1', opponentId: 'u2', now: 1 }), 'u2', 2
+  ).state;
+  const json = buildGameContainer(state).toJSON();
+  const text = extractAllText(json);
+  assert.ok(text.includes('1️⃣'));
+  assert.ok(text.includes('7️⃣'));
+  assert.ok(text.includes('⬛'));
+  const labels = collectButtons(json)
+    .filter((btn) => btn.custom_id.startsWith('mg_c4_'))
+    .map((btn) => btn.label);
+  assert.equal(labels.length, 7);
+  assert.equal(new Set(labels.map((label) => [...label].length)).size, 1);
 });
 
 test('Game-Payload nutzt Components V2 und pingt in der Anfrage gezielt nur den Gegner', () => {
