@@ -1016,6 +1016,110 @@ const T = {
   },
 
   // ----------------------------------------------------------
+  // /set_role_logging
+  // ----------------------------------------------------------
+  helpSetRoleLogging: {
+    de: 'Aktiviert oder deaktiviert private Benachrichtigungen bei Rollenänderungen (nur Admins)',
+    en: 'Enables or disables private notifications for role changes (admins only)',
+    fr: 'Active ou désactive les notifications privées lors des changements de rôle (admins uniquement)',
+    es: 'Activa o desactiva las notificaciones privadas en cambios de rol (solo admins)',
+    pt: 'Ativa ou desativa notificações privadas em alterações de cargo (só admins)',
+    ru: 'Включает или выключает личные уведомления при изменении ролей (только для админов)',
+    ja: 'ロール変更時のDM通知を有効または無効にします（管理者のみ）',
+    ko: '역할 변경 시 개인 DM 알림을 켜거나 끕니다 (관리자 전용)',
+    zh: '启用或禁用身份组变更时的私信通知（仅管理员）',
+    it: 'Attiva o disattiva le notifiche private per i cambi di ruolo (solo admin)',
+  },
+  setRoleLoggingStatusDesc: {
+    de: 'Logging an- oder ausschalten (True/False)',
+    en: 'Turn logging on or off (True/False)',
+    fr: 'Activer ou désactiver les logs (True/False)',
+    es: 'Activar o desactivar el registro (True/False)',
+    pt: 'Ligar ou desligar o registro (True/False)',
+    ru: 'Включить или выключить логирование (True/False)',
+    ja: 'ログ記録のオン/オフ (True/False)',
+    ko: '로깅 켜기 또는 끄기 (True/False)',
+    zh: '开启或关闭日志记录 (True/False)',
+    it: 'Attiva o disattiva il logging (True/False)',
+  },
+  setRoleLoggingLangDesc: {
+    de: 'Sprache für die Direktnachrichten (optional)',
+    en: 'Language for direct messages (optional)',
+    fr: 'Langue des messages privés (optionnel)',
+    es: 'Idioma para los mensajes directos (opcional)',
+    pt: 'Idioma das mensagens diretas (opcional)',
+    ru: 'Язык для личных сообщений (необязательно)',
+    ja: 'ダイレクトメッセージの言語（任意）',
+    ko: '다이렉트 메시지 언어 (선택)',
+    zh: '私信通知的语言（可选）',
+    it: 'Lingua per i messaggi diretti (opzionale)',
+  },
+  setRoleLoggingEnabled: {
+    de: '📬 **Rollen-Logging aktiviert!**\nNutzer erhalten ab sofort eine humorvolle DM, wenn sie auf **{server}** Rollen wählen oder ablegen. (Sprache: **{lang}**)',
+    en: '📬 **Role logging enabled!**\nUsers will now receive a humorous DM whenever they pick or drop roles on **{server}**. (Language: **{lang}**)',
+    fr: '📬 **Journalisation des rôles activée !**\nLes utilisateurs recevront désormais un MP plein d’humour lorsqu’ils prennent ou retirent des rôles sur **{server}**. (Langue : **{lang}**)',
+    es: '📬 **¡Registro de roles activado!**\nLos usuarios recibirán un MD con humor cada vez que elijan o quiten roles en **{server}**. (Idioma: **{lang}**)',
+    pt: '📬 **Registro de cargos ativado!**\nOs membros receberão uma DM bem-humorada sempre que escolherem ou removerem cargos em **{server}**. (Idioma: **{lang}**)',
+    ru: '📬 **Логирование ролей включено!**\nТеперь пользователи будут получать забавные ЛС при получении или снятии ролей на **{server}**. (Язык: **{lang}**)',
+    ja: '📬 **ロールログを有効化しました！**\n**{server}** でロールを取得・解除した際、ユーモアあふれるDMが届きます。（言語: **{lang}**）',
+    ko: '📬 **역할 로깅이 활성화되었습니다!**\n이제 **{server}**에서 역할을 얻거나 해제할 때 유쾌한 DM 알림을 받게 됩니다. (언어: **{lang}**)',
+    zh: '📬 **身份组日志已启用！**\n成员在 **{server}** 领取或退还身份组时将收到幽默风趣的私信通知。（语言：**{lang}**）',
+    it: '📬 **Logging dei ruoli attivato!**\nGli utenti riceveranno un messaggio privato simpatico ogni volta che scelgono o rimuovono ruoli su **{server}**. (Lingua: **{lang}**)',
+  },
+  setRoleLoggingDisabled: {
+    de: '📴 **Rollen-Logging deaktiviert.**\nEs werden keine Direktnachrichten bei Rollenänderungen auf **{server}** mehr verschickt.',
+    en: '📴 **Role logging disabled.**\nNo direct messages will be sent for role changes on **{server}**.',
+    fr: '📴 **Journalisation des rôles désactivée.**\nAucun message privé ne sera envoyé pour les changements de rôle sur **{server}**.',
+    es: '📴 **Registro de roles desactivado.**\nYa no se enviarán mensajes directos por cambios de rol en **{server}**.',
+    pt: '📴 **Registro de cargos desativado.**\nNenhuma DM será enviada para mudanças de cargo em **{server}**.',
+    ru: '📴 **Логирование ролей выключено.**\nЛичные сообщения при изменении ролей на **{server}** больше не отправляются.',
+    ja: '📴 **ロールログを無効化しました。**\n**{server}** でのロール変更時にDMは送信されません。' ,
+    ko: '📴 **역할 로깅이 비활성화되었습니다.**\n**{server}**에서 역할이 바뀌어도 DM 알림을 보내지 않습니다.',
+    zh: '📴 **身份组日志已禁用。**\n在 **{server}** 变更身份组时将不再发送私信。',
+    it: '📴 **Logging dei ruoli disattivato.**\nNon verranno più inviati messaggi privati per i cambi di ruolo su **{server}**.',
+  },
+
+  // ----------------------------------------------------------
+  // Humorvolle Privat-DMs bei Rollenänderungen
+  // ----------------------------------------------------------
+  dmRoleGiven: {
+    de: '🎉 Schick, schick! Du hast auf **{server}** soeben die Rolle **{role}** abgestaubt. Steht dir fabelhaft! 😎✨',
+    en: '🎉 Looking sharp! You just scored the **{role}** role on **{server}**. Suits you brilliantly! 😎✨',
+    fr: '🎉 Quelle classe ! Tu viens d’obtenir le rôle **{role}** sur **{server}**. Ça te va comme un gant ! 😎✨',
+    es: '🎉 ¡Qué estilazo! Acabas de conseguir el rol **{role}** en **{server}**. ¡Te queda de maravilla! 😎✨',
+    pt: '🎉 Que elegância! Você acabou de conquistar o cargo **{role}** no servidor **{server}**. Ficou um charme! 😎✨',
+    ru: '🎉 Стильно выглядишь! Ты только что урвал роль **{role}** на сервере **{server}**. Тебе безумно идёт! 😎✨',
+    ja: '🎉 キマってるね！サーバー **{server}** で **{role}** ロールをゲットしました。バッチリ似合ってます！😎✨',
+    ko: '🎉 멋진데요! **{server}** 서버에서 **{role}** 역할을 획득했어요. 완전 찰떡이에요! 😎✨',
+    zh: '🎉 帅气拉满！你刚刚在 **{server}** 服务器领取了 **{role}** 身份组。气质拿捏得死死的！😎✨',
+    it: '🎉 Che stile! Hai appena sbloccato il ruolo **{role}** su **{server}**. Ti dona tantissimo! 😎✨',
+  },
+  dmRoleRemoved: {
+    de: '👋 Alles hat ein Ende: Du hast die Rolle **{role}** auf **{server}** abgelegt. Wir vergießen eine kleine Träne... oder feiern kurz! 😜🎭',
+    en: '👋 Every journey ends: You dropped the **{role}** role on **{server}**. Shedding a tiny tear... or maybe celebrating! 😜🎭',
+    fr: '👋 Toute bonne chose a une fin : Tu as rendu le rôle **{role}** sur **{server}**. On verse une petite larme... ou on fête ça ! 😜🎭',
+    es: '👋 Todo lo bueno se acaba: Has dejado el rol **{role}** en **{server}**. Derramamos una lagrimita... ¡o lo celebramos! 😜🎭',
+    pt: '👋 Tudo que é bom dura pouco: Você largou o cargo **{role}** no servidor **{server}**. Uma lágrima caiu... ou abrimos o champanhe! 😜🎭',
+    ru: '👋 Всё когда-нибудь заканчивается: Ты скинул роль **{role}** на сервере **{server}**. Смахнули скупую слезу... или устроили праздник! 😜🎭',
+    ja: '👋 別れの時です：サーバー **{server}** で **{role}** ロールを手放しました。少し涙が…いやパーティーだ！😜🎭',
+    ko: '👋 이별의 순간: **{server}** 서버에서 **{role}** 역할을 내려놓았어요. 눈물이 찔끔... 아니 파티 시작! 😜🎭',
+    zh: '👋 挥手告别：你退还了 **{server}** 服务器的 **{role}** 身份组。我们流下了感动的泪水……或者开了瓶香槟！😜🎭',
+    it: '👋 Tutto ha una fine: Hai rimosso il ruolo **{role}** su **{server}**. Versiamo una lacrimuccia... o festeggiamo! 😜🎭',
+  },
+  dmRoleSwapped: {
+    de: '🔄 Aus alt mach neu! Auf **{server}** hast du **{oldRole}** gegen **{role}** getauscht. Ein echtes Upgrade! 🚀',
+    en: '🔄 Out with the old, in with the new! On **{server}**, you traded **{oldRole}** for **{role}**. Solid upgrade! 🚀',
+    fr: '🔄 Du changement dans l’air ! Sur **{server}**, tu as troqué **{oldRole}** contre **{role}**. Jolie amélioration ! 🚀',
+    es: '🔄 ¡Renovarse o morir! En **{server}** has cambiado **{oldRole}** por **{role}**. ¡Menuda mejora! 🚀',
+    pt: '🔄 Troca de visual! No servidor **{server}**, você trocou **{oldRole}** por **{role}**. Belo upgrade! 🚀',
+    ru: '🔄 Апгрейд подъехал! На сервере **{server}** ты сменил **{oldRole}** на **{role}**. Отличный обмен! 🚀',
+    ja: '🔄 気分一新！サーバー **{server}** で **{oldRole}** を **{role}** に切り替えました。ナイスアップグレード！🚀',
+    ko: '🔄 새로운 변신! **{server}** 서버에서 **{oldRole}**을(를) **{role}**(으)로 교체했어요. 확실한 업그레이드! 🚀',
+    zh: '🔄 辞旧迎新！在 **{server}** 服务器，你把 **{oldRole}** 换成了 **{role}**。超值大升级！🚀',
+    it: '🔄 Cambio di look! Su **{server}** hai scambiato **{oldRole}** con **{role}**. Che bel salto di qualità! 🚀',
+  },
+
+  // ----------------------------------------------------------
   // /help
   // ----------------------------------------------------------
   helpTitle: {

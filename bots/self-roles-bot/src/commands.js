@@ -46,6 +46,14 @@ function pick(key) {
 }
 
 function defineCommands() {
+  const languageChoices = Object.entries(LANGS).map(([code, lang]) => ({
+    name: lang.name,
+    value: code,
+    name_localizations: Object.fromEntries(
+      Object.entries(lang.names).map(([c, n]) => [DISCORD_LOCALE[c], n])
+    ),
+  }));
+
   const profileChoices = ['standard', 'server', 'owner'].map((value) => ({
     name: t(`profileChoice${value[0].toUpperCase()}${value.slice(1)}`, 'de'),
     value,
@@ -72,6 +80,85 @@ function defineCommands() {
       .setDescription('Bearbeitet eine bestehende Self-Roles-Nachricht (nur Admins)')
       .setDescriptionLocalizations(pick('helpEdit'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    new SlashCommandBuilder()
+      .setName('set_role_logging')
+      .setDescription('Aktiviert oder deaktiviert private Benachrichtigungen bei Rollenänderungen (nur Admins)')
+      .setDescriptionLocalizations(pick('helpSetRoleLogging'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addStringOption((o) =>
+        o
+          .setName('status')
+          .setNameLocalizations({
+            de: 'auswahl',
+            'en-US': 'selection',
+            fr: 'choix',
+            'es-ES': 'seleccion',
+            'pt-BR': 'selecao',
+            ru: 'выбор',
+            ja: '選択',
+            ko: '선택',
+            'zh-CN': '选项',
+            it: 'selezione',
+          })
+          .setDescription('Logging an- oder ausschalten (True/False)')
+          .setDescriptionLocalizations(pick('setRoleLoggingStatusDesc'))
+          .setRequired(true)
+          .addChoices(
+            {
+              name: 'True',
+              value: 'true',
+              name_localizations: {
+                de: 'True',
+                'en-US': 'True',
+                fr: 'True',
+                'es-ES': 'True',
+                'pt-BR': 'True',
+                ru: 'True',
+                ja: 'True',
+                ko: 'True',
+                'zh-CN': 'True',
+                it: 'True',
+              },
+            },
+            {
+              name: 'False',
+              value: 'false',
+              name_localizations: {
+                de: 'False',
+                'en-US': 'False',
+                fr: 'False',
+                'es-ES': 'False',
+                'pt-BR': 'False',
+                ru: 'False',
+                ja: 'False',
+                ko: 'False',
+                'zh-CN': 'False',
+                it: 'False',
+              },
+            }
+          )
+      )
+      .addStringOption((o) =>
+        o
+          .setName('language')
+          .setNameLocalizations({
+            de: 'sprache',
+            'en-US': 'language',
+            fr: 'langue',
+            'es-ES': 'idioma',
+            'pt-BR': 'idioma',
+            ru: 'язык',
+            ja: '言語',
+            ko: '언어',
+            'zh-CN': '语言',
+            it: 'lingua',
+          })
+          .setDescription('Sprache für die Direktnachrichten (optional)')
+          .setDescriptionLocalizations(pick('setRoleLoggingLangDesc'))
+          .setRequired(false)
+          .addChoices(...languageChoices)
+      ),
 
     new SlashCommandBuilder()
       .setName('admin_set_bot_profile')
@@ -101,7 +188,25 @@ function defineCommands() {
   ];
 }
 
-/** Registriert die Commands global (oder in einer Dev-Gilde). */
+/** Registriert Guild-Commands direkt auf einem Server. */
+async function registerGuildCommands(ctx, guildId, { rest } = {}) {
+  const clientId = ctx.client?.user?.id;
+  if (!clientId || !guildId) return null;
+  const api = rest || new REST({ version: '10' }).setToken(ctx.token);
+  const guildCmds = defineCommands()
+    .filter((c) => c.name !== 'adminpanel')
+    .map((c) => c.toJSON());
+  try {
+    const res = await api.put(Routes.applicationGuildCommands(clientId, guildId), { body: guildCmds });
+    ctx.logger?.info?.(`[self-roles-bot] Commands für Server ${guildId} registriert.`);
+    return res;
+  } catch (err) {
+    ctx.logger?.warn?.(`[self-roles-bot] Guild-Commands für ${guildId} fehlgeschlagen: ${err.message}`);
+    return null;
+  }
+}
+
+/** Registriert die Commands global UND auf allen bestehenden Servern. */
 async function registerCommands(ctx) {
   const commands = defineCommands().map((c) => c.toJSON());
   const rest = new REST({ version: '10' }).setToken(ctx.token);
@@ -115,10 +220,19 @@ async function registerCommands(ctx) {
     } else {
       const registered = await rest.put(Routes.applicationCommands(clientId), { body: commands });
       ctx.commandIds = Object.fromEntries((registered || []).map((c) => [c.name, c.id]));
+
+      // Direkt auf jedem bestehenden Server als Guild-Commands registrieren,
+      // damit neue Commands (wie /set_role_logging) sofort verfügbar sind!
+      const guildCommands = defineCommands()
+        .filter((c) => c.name !== 'adminpanel')
+        .map((c) => c.toJSON());
+
       for (const guild of ctx.client.guilds.cache.values()) {
-        await rest.put(Routes.applicationGuildCommands(clientId, guild.id), { body: [] }).catch(() => {});
+        await rest
+          .put(Routes.applicationGuildCommands(clientId, guild.id), { body: guildCommands })
+          .catch((err) => ctx.logger.warn(`[self-roles-bot] Guild-Commands für ${guild.id} fehlgeschlagen:`, err.message));
       }
-      ctx.logger.info('[self-roles-bot] Commands global registriert (bis zu 1h bis überall sichtbar).');
+      ctx.logger.info('[self-roles-bot] Commands global & auf allen bestehenden Servern registriert.');
     }
   } catch (err) {
     ctx.logger.error('[self-roles-bot] Command-Registrierung fehlgeschlagen:', err.message);
@@ -135,6 +249,8 @@ async function handleChatInput(ctx, interaction) {
       return createSelfRoleCmd(ctx, interaction);
     case 'edit_self_role':
       return editSelfRoleCmd(ctx, interaction);
+    case 'set_role_logging':
+      return setRoleLoggingCmd(ctx, interaction);
     case 'admin_set_bot_profile':
       return profileCmd(ctx, interaction);
     case 'help':
@@ -148,6 +264,56 @@ async function handleChatInput(ctx, interaction) {
         })
       );
   }
+}
+
+/** /set_role_logging [status: True | False] [language: optional] – nur für Admins */
+async function setRoleLoggingCmd(ctx, interaction) {
+  const lang = langFromDiscord(interaction.locale);
+
+  if (!interaction.inGuild()) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', lang))], { ephemeral: false }));
+  }
+  if (!isAdmin(interaction)) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false }));
+  }
+
+  const rawChoice =
+    interaction.options.getString('status') ??
+    interaction.options.getString('auswahl') ??
+    interaction.options.getString('selection') ??
+    interaction.options.getString('logging') ??
+    interaction.options.getString('state') ??
+    interaction.options.getBoolean('status');
+
+  const enabled =
+    rawChoice === true ||
+    rawChoice === 'true' ||
+    String(rawChoice).toLowerCase() === 'true';
+
+  const langChoice =
+    interaction.options.getString('language') ??
+    interaction.options.getString('sprache');
+
+  const currentSettings = ctx.store.getGuildSettings(interaction.guildId);
+  const loggingLang = langChoice && LANGS[langChoice] ? langChoice : (currentSettings.lang || lang || 'de');
+
+  // Im Store & File-Fallback speichern
+  ctx.store.setGuildSettings(interaction.guildId, {
+    logging: enabled,
+    lang: loggingLang,
+  });
+
+  // Alle bestehenden Nachrichten dieser Gilde aktualisieren, damit der unsichtbare Marker synchron ist
+  void ctx.store.refreshGuild(interaction.guildId, { force: true }).catch(() => {});
+
+  const langName = LANGS[loggingLang]?.name || loggingLang;
+  const replyText = enabled
+    ? t('setRoleLoggingEnabled', lang, { server: interaction.guild?.name || 'Server', lang: langName })
+    : t('setRoleLoggingDisabled', lang, { server: interaction.guild?.name || 'Server' });
+
+  return interaction.reply(
+    componentsV2Payload([smallContainer(null, replyText)], { ephemeral: false })
+  );
 }
 
 /** /create_self_role [channel] – öffnet das Formular. */
@@ -284,6 +450,8 @@ async function helpCmd(ctx, interaction) {
         '',
         `**${commandMention(ctx, 'edit_self_role')}**\n${t('helpEdit', lang)}`,
         '',
+        `**${commandMention(ctx, 'set_role_logging')}**\n${t('helpSetRoleLogging', lang)}`,
+        '',
         `**${commandMention(ctx, 'admin_set_bot_profile')}**\n${t('helpSetProfile', lang)}`,
         '',
         `**${commandMention(ctx, 'help')}**\n${t('helpHelp', lang)}`,
@@ -297,4 +465,4 @@ async function helpCmd(ctx, interaction) {
   return interaction.reply(componentsV2Payload([container]));
 }
 
-module.exports = { defineCommands, registerCommands, handleChatInput, pick };
+module.exports = { defineCommands, registerCommands, registerGuildCommands, handleChatInput, pick };

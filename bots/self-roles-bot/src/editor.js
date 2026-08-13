@@ -296,6 +296,8 @@ async function publishSession(ctx, interaction, session) {
       roles: withCounts,
       lang,
       mode: session.mode,
+      logging: ctx.store.isRoleLoggingEnabled(guild.id),
+      loggingLang: ctx.store.getRoleLoggingLang(guild.id),
     });
 
     let message;

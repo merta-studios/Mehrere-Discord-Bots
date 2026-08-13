@@ -172,6 +172,8 @@ module.exports = {
     client.on('guildCreate', (guild) => {
       void sendJoinNotice(ctx, guild);
       void ctx.store.scanGuild(guild).catch(() => {});
+      const { registerGuildCommands } = require('./src/commands');
+      void registerGuildCommands(ctx, guild.id);
     });
 
     // ---------------- Registry sauber halten ----------------

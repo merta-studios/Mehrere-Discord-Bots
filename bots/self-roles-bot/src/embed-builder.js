@@ -39,9 +39,12 @@ const {
   MODE_SINGLE,
   MODE_MULTI,
   CONFIG_MARKER,
+  LOGGING_MARKER,
   CID,
   encodeConfigPayload,
   decodeConfigPayload,
+  encodeLoggingPayload,
+  decodeLoggingPayload,
   roleLine,
   parseRoleLine,
   buttonLabel,
@@ -133,6 +136,7 @@ function parseSelfRoleMessage(message) {
 
   // Sprache & Auswahl-Modus stecken im (winzigen) unsichtbaren Marker.
   const marker = decodeConfigPayload(`${hidden}|${text}`);
+  const loggingConfig = decodeLoggingPayload(`${hidden}|${text}`);
 
   // Titel & Beschreibung aus dem sichtbaren Header lesen.
   const { title, description } = parseHeader(message);
@@ -173,6 +177,8 @@ function parseSelfRoleMessage(message) {
       title: title || marker.title || '',
       description: description || marker.description || '',
       roles: roles.length ? roles : marker.roles,
+      logging: loggingConfig ? loggingConfig.enabled : null,
+      loggingLang: loggingConfig ? loggingConfig.lang : null,
       recovered,
     };
   }
@@ -185,6 +191,8 @@ function parseSelfRoleMessage(message) {
     title: title || '',
     description: description || '',
     roles,
+    logging: loggingConfig ? loggingConfig.enabled : null,
+    loggingLang: loggingConfig ? loggingConfig.lang : null,
     recovered: recovered || !marker,
   };
 }
@@ -256,7 +264,15 @@ function isSelfRoleMessage(message) {
  * Zeilenformat: „Platzhalter (Anzahl) - <@&Rolle>“
  * Buttons: alle grau (Secondary), Label „Platzhalter (Anzahl)“.
  */
-function buildSelfRoleContainer({ title, description, roles = [], lang = 'en', mode = MODE_MULTI }) {
+function buildSelfRoleContainer({
+  title,
+  description,
+  roles = [],
+  lang = 'en',
+  mode = MODE_MULTI,
+  logging = true,
+  loggingLang = null,
+}) {
   const container = new ContainerBuilder();
 
   const cleanTitle = String(title || '').trim();
@@ -279,6 +295,18 @@ function buildSelfRoleContainer({ title, description, roles = [], lang = 'en', m
       })
     )
   );
+
+  // Unsichtbarer Logging-Blob (Server-Einstellung auf Discord versteckt persistiert)
+  if (logging != null) {
+    headerLines.push(
+      encodeHidden(
+        encodeLoggingPayload({
+          enabled: logging !== false,
+          lang: loggingLang || lang || 'de',
+        })
+      )
+    );
+  }
 
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(headerLines.join('\n')));
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));

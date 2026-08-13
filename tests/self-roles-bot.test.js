@@ -49,7 +49,7 @@ test('Slash-Commands sind gültiges Discord-JSON', () => {
 
   assert.deepEqual(
     cmds.map((c) => c.name).sort(),
-    ['admin_set_bot_profile', 'adminpanel', 'create_self_role', 'edit_self_role', 'help']
+    ['admin_set_bot_profile', 'adminpanel', 'create_self_role', 'edit_self_role', 'help', 'set_role_logging']
   );
 
   const create = cmds.find((c) => c.name === 'create_self_role');
@@ -60,6 +60,16 @@ test('Slash-Commands sind gültiges Discord-JSON', () => {
 
   const edit = cmds.find((c) => c.name === 'edit_self_role');
   assert.equal(edit.default_member_permissions, '8');
+
+  const logging = cmds.find((c) => c.name === 'set_role_logging');
+  assert.equal(logging.default_member_permissions, '8', '/set_role_logging ist nur für Admins');
+  assert.equal(logging.options.length, 2);
+  assert.equal(logging.options[0].name, 'status');
+  assert.ok(logging.options[0].required, 'Status/Auswahl ist Pflicht');
+  assert.deepEqual(logging.options[0].choices.map((c) => c.value), ['true', 'false']);
+  assert.equal(logging.options[1].name, 'language');
+  assert.equal(logging.options[1].required, false, 'Sprache ist optional');
+  assert.equal(logging.options[1].choices.length, Object.keys(LANGS).length);
 
   const profile = cmds.find((c) => c.name === 'admin_set_bot_profile');
   assert.deepEqual(profile.options[0].choices.map((c) => c.value), ['standard', 'server', 'owner']);
@@ -84,13 +94,45 @@ test('Slash-Commands sind gültiges Discord-JSON', () => {
 });
 
 test('Alle 10 Sprachen liefern echte Texte für die Kern-Keys', () => {
-  const keys = ['roleGiven', 'roleAlready', 'roleRemoved', 'editorTitle', 'helpTitle', 'errBotPerms'];
+  const keys = [
+    'roleGiven',
+    'roleAlready',
+    'roleRemoved',
+    'editorTitle',
+    'helpTitle',
+    'errBotPerms',
+    'helpSetRoleLogging',
+    'setRoleLoggingStatusDesc',
+    'setRoleLoggingLangDesc',
+    'setRoleLoggingEnabled',
+    'setRoleLoggingDisabled',
+    'dmRoleGiven',
+    'dmRoleRemoved',
+    'dmRoleSwapped',
+  ];
   for (const lang of Object.keys(LANGS)) {
     for (const key of keys) {
       const text = t(key, lang);
       assert.ok(text && !text.startsWith('??'), `${key}/${lang} fehlt`);
     }
   }
+});
+
+test('Rollen-Logging Marker: encodeLoggingPayload & decodeLoggingPayload Roundtrip', () => {
+  const onPayload = logic.encodeLoggingPayload({ enabled: true, lang: 'de' });
+  assert.equal(onPayload, 'srllog::v1::1:de');
+  const onDecoded = logic.decodeLoggingPayload(onPayload);
+  assert.deepEqual(onDecoded, { enabled: true, lang: 'de' });
+
+  const offPayload = logic.encodeLoggingPayload({ enabled: false, lang: 'en' });
+  assert.equal(offPayload, 'srllog::v1::0:en');
+  const offDecoded = logic.decodeLoggingPayload(offPayload);
+  assert.deepEqual(offDecoded, { enabled: false, lang: 'en' });
+
+  // Toleranz für 'true' / 'false' Strings
+  assert.deepEqual(logic.decodeLoggingPayload('srllog::v1::true:fr'), { enabled: true, lang: 'fr' });
+  assert.deepEqual(logic.decodeLoggingPayload('srllog::v1::false:es'), { enabled: false, lang: 'es' });
+  assert.equal(logic.decodeLoggingPayload('ungültig'), null);
 });
 
 // ---------------------------------------------------------------------------
