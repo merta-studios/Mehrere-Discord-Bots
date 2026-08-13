@@ -1,7 +1,7 @@
 /**
  * Slash-Commands XP Bot – Definition, Registrierung & Handler
  * Commands: /setup, /rank, /help, /admin_set_bot_profile, /level_roles,
- *           /update_leaderboard, /toggle_nicknames, /sync_nicknames, /adminpanel
+ *           /update_leaderboard, /toggle_nicknames, /sync_nicknames, /set_inactive_role, /adminpanel
  */
 
 const {
@@ -95,6 +95,33 @@ function defineCommands() {
       .setDescription('Gleicht alle Server-Nicknames mit den Level-Tags ab. Nur Admins, nach /setup.')
       .setDescriptionLocalizations(pick('syncNicknamesHelp'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    new SlashCommandBuilder()
+      .setName('set_inactive_role')
+      .setDescription('Inaktiv-Rolle für Nutzer ohne XP seit N Tagen. Nur Admins, nach /setup.')
+      .setDescriptionLocalizations(pick('setInactiveRoleHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addStringOption((o) => o
+        .setName('mode')
+        .setDescription('An oder aus')
+        .setDescriptionLocalizations(pick('setInactiveRoleModeDesc'))
+        .setRequired(true)
+        .addChoices(
+          { name: 'On', value: 'on', name_localizations: pick('setInactiveRoleModeOn') },
+          { name: 'Off', value: 'off', name_localizations: pick('setInactiveRoleModeOff') },
+        ))
+      .addIntegerOption((o) => o
+        .setName('inactive_days')
+        .setDescription('Tage ohne XP, ab denen die Rolle vergeben wird')
+        .setDescriptionLocalizations(pick('setInactiveRoleDaysDesc'))
+        .setRequired(false)
+        .setMinValue(1)
+        .setMaxValue(365))
+      .addRoleOption((o) => o
+        .setName('role')
+        .setDescription('Rolle für inaktive Mitglieder')
+        .setDescriptionLocalizations(pick('setInactiveRoleRoleDesc'))
+        .setRequired(false)),
 
     new SlashCommandBuilder()
       .setName('adminpanel')
@@ -262,7 +289,7 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
 const COMMAND_ID_VERIFY_TTL_MS = 5 * 60 * 1000;
 
 async function ensureCommandIds(ctx, guildId = null) {
-  const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'adminpanel'];
+  const needed = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role', 'adminpanel'];
   const hasAll = (obj) => obj && typeof obj === 'object' && needed.every((name) => Boolean(obj[name]));
 
   const devGuildId = normalizeGuildId(ctx.devGuildId);
@@ -409,6 +436,8 @@ async function handleChatInput(ctx, interaction) {
       return toggleNicknamesCmd(ctx, interaction);
     case 'sync_nicknames':
       return syncNicknamesCmd(ctx, interaction);
+    case 'set_inactive_role':
+      return setInactiveRoleCmd(ctx, interaction);
     case 'adminpanel':
       return openPanel(ctx, interaction);
     default:
@@ -551,6 +580,8 @@ async function helpCmd(ctx, interaction) {
       `**${commandMention(ctx, 'toggle_nicknames', interaction.guildId)}**\n${t('toggleNicknamesHelp', lang)}`,
       '',
       `**${commandMention(ctx, 'sync_nicknames', interaction.guildId)}**\n${t('syncNicknamesHelp', lang)}`,
+      '',
+      `**${commandMention(ctx, 'set_inactive_role', interaction.guildId)}**\n${t('setInactiveRoleHelp', lang)}`,
       '',
       `**${commandMention(ctx, 'help', interaction.guildId)}**\n${t('helpHelp', lang)}`,
     ].join('\n'))
@@ -769,6 +800,127 @@ async function syncNicknamesCmd(ctx, interaction) {
 
   return interaction.editReply(
     componentsV2Payload([smallContainer(null, formatSyncDone(gate.lang, result))])
+  );
+}
+
+function formatInactiveSyncProgress(lang, stats) {
+  const percent = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
+  return t('setInactiveRoleProgress', lang, {
+    bar: progressBar(stats.done, stats.total),
+    percent,
+    done: stats.done,
+    total: stats.total,
+    updated: stats.updated,
+    unchanged: stats.unchanged,
+    failed: stats.failed,
+  });
+}
+
+function formatInactiveSyncDone(lang, stats, cfg) {
+  return t('setInactiveRoleDone', lang, {
+    mode: stats.enabled ? t('setInactiveRoleModeLabelOn', lang) : t('setInactiveRoleModeLabelOff', lang),
+    days: cfg.inactiveRoleDays || '–',
+    role: cfg.inactiveRoleId ? `<@&${cfg.inactiveRoleId}>` : '–',
+    total: stats.total,
+    updated: stats.updated,
+    unchanged: stats.unchanged,
+    failed: stats.failed,
+  });
+}
+
+/**
+ * /set_inactive_role mode:<on|off> [inactive_days] [role]
+ * Admin: Inaktiv-Rolle an/aus. Bei Anschalten (und generell bei Nutzung)
+ * werden alle Mitglieder wie bei /sync_nicknames abgeglichen.
+ */
+async function setInactiveRoleCmd(ctx, interaction) {
+  const gate = requireAdminSetup(ctx, interaction);
+  if (gate.error) return interaction.reply(gate.error);
+
+  const mode = String(interaction.options.getString('mode') || '').toLowerCase();
+  const enabled = mode === 'on';
+  const daysOpt = interaction.options.getInteger('inactive_days');
+  const roleOpt = interaction.options.getRole('role');
+
+  const days = daysOpt != null
+    ? require('./inactive-role').parseInactiveRoleDays(daysOpt)
+    : require('./inactive-role').parseInactiveRoleDays(gate.cfg.inactiveRoleDays);
+  const role = roleOpt || (gate.cfg.inactiveRoleId
+    ? interaction.guild?.roles?.cache?.get(gate.cfg.inactiveRoleId) || { id: gate.cfg.inactiveRoleId, managed: false, position: 0 }
+    : null);
+
+  if (enabled) {
+    if (!days) {
+      return interaction.reply(componentsV2Payload([smallContainer(null, t('setInactiveRoleNeedOnArgs', gate.lang))], { ephemeral: false }));
+    }
+    if (!role?.id) {
+      return interaction.reply(componentsV2Payload([smallContainer(null, t('setInactiveRoleNeedOnArgs', gate.lang))], { ephemeral: false }));
+    }
+    if (role.id === gate.guildId || role.managed) {
+      return interaction.reply(componentsV2Payload([smallContainer(null, t('setInactiveRoleBadRole', gate.lang))], { ephemeral: false }));
+    }
+  }
+
+  const {
+    isSyncRunning,
+    withSyncLock,
+    syncAllInactiveRoles,
+    canManageInactiveRole,
+  } = require('./inactive-role');
+
+  if (isSyncRunning(gate.guildId)) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('setInactiveRoleAlreadyRunning', gate.lang))], { ephemeral: false })
+    );
+  }
+
+  if (role?.id && interaction.guild && !canManageInactiveRole(interaction.guild, role) && enabled) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('setInactiveRoleBadRole', gate.lang))], { ephemeral: false }));
+  }
+
+  gate.cfg.inactiveRoleEnabled = enabled;
+  if (days) gate.cfg.inactiveRoleDays = days;
+  if (role?.id) gate.cfg.inactiveRoleId = role.id;
+  ctx.store.setGuild(gate.cfg);
+  await ctx.store.flush();
+
+  await interaction.deferReply();
+
+  let guild = interaction.guild;
+  if (!guild) {
+    guild = ctx.client?.guilds?.cache?.get(gate.guildId)
+      || (await ctx.client?.guilds?.fetch?.(gate.guildId).catch(() => null));
+  }
+  if (!guild) {
+    return interaction.editReply(componentsV2Payload([smallContainer(null, t('errGeneric', gate.lang))]));
+  }
+
+  const intro = enabled
+    ? t('setInactiveRoleOn', gate.lang, { days: gate.cfg.inactiveRoleDays, role: `<@&${gate.cfg.inactiveRoleId}>` })
+    : t('setInactiveRoleOff', gate.lang);
+  await interaction.editReply(
+    componentsV2Payload([smallContainer(null, `${intro}\n\n${t('setInactiveRoleFetching', gate.lang)}`)])
+  ).catch(() => {});
+
+  const result = await withSyncLock(guild.id, () =>
+    syncAllInactiveRoles(ctx, guild, gate.lang, {
+      cfg: gate.cfg,
+      onProgress: async (stats) => {
+        await interaction.editReply(
+          componentsV2Payload([smallContainer(null, formatInactiveSyncProgress(gate.lang, stats))])
+        ).catch(() => {});
+      },
+    })
+  );
+
+  if (result?.alreadyRunning) {
+    return interaction.editReply(
+      componentsV2Payload([smallContainer(null, t('setInactiveRoleAlreadyRunning', gate.lang))])
+    );
+  }
+
+  return interaction.editReply(
+    componentsV2Payload([smallContainer(null, formatInactiveSyncDone(gate.lang, result, gate.cfg))])
   );
 }
 

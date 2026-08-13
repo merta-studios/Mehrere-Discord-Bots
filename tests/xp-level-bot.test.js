@@ -24,6 +24,7 @@ const {
   parseLevelList,
   formatRoleName,
   roleNamePattern,
+  currentInactiveDays,
 } = require('../bots/xp-level-bot/src/logic');
 const { t, LANGS } = require('../bots/xp-level-bot/src/languages');
 const { sendJoinNotice } = require('../bots/xp-level-bot/src/admin-panel');
@@ -654,6 +655,36 @@ test('syncAllNicknames: entfernt Tags, wenn die Funktion aus ist', async () => {
 
 test('Nickname-Command-Beschreibungen bleiben in allen Sprachen unter 100 Zeichen', () => {
   for (const key of ['toggleNicknamesHelp', 'toggleNicknamesEnabledDesc', 'syncNicknamesHelp']) {
+    for (const code of Object.keys(LANGS)) {
+      const text = t(key, code);
+      assert.ok(text.length >= 1 && text.length <= 100, `${key} (${code}) ${text.length}: ${text}`);
+    }
+  }
+});
+
+
+test('currentInactiveDays: aktiver Nutzer ist 0, sonst gespeicherter Streak', () => {
+  const now = Date.now();
+  assert.equal(currentInactiveDays({ lastActivity: now - 1000, inactiveDays: 9 }, now), 0);
+  assert.equal(currentInactiveDays({ lastActivity: now - 30 * 3600 * 1000, inactiveDays: 4 }, now), 4);
+  assert.equal(currentInactiveDays(null, now), 0);
+});
+
+test('syncNicknamesProgress/Done nutzen echte Zeilenumbrüche statt \\n-Text', () => {
+  const progress = t('syncNicknamesProgress', 'de', {
+    bar: 'x', percent: 10, done: 1, total: 10, updated: 0, unchanged: 1, failed: 0,
+  });
+  const done = t('syncNicknamesDone', 'de', {
+    mode: 'an', total: 1, updated: 0, unchanged: 1, failed: 0,
+  });
+  assert.ok(progress.includes('\n'), 'Progress braucht echte Zeilenumbrüche');
+  assert.ok(done.includes('\n'), 'Done braucht echte Zeilenumbrüche');
+  assert.equal(progress.includes('\\n'), false, 'kein literaler \\n-String im Progress');
+  assert.equal(done.includes('\\n'), false, 'kein literaler \\n-String im Done');
+});
+
+test('set_inactive_role-Beschreibungen bleiben in allen Sprachen unter 100 Zeichen', () => {
+  for (const key of ['setInactiveRoleHelp', 'setInactiveRoleModeDesc', 'setInactiveRoleDaysDesc', 'setInactiveRoleRoleDesc']) {
     for (const code of Object.keys(LANGS)) {
       const text = t(key, code);
       assert.ok(text.length >= 1 && text.length <= 100, `${key} (${code}) ${text.length}: ${text}`);

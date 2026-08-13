@@ -493,6 +493,11 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     user.lastActivity = Date.now();
     user.inactiveDays = 0;
     ctx.store.setUser(user);
+    if (interaction.guild) {
+      void require('./inactive-role')
+        .clearInactiveRoleForUser(ctx, interaction.guild, interaction.user.id)
+        .catch(() => {});
+    }
     const levelFlush = res.leveled ? ctx.store.flush().catch(() => {}) : null;
 
     try {

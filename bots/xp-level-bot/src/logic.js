@@ -93,6 +93,17 @@ function nextDecayInfo(user, now = Date.now()) {
   return { inactiveDays, rate, percent: Math.round(rate * 100), decay };
 }
 
+/**
+ * Aktueller Inaktivitäts-Streak OHNE Mitternachts-Inkrement.
+ * Nach der 0-Uhr-Abrechnung steht user.inactiveDays bereits auf dem neuen Wert.
+ * Wer in den letzten 24h XP verdient hat, gilt als 0.
+ */
+function currentInactiveDays(user, now = Date.now()) {
+  if (!user) return 0;
+  if (wasActiveRecently(user, now)) return 0;
+  return Math.max(0, Math.floor(Number(user.inactiveDays) || 0));
+}
+
 // ---------------------------------------------------------------------------
 // Wortzählung & Spam-Erkennung – KRASS robust
 // ---------------------------------------------------------------------------
@@ -565,6 +576,7 @@ module.exports = {
   decayRateForInactiveDays,
   wasActiveRecently,
   nextDecayInfo,
+  currentInactiveDays,
   DAY_MS,
   rollBonusXp,
   BONUS_XP_MIN,

@@ -512,3 +512,142 @@ test('Bonus-Drop: offener Einsammeln-Button funktioniert nach Bot-Neustart weite
   assert.equal(updates.length, 1);
   assert.equal(h.cfg.bonusState.activeDrop, null, 'persistierter offene Drop wurde abgeschlossen');
 });
+
+
+const { applyDailyDecayForGuild } = require('../bots/xp-level-bot/src/scheduler');
+const {
+  shouldHaveInactiveRole,
+  syncAllInactiveRoles,
+  clearInactiveRoleForUser,
+} = require('../bots/xp-level-bot/src/inactive-role');
+
+test('shouldHaveInactiveRole: nur wenn an und Streak >= Schwelle', () => {
+  const now = Date.now();
+  const store = {
+    getUser: () => ({ lastActivity: now - 40 * 3600 * 1000, inactiveDays: 8 }),
+  };
+  const cfg = { guildId: 'g1', inactiveRoleEnabled: true, inactiveRoleDays: 7, inactiveRoleId: 'r1' };
+  const member = { id: 'u1', guild: { id: 'g1' } };
+  assert.equal(shouldHaveInactiveRole(store, cfg, member, now), true);
+  assert.equal(shouldHaveInactiveRole(store, { ...cfg, inactiveRoleEnabled: false }, member, now), false);
+  assert.equal(shouldHaveInactiveRole(store, { ...cfg, inactiveRoleDays: 30 }, member, now), false);
+});
+
+test('syncAllInactiveRoles vergibt und entfernt die Rolle anhand inactiveDays', async () => {
+  const now = Date.now();
+  const members = new Map();
+  function makeMember(id, has) {
+    const cache = new Map(has ? [['r1', { id: 'r1' }]] : []);
+    const m = {
+      id,
+      user: { bot: false, username: id },
+      roles: {
+        cache,
+        add: async (rid) => { cache.set(rid, { id: rid }); },
+        remove: async (rid) => { cache.delete(rid); },
+      },
+    };
+    members.set(id, m);
+    return m;
+  }
+  makeMember('idle', false);
+  makeMember('active', true);
+  const role = { id: 'r1', managed: false, position: 1 };
+  const guild = {
+    id: 'g1',
+    members: {
+      me: { id: 'bot', permissions: { has: () => true }, roles: { highest: { position: 10 } } },
+      fetch: async () => members,
+    },
+    roles: { cache: new Map([['r1', role]]), fetch: async () => role },
+  };
+  const store = {
+    getGuild: () => ({
+      guildId: 'g1',
+      inactiveRoleEnabled: true,
+      inactiveRoleDays: 5,
+      inactiveRoleId: 'r1',
+    }),
+    getUser: (gid, uid) => (uid === 'idle'
+      ? { userId: 'idle', lastActivity: 0, inactiveDays: 6 }
+      : { userId: 'active', lastActivity: now, inactiveDays: 0 }),
+  };
+  const stats = await syncAllInactiveRoles({ store, client: { user: { id: 'bot' } } }, guild, 'de', { now });
+  assert.equal(stats.updated, 2);
+  assert.equal(members.get('idle').roles.cache.has('r1'), true);
+  assert.equal(members.get('active').roles.cache.has('r1'), false);
+});
+
+test('clearInactiveRoleForUser entfernt die Rolle nach neu verdienten XP', async () => {
+  const cache = new Map([['r1', { id: 'r1' }]]);
+  const member = {
+    id: 'u1',
+    user: { bot: false },
+    roles: {
+      cache,
+      add: async () => {},
+      remove: async (rid) => { cache.delete(rid); },
+    },
+  };
+  const role = { id: 'r1', managed: false, position: 1 };
+  const guild = {
+    id: 'g1',
+    members: {
+      me: { permissions: { has: () => true }, roles: { highest: { position: 10 } } },
+      fetch: async () => member,
+    },
+    roles: { cache: new Map([['r1', role]]), fetch: async () => role },
+  };
+  const store = { getGuild: () => ({ inactiveRoleId: 'r1', inactiveRoleEnabled: true, inactiveRoleDays: 3 }) };
+  const removed = await clearInactiveRoleForUser({ store }, guild, 'u1');
+  assert.equal(removed, true);
+  assert.equal(cache.has('r1'), false);
+});
+
+test('applyDailyDecayForGuild vergibt die Inaktiv-Rolle nach dem 0-Uhr-Streak', async () => {
+  const store = createXpStore({ env: () => '' });
+  store.flush = async () => {};
+  store.setGuild({
+    guildId: 'g1',
+    lang: 'de',
+    leaderboardChannelId: 'lb',
+    mainChannelId: 'main',
+    inactiveRoleEnabled: true,
+    inactiveRoleDays: 2,
+    inactiveRoleId: 'r1',
+  });
+  store.setUser({
+    guildId: 'g1', userId: 'idle', level: 5, xp: 20,
+    lastActivity: Date.now() - 40 * 3600 * 1000, inactiveDays: 1,
+  });
+
+  const cache = new Map();
+  const member = {
+    id: 'idle',
+    user: { bot: false },
+    roles: {
+      cache,
+      add: async (rid) => { cache.set(rid, { id: rid }); },
+      remove: async (rid) => { cache.delete(rid); },
+    },
+  };
+  const role = { id: 'r1', managed: false, position: 1 };
+  const guild = {
+    id: 'g1',
+    name: 'Testgilde',
+    members: {
+      me: { id: 'bot', permissions: { has: () => true }, roles: { highest: { position: 10 } } },
+      fetch: async (id) => (id ? member : new Map([['idle', member]])),
+    },
+    roles: { cache: new Map([['r1', role]]), fetch: async () => role },
+    channels: { cache: new Map(), fetch: async () => null },
+  };
+  const ctx = {
+    store,
+    logger: { info() {}, warn() {}, error() {} },
+    client: { user: { id: 'bot' }, channels: { fetch: async () => null } },
+  };
+  await applyDailyDecayForGuild(ctx, store.getGuild('g1'), guild);
+  assert.ok(store.getUser('g1', 'idle').inactiveDays >= 2);
+  assert.equal(cache.has('r1'), true, 'nach 0 Uhr mit genug inaktiven Tagen kommt die Rolle');
+});
