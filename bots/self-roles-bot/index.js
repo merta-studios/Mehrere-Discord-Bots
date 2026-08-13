@@ -105,7 +105,7 @@ module.exports = {
     // ---------------- Zähler live halten + Rollen-Logging ----------------
     // Wenn irgendjemand (Admin, anderer Bot, Self-Role-Button, …) eine Rolle
     // bekommt oder verliert, aktualisieren wir die Zähler unserer eigenen
-    // Nachrichten UND schicken dem Nutzer eine humorvolle Privat-DM – für
+    // Nachrichten UND schicken dem Nutzer eine kurze, sachliche Privat-DM – für
     // ALLE Rollen des Servers, nicht nur die Self-Roles-Rollen.
     // Die eigentliche Logik lebt in interactions.js, damit sie testbar ist.
     client.on(Events.GuildMemberUpdate, (oldMember, newMember) => {
