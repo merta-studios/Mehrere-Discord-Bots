@@ -464,7 +464,7 @@ function canBotManageRole(guild, role) {
 }
 
 /**
- * Sendet eine humorvolle Privat-DM an den Nutzer über die erhaltene/abgelegte Rolle.
+ * Sendet eine kurze, sachliche Privat-DM an den Nutzer über die erhaltene/abgelegte Rolle.
  * Wenn der Server Rollen-Logging deaktiviert hat oder der Nutzer DMs blockiert,
  * passiert nichts (kein Crash).
  */
@@ -511,7 +511,7 @@ async function sendRoleLoggingDm({ ctx, guild, user, role, action, oldRole = nul
  * Wird ausgelöst, sobald sich die Rollen eines Mitglieds ändern – egal wodurch
  * (Self-Role-Button, Admin per Hand, anderer Bot, …). Wir tun zwei Dinge:
  *  1) Zähler unserer Self-Role-Nachrichten aktualisieren, falls betroffen.
- *  2) Dem Nutzer eine humorvolle Privat-DM schicken – für JEDE gewöhnliche
+ *  2) Dem Nutzer eine kurze, sachliche Privat-DM schicken – für JEDE gewöhnliche
  *     Rolle, die er bekommen oder verloren hat. Bots, `@everyone` und
  *     integrationsverwaltete Rollen (Booster, Bot-Rollen, …) werden übersprungen.
  */

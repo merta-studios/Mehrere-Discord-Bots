@@ -1179,7 +1179,7 @@ test('/set_role_logging schaltet Logging an/aus und setzt Sprache', async () => 
   assert.match(onReply, /aktiviert|enabled/i);
 });
 
-test('Rollen-Logging: Standardmäßig aktiv und sendet humorvolle DM bei Rollenerhalt', async () => {
+test('Rollen-Logging: Standardmäßig aktiv und sendet kurze DM bei Rollenerhalt', async () => {
   const h = await publishFixture();
   const member = h.makeMember('user1');
 
@@ -1201,10 +1201,10 @@ test('Rollen-Logging: Standardmäßig aktiv und sendet humorvolle DM bei Rollene
   const dmContent = textOf(h.sentDms[0].payload);
   assert.match(dmContent, /Gamer/);
   assert.match(dmContent, /Testserver/);
-  assert.match(dmContent, /abgestaubt|Schick|Stolz|fabelhaft/i);
+  assert.match(dmContent, /erhalten/);
 });
 
-test('Rollen-Logging: Sendet humorvolle DM bei Rollenabgabe', async () => {
+test('Rollen-Logging: Sendet kurze DM bei Rollenabgabe', async () => {
   const h = await publishFixture();
   const member = h.makeMember('user1');
   await member.roles.add(h.roleA.id);
@@ -1227,10 +1227,10 @@ test('Rollen-Logging: Sendet humorvolle DM bei Rollenabgabe', async () => {
   const dmContent = textOf(h.sentDms[0].payload);
   assert.match(dmContent, /Gamer/);
   assert.match(dmContent, /Testserver/);
-  assert.match(dmContent, /Ende|abgelegt|Träne|feiern/i);
+  assert.match(dmContent, /entzogen/);
 });
 
-test('Rollen-Logging: Sendet humorvolle DM bei Rollentausch (Single-Modus)', async () => {
+test('Rollen-Logging: Sendet kurze DM bei Rollentausch (Single-Modus)', async () => {
   const h = await publishFixture({ mode: 'single' });
   const member = h.makeMember('user1');
   await member.roles.add(h.roleA.id);
@@ -1255,7 +1255,7 @@ test('Rollen-Logging: Sendet humorvolle DM bei Rollentausch (Single-Modus)', asy
   assert.match(dmContent, /Gamer/);
   assert.match(dmContent, /Artist/);
   assert.match(dmContent, /Testserver/);
-  assert.match(dmContent, /Aus alt mach neu|getauscht|Upgrade/i);
+  assert.match(dmContent, /ersetzt/);
 });
 
 test('Rollen-Logging: Auch NICHT-Self-Role-Rollen lösen eine DM aus (z. B. Admin vergibt manuell eine beliebige Rolle)', async () => {
