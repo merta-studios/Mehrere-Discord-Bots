@@ -1,4 +1,13 @@
-/** Moderne Components-V2-Oberflächen für Herausforderungen und Spielbretter. */
+/**
+ * Moderne Components-V2-Oberflächen für Herausforderungen und Spielbretter.
+ *
+ * Leitgedanke des Designs: **ein** Spielfeld pro Nachricht, so wenig Text wie
+ * möglich und Buttons, die genau dort sitzen, wo man sie erwartet.
+ * - Tic-Tac-Toe: das 3×3-Raster besteht selbst aus Buttons – kein zweites
+ *   Textbrett daneben.
+ * - Vier Gewinnt: 5 Spalten, damit alle fünf Drop-Buttons in eine einzige
+ *   Reihe direkt unter das Brett passen (Discord erlaubt 5 Buttons pro Reihe).
+ */
 
 const {
   ContainerBuilder,
@@ -11,7 +20,6 @@ const {
 
 const { t } = require('./languages');
 const {
-  GAME_TTT,
   GAME_CONNECT4,
   STATUS_PENDING,
   STATUS_ACTIVE,
@@ -19,6 +27,8 @@ const {
   STATUS_DRAW,
   STATUS_DECLINED,
   STATUS_EXPIRED,
+  C4_COLUMNS,
+  C4_ROWS,
   CID,
   encodeGamePayload,
   decodeGamePayload,
@@ -72,7 +82,7 @@ function mention(userId) {
 }
 
 function deadlineTag(timestamp) {
-  return `<t:${Math.floor(Number(timestamp) / 1000)}:F>`;
+  return `<t:${Math.floor(Number(timestamp) / 1000)}:R>`;
 }
 
 function addStateMarker(container, state) {
@@ -81,160 +91,148 @@ function addStateMarker(container, state) {
   );
 }
 
-function challengeContainer(state) {
-  const lang = state.lang;
-  const container = new ContainerBuilder().setAccentColor(COLORS[state.status] || COLORS.pending);
+/* ------------------------------------------------------------------ *
+ * Symbole
+ * ------------------------------------------------------------------ */
 
-  if (state.status === STATUS_DECLINED) {
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        `# ${t('declinedTitle', lang)}\n\n${t('declinedBody', lang, {
-          challenger: mention(state.challengerId),
-          opponent: mention(state.opponentId),
-        })}`
-      )
-    );
-    addStateMarker(container, state);
-    return container;
-  }
+const TTT_EMPTY = '⬜';
+const TTT_P1 = '❌';
+const TTT_P2 = '⭕';
 
-  if (state.status === STATUS_EXPIRED) {
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        `# ${t('expiredTitle', lang)}\n\n${t('expiredBody', lang, {
-          challenger: mention(state.challengerId),
-          opponent: mention(state.opponentId),
-        })}`
-      )
-    );
-    addStateMarker(container, state);
-    return container;
-  }
+const C4_EMPTY = '⚫';
+const C4_P1 = '🔴';
+const C4_P2 = '🟡';
+const C4_WIN_P1 = '🟥';
+const C4_WIN_P2 = '🟨';
+const C4_DROP = '⬇️';
 
-  const body = [
-    `# ${t('challengeTitle', lang)}`,
-    '',
-    `## ⚡ ${gameName(state.game, lang)}`,
-    '',
-    t('challengeBody', lang, {
-      challenger: mention(state.challengerId),
-      opponent: mention(state.opponentId),
-      game: gameName(state.game, lang),
-    }),
-    '',
-    t('challengeDeadline', lang, { deadline: deadlineTag(state.expiresAt) }),
-  ].join('\n');
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(body));
-  addStateMarker(container, state);
-  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-  container.addActionRowComponents(
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(CID.accept).setStyle(ButtonStyle.Success).setLabel(`   ${t('btnAccept', lang)}   `),
-      new ButtonBuilder().setCustomId(CID.decline).setStyle(ButtonStyle.Danger).setLabel(`   ${t('btnDecline', lang)}   `)
-    )
-  );
-  return container;
-}
-
-function outcomeText(state) {
-  const lang = state.lang;
-  if (state.status === STATUS_WON) {
-    const loserId = state.winnerId === state.challengerId ? state.opponentId : state.challengerId;
-    return [
-      `# ${t('winnerTitle', lang)}`,
-      '',
-      t('winnerBody', lang, { winner: mention(state.winnerId), loser: mention(loserId) }),
-      '',
-      t('rematch', lang),
-    ].join('\n');
-  }
-  if (state.status === STATUS_DRAW) {
-    return [`# ${t('drawTitle', lang)}`, '', t('drawBody', lang), '', t('rematch', lang)].join('\n');
-  }
-  return '';
-}
-
-/** Gleich breite Button-Labels: ideografische Leerräume + immer ein Emoji. */
+/** Gleich breite Button-Labels: ideografische Leerräume um jedes Emoji. */
 const PAD = '\u3000';
 function wideLabel(emoji) {
   return `${PAD}${emoji}${PAD}`;
 }
 
-const TTT_EMPTY = '⬜';
-const TTT_P1 = '❌';
-const TTT_P2 = '⭕';
-const TTT_WIN_P1 = '❎';
-const TTT_WIN_P2 = '🔵';
+function tokenIcons(game) {
+  return game === GAME_CONNECT4 ? [C4_P1, C4_P2] : [TTT_P1, TTT_P2];
+}
 
-const C4_EMPTY = '⬛';
-const C4_P1 = '🔴';
-const C4_P2 = '🟡';
-const C4_WIN_P1 = '🟥';
-const C4_WIN_P2 = '🟨';
-const C4_COLS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣'];
+function gameIcons(game) {
+  return tokenIcons(game).join('');
+}
 
+/* ------------------------------------------------------------------ *
+ * Herausforderung
+ * ------------------------------------------------------------------ */
+
+function challengeContainer(state) {
+  const lang = state.lang;
+  const container = new ContainerBuilder().setAccentColor(COLORS[state.status] || COLORS.pending);
+
+  if (state.status === STATUS_DECLINED || state.status === STATUS_EXPIRED) {
+    const key = state.status === STATUS_DECLINED ? 'declined' : 'expired';
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `## ${t(`${key}Title`, lang)}`,
+          t(`${key}Body`, lang, {
+            challenger: mention(state.challengerId),
+            opponent: mention(state.opponentId),
+          }),
+        ].join('\n')
+      )
+    );
+    addStateMarker(container, state);
+    return container;
+  }
+
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      [
+        `## ${gameIcons(state.game)} ${gameName(state.game, lang)}`,
+        t('challengeLine', lang, {
+          challenger: mention(state.challengerId),
+          opponent: mention(state.opponentId),
+        }),
+        t('deadlineShort', lang, { deadline: deadlineTag(state.expiresAt) }),
+      ].join('\n')
+    )
+  );
+  addStateMarker(container, state);
+  container.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(CID.accept).setStyle(ButtonStyle.Success).setLabel(t('btnAccept', lang)),
+      new ButtonBuilder().setCustomId(CID.decline).setStyle(ButtonStyle.Secondary).setLabel(t('btnDecline', lang))
+    )
+  );
+  return container;
+}
+
+/* ------------------------------------------------------------------ *
+ * Gemeinsame Spielfeld-Bausteine
+ * ------------------------------------------------------------------ */
+
+/**
+ * Kopfzeile jedes Spielfelds: Titel, beide Spieler mit ihrem Symbol und –
+ * solange gespielt wird – eine klare Zug-Zeile. Bewusst knapp, damit das
+ * Spielfeld selbst im Vordergrund steht.
+ */
 function battleHeader(state) {
   const lang = state.lang;
-  const title = t(state.game === GAME_CONNECT4 ? 'c4Title' : 'tttTitle', lang);
-  const symbols = state.game === GAME_CONNECT4
-    ? `${C4_P1} ${mention(state.challengerId)}\n${C4_P2} ${mention(state.opponentId)}`
-    : `${TTT_P1} ${mention(state.challengerId)}\n${TTT_P2} ${mention(state.opponentId)}`;
+  const [icon1, icon2] = tokenIcons(state.game);
   const lines = [
-    `# ${title}`,
-    '',
-    `## ${t('battleVs', lang, {
-      challenger: mention(state.challengerId),
-      opponent: mention(state.opponentId),
-    })}`,
-    '',
-    symbols,
+    `## ${gameIcons(state.game)} ${gameName(state.game, lang)}`,
+    `${icon1} ${mention(state.challengerId)}　${PAD}${icon2} ${mention(state.opponentId)}`,
   ];
-  if (state.status === STATUS_ACTIVE) lines.push('', t('turn', lang, { player: mention(state.turn) }));
+  if (state.status === STATUS_ACTIVE) {
+    const icon = state.turn === state.challengerId ? icon1 : icon2;
+    lines.push(t('turn', lang, { player: `${mention(state.turn)} ${icon}` }));
+  }
   return lines.join('\n');
 }
 
-function tttGlyph(state, cell) {
-  const token = state.board[cell];
-  const win = state.winningCells.includes(cell);
-  if (token === 1) return win ? TTT_WIN_P1 : TTT_P1;
-  if (token === 2) return win ? TTT_WIN_P2 : TTT_P2;
-  return TTT_EMPTY;
+function outcomeText(state) {
+  const lang = state.lang;
+  if (state.status === STATUS_WON) {
+    return `### ${t('winnerShort', lang, { winner: mention(state.winnerId) })}\n${t('rematchShort', lang)}`;
+  }
+  if (state.status === STATUS_DRAW) {
+    return `### ${t('drawShort', lang)}\n${t('rematchShort', lang)}`;
+  }
+  return '';
 }
 
-function tttBoard(state) {
-  const rows = [];
-  for (let row = 0; row < 3; row += 1) {
-    const cells = [0, 1, 2].map((col) => tttGlyph(state, row * 3 + col));
-    rows.push(cells.join(' ┃ '));
-    if (row < 2) rows.push('━━━━╋━━━━╋━━━━');
-  }
-  return rows.join('\n');
+function addOutcome(container, state) {
+  if (state.status !== STATUS_WON && state.status !== STATUS_DRAW) return;
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(outcomeText(state)));
+}
+
+/* ------------------------------------------------------------------ *
+ * Tic-Tac-Toe – genau ein Spielfeld, nämlich die Buttons
+ * ------------------------------------------------------------------ */
+
+function tttGlyph(state, cell) {
+  const token = state.board[cell];
+  if (token === 1) return TTT_P1;
+  if (token === 2) return TTT_P2;
+  return TTT_EMPTY;
 }
 
 function tttCellButton(state, cell) {
   const token = state.board[cell];
-  const complete = state.status !== STATUS_ACTIVE;
   const win = state.winningCells.includes(cell);
   let style = ButtonStyle.Secondary;
-  if (token === 1) style = ButtonStyle.Danger;
-  if (token === 2) style = ButtonStyle.Primary;
   if (win) style = ButtonStyle.Success;
   return new ButtonBuilder()
     .setCustomId(CID.tttMove(cell))
     .setStyle(style)
     .setLabel(wideLabel(tttGlyph(state, cell)))
-    .setDisabled(complete || Boolean(token));
+    .setDisabled(state.status !== STATUS_ACTIVE || Boolean(token));
 }
 
 function tttContainer(state) {
   const container = new ContainerBuilder().setAccentColor(COLORS[state.status] || COLORS.active);
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`${battleHeader(state)}\n\n${tttBoard(state)}`)
-  );
-  if (state.status === STATUS_WON || state.status === STATUS_DRAW) {
-    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(outcomeText(state)));
-  }
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(battleHeader(state)));
   addStateMarker(container, state);
   container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   for (let row = 0; row < 3; row += 1) {
@@ -246,8 +244,13 @@ function tttContainer(state) {
       )
     );
   }
+  addOutcome(container, state);
   return container;
 }
+
+/* ------------------------------------------------------------------ *
+ * Vier Gewinnt – 5 Spalten, 5 Buttons, eine Reihe
+ * ------------------------------------------------------------------ */
 
 function c4Glyph(board, cell, winningCells = []) {
   const token = board[cell];
@@ -257,54 +260,53 @@ function c4Glyph(board, cell, winningCells = []) {
   return C4_EMPTY;
 }
 
+/**
+ * 5×6-Raster ohne Spaltennummern – die Buttons stehen direkt darunter.
+ * Die vier Gewinnsteine werden als Quadrate hervorgehoben.
+ */
 function connect4Board(board, winningCells = []) {
-  const header = C4_COLS.join(' ');
   const rows = [];
-  for (let row = 0; row < 6; row += 1) {
+  for (let row = 0; row < C4_ROWS; row += 1) {
     const cells = [];
-    for (let col = 0; col < 7; col += 1) {
-      cells.push(c4Glyph(board, row * 7 + col, winningCells));
+    for (let col = 0; col < C4_COLUMNS; col += 1) {
+      cells.push(c4Glyph(board, row * C4_COLUMNS + col, winningCells));
     }
-    rows.push(cells.join(' '));
+    rows.push(cells.join(PAD));
   }
-  return [header, ...rows].join('\n');
+  return rows.join('\n');
 }
 
+/**
+ * Ein Drop-Button pro Spalte. Weil es genau fünf Spalten gibt, passen alle
+ * Buttons in eine Action-Row und stehen dadurch bündig unter „ihrer“ Spalte.
+ */
 function columnButton(state, column) {
   const full = Boolean(state.board[column]);
-  const style = full
-    ? ButtonStyle.Secondary
-    : column % 2 === 0
-      ? ButtonStyle.Primary
-      : ButtonStyle.Success;
   return new ButtonBuilder()
     .setCustomId(CID.connect4Move(column))
-    .setStyle(style)
-    .setLabel(wideLabel(C4_COLS[column]))
+    .setStyle(full ? ButtonStyle.Secondary : ButtonStyle.Primary)
+    .setLabel(wideLabel(C4_DROP))
     .setDisabled(state.status !== STATUS_ACTIVE || full);
 }
 
 function connect4Container(state) {
   const container = new ContainerBuilder().setAccentColor(COLORS[state.status] || COLORS.active);
   container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(
-      `${battleHeader(state)}\n\n${connect4Board(state.board, state.winningCells)}`
+    new TextDisplayBuilder().setContent(`${battleHeader(state)}\n\n${connect4Board(state.board, state.winningCells)}`)
+  );
+  addStateMarker(container, state);
+  container.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      ...Array.from({ length: C4_COLUMNS }, (_, column) => columnButton(state, column))
     )
   );
-  if (state.status === STATUS_ACTIVE) {
-    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`*${t('c4Drop', state.lang)}*`));
-  } else if (state.status === STATUS_WON || state.status === STATUS_DRAW) {
-    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(outcomeText(state)));
-  }
-  addStateMarker(container, state);
-  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-  container.addActionRowComponents(
-    new ActionRowBuilder().addComponents(...[0, 1, 2, 3].map((column) => columnButton(state, column))),
-    new ActionRowBuilder().addComponents(...[4, 5, 6].map((column) => columnButton(state, column)))
-  );
+  addOutcome(container, state);
   return container;
 }
+
+/* ------------------------------------------------------------------ *
+ * Zusammenbau
+ * ------------------------------------------------------------------ */
 
 function buildGameContainer(state) {
   if (state.status === STATUS_PENDING || state.status === STATUS_DECLINED || state.status === STATUS_EXPIRED) {

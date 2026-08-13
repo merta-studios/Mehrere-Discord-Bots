@@ -26,7 +26,18 @@ const VALID_STATUSES = [
 ];
 
 const CHALLENGE_TTL_MS = 60 * 60 * 1000;
-const GAME_MARKER = 'mgame::v1::';
+
+// Vier Gewinnt läuft auf 5 Spalten × 6 Reihen. Discord erlaubt maximal fünf
+// Buttons pro Action-Row – mit fünf Spalten steht deshalb genau ein Button
+// unter genau einer Spalte und niemand muss Spalten abzählen.
+const C4_COLUMNS = 5;
+const C4_ROWS = 6;
+const C4_SIZE = C4_COLUMNS * C4_ROWS;
+const TTT_SIZE = 9;
+
+// v2, weil sich die Brettgröße von Vier Gewinnt geändert hat: alte Marker
+// werden bewusst nicht mehr gelesen statt falsch interpretiert zu werden.
+const GAME_MARKER = 'mgame::v2::';
 const LANG_MARKER = 'mgcfg::v1::';
 const VALID_LANGS = ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it'];
 
@@ -42,8 +53,12 @@ function normalizeLang(code) {
   return VALID_LANGS.includes(value) ? value : 'en';
 }
 
+function boardSize(game) {
+  return game === GAME_CONNECT4 ? C4_SIZE : TTT_SIZE;
+}
+
 function emptyBoard(game) {
-  return Array(game === GAME_CONNECT4 ? 42 : 9).fill(0);
+  return Array(boardSize(game)).fill(0);
 }
 
 function createChallenge({ game, challengerId, opponentId, lang = 'en', now = Date.now() }) {
@@ -72,7 +87,7 @@ function normalizeState(input) {
   const opponentId = String(input.opponentId || '');
   if (!challengerId || !opponentId || challengerId === opponentId) return null;
 
-  const expectedSize = input.game === GAME_CONNECT4 ? 42 : 9;
+  const expectedSize = boardSize(input.game);
   const rawBoard = Array.isArray(input.board) ? input.board : [];
   const board = Array.from({ length: expectedSize }, (_, i) => {
     const value = Number(rawBoard[i]);
@@ -235,8 +250,8 @@ function tttWinner(board) {
 }
 
 function connect4Winner(board, lastCell) {
-  const row = Math.floor(lastCell / 7);
-  const col = lastCell % 7;
+  const row = Math.floor(lastCell / C4_COLUMNS);
+  const col = lastCell % C4_COLUMNS;
   const token = board[lastCell];
   if (!token) return null;
 
@@ -245,8 +260,8 @@ function connect4Winner(board, lastCell) {
     for (const sign of [-1, 1]) {
       let r = row + dr * sign;
       let c = col + dc * sign;
-      while (r >= 0 && r < 6 && c >= 0 && c < 7 && board[r * 7 + c] === token) {
-        cells.push(r * 7 + c);
+      while (r >= 0 && r < C4_ROWS && c >= 0 && c < C4_COLUMNS && board[r * C4_COLUMNS + c] === token) {
+        cells.push(r * C4_COLUMNS + c);
         r += dr * sign;
         c += dc * sign;
       }
@@ -277,10 +292,12 @@ function applyMove(state, userId, position, now = Date.now()) {
     if (board[cell]) return { error: 'cell_taken', state: s };
   } else {
     const column = Number(position);
-    if (!Number.isInteger(column) || column < 0 || column >= 7) return { error: 'invalid_move', state: s };
-    for (let row = 5; row >= 0; row -= 1) {
-      if (!board[row * 7 + column]) {
-        cell = row * 7 + column;
+    if (!Number.isInteger(column) || column < 0 || column >= C4_COLUMNS) {
+      return { error: 'invalid_move', state: s };
+    }
+    for (let row = C4_ROWS - 1; row >= 0; row -= 1) {
+      if (!board[row * C4_COLUMNS + column]) {
+        cell = row * C4_COLUMNS + column;
         break;
       }
     }
@@ -333,7 +350,7 @@ function parseCustomId(customId) {
   if (id === CID.decline) return { kind: 'decline' };
   let match = id.match(/^mg_ttt_([0-8])$/);
   if (match) return { kind: 'move', game: GAME_TTT, position: Number(match[1]) };
-  match = id.match(/^mg_c4_([0-6])$/);
+  match = id.match(new RegExp(`^mg_c4_([0-${C4_COLUMNS - 1}])$`));
   if (match) return { kind: 'move', game: GAME_CONNECT4, position: Number(match[1]) };
   return null;
 }
@@ -349,11 +366,16 @@ module.exports = {
   STATUS_DECLINED,
   STATUS_EXPIRED,
   CHALLENGE_TTL_MS,
+  C4_COLUMNS,
+  C4_ROWS,
+  C4_SIZE,
+  TTT_SIZE,
   GAME_MARKER,
   LANG_MARKER,
   VALID_LANGS,
   CID,
   normalizeLang,
+  boardSize,
   emptyBoard,
   createChallenge,
   normalizeState,
