@@ -169,10 +169,25 @@ async function handleRoleButton(ctx, interaction, { roleId }) {
         .filter((id) => id !== roleId && member.roles.cache.has(id));
       if (others.length) {
         swappedFrom = others[0];
-        await member.roles.remove(others, 'Self-Roles: Einzelauswahl – alte Rolle abgelegt');
+        // Atomischer Wechsel: alle Alt-Rollen dieser Nachricht raus, die neue rein.
+        // Ein einziger API-Call → Discord feuert nur EIN guildMemberUpdate-Event,
+        // wodurch unser zentraler Rollen-Logging-Handler den Wechsel als „swap“
+        // erkennt und nur eine DM statt zwei (remove + give) schickt.
+        const currentIds = Array.from(member.roles.cache.keys());
+        const nextIds = currentIds.filter((id) => !others.includes(id));
+        if (!nextIds.includes(roleId)) nextIds.push(roleId);
+        if (typeof member.roles.set === 'function') {
+          await member.roles.set(nextIds, 'Self-Roles: Einzelauswahl – Rollen getauscht');
+        } else {
+          await member.roles.remove(others, 'Self-Roles: Einzelauswahl – alte Rolle abgelegt');
+          await member.roles.add(roleId, 'Self-Roles: Rolle per Button gewählt');
+        }
+      } else {
+        await member.roles.add(roleId, 'Self-Roles: Rolle per Button gewählt');
       }
+    } else {
+      await member.roles.add(roleId, 'Self-Roles: Rolle per Button gewählt');
     }
-    await member.roles.add(roleId, 'Self-Roles: Rolle per Button gewählt');
 
     const text = swappedFrom
       ? t('roleSwapped', lang, { role: `<@&${roleId}>`, old: `<@&${swappedFrom}>` })
@@ -182,15 +197,10 @@ async function handleRoleButton(ctx, interaction, { roleId }) {
     // auch bei einer zickigen API garantiert rausgeht.
     await safeRefresh(ctx, entry, { force: true });
 
-    // Rollen-Logging per Privat-DM
-    void sendRoleLoggingDm({
-      ctx,
-      guild,
-      user: interaction.user,
-      role,
-      action: swappedFrom ? 'swap' : 'give',
-      oldRole: swappedFrom ? (guild.roles.cache.get(swappedFrom) || { name: 'Rolle' }) : null,
-    });
+    // Hinweis: Die Rollen-Logging-DM wird zentral im guildMemberUpdate-Listener
+    // (index.js) verschickt – für ALLE Rollen des Servers, nicht nur für
+    // Self-Roles-Rollen. Hier gibt es deshalb absichtlich keinen separaten
+    // sendRoleLoggingDm-Aufruf mehr, sonst käme die DM doppelt an.
 
     return safeEditReply(interaction, privatePayload([smallContainer(null, text)]));
   } catch (err) {
@@ -244,14 +254,8 @@ async function handleDropButton(ctx, interaction, { roleId, channelId, messageId
     if (entry) await safeRefresh(ctx, entry, { force: true });
     else await ctx.store.refreshForRole(guild.id, roleId, { force: true }).catch(() => {});
 
-    // Rollen-Logging per Privat-DM
-    void sendRoleLoggingDm({
-      ctx,
-      guild,
-      user: interaction.user,
-      role,
-      action: 'remove',
-    });
+    // Hinweis: Rollen-Logging-DM wird zentral im guildMemberUpdate-Listener
+    // (index.js) verschickt – hier absichtlich kein doppelter Aufruf mehr.
 
     return safeEditReply(
       interaction,
@@ -501,6 +505,105 @@ async function sendRoleLoggingDm({ ctx, guild, user, role, action, oldRole = nul
   }
 }
 
+/**
+ * Zentraler Handler für das Discord-Event `guildMemberUpdate`.
+ *
+ * Wird ausgelöst, sobald sich die Rollen eines Mitglieds ändern – egal wodurch
+ * (Self-Role-Button, Admin per Hand, anderer Bot, …). Wir tun zwei Dinge:
+ *  1) Zähler unserer Self-Role-Nachrichten aktualisieren, falls betroffen.
+ *  2) Dem Nutzer eine humorvolle Privat-DM schicken – für JEDE gewöhnliche
+ *     Rolle, die er bekommen oder verloren hat. Bots, `@everyone` und
+ *     integrationsverwaltete Rollen (Booster, Bot-Rollen, …) werden übersprungen.
+ */
+async function handleGuildMemberUpdate(ctx, oldMember, newMember) {
+  try {
+    const before = oldMember?.roles?.cache;
+    const after = newMember?.roles?.cache;
+    if (!before || !after) return;
+
+    const added = [];
+    const removed = [];
+    for (const id of before.keys()) if (!after.has(id)) removed.push(id);
+    for (const id of after.keys()) if (!before.has(id)) added.push(id);
+    if (!added.length && !removed.length) return;
+
+    const guild = newMember.guild;
+    const guildId = guild?.id;
+    if (!guildId) return;
+
+    // 1) Zähler in unseren Self-Role-Nachrichten mitziehen (no-op, falls die
+    //    Rolle in keiner unserer Nachrichten vorkommt).
+    for (const roleId of [...added, ...removed]) {
+      try {
+        await ctx.store?.refreshForRole?.(guildId, roleId, { force: false });
+      } catch (err) {
+        ctx?.logger?.warn?.('[self-roles-bot] Live-Update fehlgeschlagen:', err.message);
+      }
+    }
+
+    // 2) DMs verschicken – NIE an Bots.
+    if (newMember.user?.bot) return;
+
+    const isRelevantRole = (roleId) => {
+      if (!roleId) return false;
+      if (roleId === guildId) return false; // @everyone
+      const role = guild.roles?.cache?.get?.(roleId);
+      if (!role) return true; // Rolle nicht im Cache → trotzdem melden
+      if (role.managed) return false; // Booster/Integrationsrollen ignorieren
+      return true;
+    };
+
+    const user = newMember.user || { id: newMember.id, createDM: newMember.createDM?.bind(newMember) };
+
+    // Einzel-Swap (genau eine rein, genau eine raus) als „swap“ melden –
+    // typisch für den Single-Modus einer Self-Role-Nachricht.
+    if (added.length === 1 && removed.length === 1) {
+      const newRoleId = added[0];
+      const oldRoleId = removed[0];
+      const newRelevant = isRelevantRole(newRoleId);
+      const oldRelevant = isRelevantRole(oldRoleId);
+      if (newRelevant || oldRelevant) {
+        const newRole = guild.roles?.cache?.get?.(newRoleId) || { id: newRoleId, name: 'Rolle' };
+        const oldRole = guild.roles?.cache?.get?.(oldRoleId) || { id: oldRoleId, name: 'Rolle' };
+        await sendRoleLoggingDm({
+          ctx,
+          guild,
+          user,
+          role: newRole,
+          action: 'swap',
+          oldRole,
+        });
+        return;
+      }
+    }
+
+    for (const roleId of added) {
+      if (!isRelevantRole(roleId)) continue;
+      const role = guild.roles?.cache?.get?.(roleId) || { id: roleId, name: 'Rolle' };
+      await sendRoleLoggingDm({
+        ctx,
+        guild,
+        user,
+        role,
+        action: 'give',
+      });
+    }
+    for (const roleId of removed) {
+      if (!isRelevantRole(roleId)) continue;
+      const role = guild.roles?.cache?.get?.(roleId) || { id: roleId, name: 'Rolle' };
+      await sendRoleLoggingDm({
+        ctx,
+        guild,
+        user,
+        role,
+        action: 'remove',
+      });
+    }
+  } catch (err) {
+    ctx?.logger?.warn?.('[self-roles-bot] guildMemberUpdate-Fehler:', err.message);
+  }
+}
+
 module.exports = {
   handleInteraction,
   handleRoleButton,
@@ -510,4 +613,5 @@ module.exports = {
   ensureEntry,
   canBotManageRole,
   sendRoleLoggingDm,
+  handleGuildMemberUpdate,
 };
