@@ -51,6 +51,11 @@ const {
   createCountingState,
   failureText,
   FAIL_VARIANTS,
+  RAGE_VARIANTS,
+  FREAKOUT_PINGS,
+  shouldFreakout,
+  pingBomb,
+  buildFreakoutLines,
   buildCountingTopic,
   parseCountingTopic,
   stripCountingTopic,
@@ -524,6 +529,31 @@ test('Es gibt mehrere abwechslungsreiche Spott-Texte in allen Sprachen', () => {
       assert.ok(T[`countFail${i}`][lang], `countFail${i} fehlt in ${lang}`);
     }
   }
+
+  // Die Durchdreh-Bausteine müssen ebenfalls in allen Sprachen vorliegen.
+  for (let i = 1; i <= RAGE_VARIANTS; i += 1) {
+    for (const lang of ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it']) {
+      assert.ok(T[`countRageTitle${i}`][lang], `countRageTitle${i} fehlt in ${lang}`);
+      assert.ok(T[`countRageBody${i}`][lang], `countRageBody${i} fehlt in ${lang}`);
+    }
+  }
+});
+
+test('Beim Durchdrehen pingt der Bot mehrfach und mischt Wut-Titel mit Nachtretern', () => {
+  assert.equal(shouldFreakout(() => 0, 0.35), true);
+  assert.equal(shouldFreakout(() => 0.99, 0.35), false);
+
+  const vars = { user: '<@u42>', expected: 6, got: 9 };
+  const pings = pingBomb(vars);
+  assert.equal(pings.split(' ').filter(Boolean).length, FREAKOUT_PINGS);
+  assert.ok(pings.includes('<@u42>'));
+
+  const lines = buildFreakoutLines('de', vars, () => 0);
+  assert.equal(lines.length, 3, 'Titel, Ping-Salve und Nachtreter');
+  assert.match(lines[0], /WIE KONNTEST DU NUR/);
+  assert.equal(lines[1].split(' ').filter(Boolean).length, FREAKOUT_PINGS + 2, 'Pings plus 🔔-Rahmen');
+  assert.match(lines[2], /6/);
+  assert.match(lines[2], /9/);
 });
 
 test('Das Kanal-Thema trägt sichtbaren Hinweis und unsichtbaren Marker', () => {
@@ -602,6 +632,49 @@ test('Counting-Reaktionsschutz lädt Partials nach einem Neustart nach', async (
   );
   assert.equal(handled, true);
   assert.deepEqual(removed, ['user-after-restart']);
+});
+
+test('Falsche Zahl dreht manchmal durch: mehrere Nachrichten inkl. Ping-Salve', async () => {
+  const sent = [];
+  const channel = {
+    id: 'counting',
+    guildId: 'guild',
+    topic: buildCountingTopic('', 4, 'de'),
+    send: async (payload) => {
+      sent.push(payload.content);
+      return payload;
+    },
+    setTopic: async () => {},
+  };
+  const ctx = {
+    client: { user: { id: 'minigames-bot' } },
+    logger: { warn() {} },
+    store: { withLock: async (_key, fn) => fn(), getServerLang: () => 'de' },
+  };
+  // random = () => 0 erzwingt das Durchdrehen; ohne Pause bleibt der Test schnell.
+  const manager = createCountingManager(ctx, {
+    random: () => 0,
+    freakoutChance: 1,
+    messageDelayMs: 0,
+  });
+
+  const result = await manager.handleMessage({
+    guildId: 'guild',
+    author: { id: 'noob', bot: false },
+    webhookId: null,
+    system: false,
+    content: '999',
+    channel,
+    react: async () => {},
+    delete: async () => {},
+  });
+
+  assert.equal(result.action, 'reset');
+  assert.equal(result.reason, 'wrong');
+  assert.equal(sent.length, 3, 'Titel, Ping-Salve, Nachtreter');
+  assert.ok(sent[1].includes('<@noob>'), 'die Ping-Salve erwähnt den Übeltäter');
+  assert.ok(sent[1].split(' ').filter((part) => part === '<@noob>').length >= FREAKOUT_PINGS);
+  manager.shutdown();
 });
 
 function fakeVoiceChannel(id, memberIds = []) {
@@ -714,6 +787,72 @@ test('Voice-Manager joint stumm/taub, erkennt die Verbindung und verlässt sie w
   assert.equal(manager.isConnected(guild), false);
   assert.equal(manager.currentChannel(guild), null);
   assert.equal(manager.desired.size, 0);
+  manager.shutdown();
+});
+
+test('Voice-Manager akzeptiert den sichtbaren Call auch wenn Audio-Ready nie kommt', async () => {
+  const channels = new Map([['busy', fakeVoiceChannel('busy', ['u1', 'u2'])]]);
+  const guild = {
+    id: 'g1',
+    name: 'Testserver',
+    voiceAdapterCreator() {},
+    members: { me: { voice: { channelId: null, channel: null } } },
+    channels: { cache: channels, fetch: async () => channels },
+  };
+  const client = Object.assign(new EventEmitter(), {
+    user: { id: 'bot' },
+    guilds: { cache: new Map([['g1', guild]]) },
+  });
+
+  const statuses = {
+    Ready: 'ready',
+    Connecting: 'connecting',
+    Signalling: 'signalling',
+    Disconnected: 'disconnected',
+    Destroyed: 'destroyed',
+  };
+  let connection = null;
+  const voice = {
+    VoiceConnectionStatus: statuses,
+    getVoiceConnection: () => connection,
+    joinVoiceChannel: (options) => {
+      connection = Object.assign(new EventEmitter(), {
+        joinConfig: { channelId: options.channelId },
+        state: { status: statuses.Connecting },
+        setSpeaking() {},
+        rejoin() {
+          return true;
+        },
+        destroy() {
+          const old = this.state;
+          this.state = { status: statuses.Destroyed };
+          this.emit('stateChange', old, this.state);
+        },
+      });
+      // Discord bestätigt den Bot sichtbar im Call, die Audio-Verbindung
+      // (UDP) bleibt aber für immer im Connecting-Zustand hängen.
+      setImmediate(() => {
+        guild.members.me.voice.channelId = options.channelId;
+        guild.members.me.voice.channel = channels.get(options.channelId);
+      });
+      return connection;
+    },
+    entersState: async () => {
+      throw new Error('entersState darf nicht mehr der alleinige Maßstab sein');
+    },
+  };
+
+  const manager = createVoicePresenceManager(
+    { client, logger: { warn() {} } },
+    { voice, random: () => 0, watchdogIntervalMs: 1_000_000, readyTimeoutMs: 5_000 }
+  );
+
+  const joined = await manager.joinGuild(guild);
+  assert.equal(joined.ok, true, 'sichtbar im Call zählt als verbunden');
+  assert.equal(joined.channel.id, 'busy');
+  assert.equal(connection.state.status, statuses.Connecting, 'Verbindung bleibt bestehen, wird nicht abgerissen');
+  assert.equal(manager.isConnected(guild), true);
+  assert.equal(manager.currentChannel(guild).id, 'busy');
   manager.shutdown();
 });
 

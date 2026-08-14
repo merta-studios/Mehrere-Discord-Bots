@@ -98,7 +98,9 @@ weiter; eine Datenbank ist nicht erforderlich.
   anderen Bots hinzugefügte Reaktion wird wieder entfernt – auch ein zusätzliches
   **✅** oder **❌**. Die Reaktion des Minigames-Bots selbst bleibt bestehen.
 - **Falsche Zahl → Neustart bei 1**, und der Bot outet die Person mit einem von
-  sechs wechselnden Sprüchen (in allen 10 Sprachen).
+  zwölf wechselnden Sprüchen (in allen 10 Sprachen). Hin und wieder **dreht der
+  Bot komplett durch**: Er feuert einen Wut-Ausruf ab, pingt den Übeltäter mehrfach
+  in einer Ping-Salve und legt mit einem Nachtreter nach.
 - **Zwei Zahlen derselben Person hintereinander** → Nachricht wird nur
   **gelöscht**, der Zählstand bleibt stehen.
 - **Text statt Zahl** → Nachricht wird ebenfalls nur gelöscht, kein Neustart.

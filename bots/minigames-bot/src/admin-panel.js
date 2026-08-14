@@ -181,10 +181,11 @@ async function renderDetailPayload(ctx, userId, guildId) {
   }
 
   const games = ctx.store.countGames(guildId);
-  const voiceChannel =
-    ctx.voiceManager?.currentChannel?.(guild) || guild.members?.me?.voice?.channel || null;
-  const voiceConnected =
-    ctx.voiceManager?.isConnected?.(guild) || Boolean(guild.members?.me?.voice?.channelId);
+  // Der Voice-Manager ist die einzige Wahrheitsquelle. Der Discord.js-Cache
+  // (`guild.members.me.voice`) kann nach einem Join/Leave noch veraltet sein
+  // und würde sonst den falschen Button anzeigen.
+  const voiceChannel = ctx.voiceManager?.currentChannel?.(guild) || null;
+  const voiceConnected = ctx.voiceManager?.isConnected?.(guild) || false;
   const voiceStatus = voiceConnected
     ? voiceChannel?.id
       ? `🔊 <#${voiceChannel.id}>`

@@ -12,6 +12,8 @@
  * - Niemand darf zwei Zahlen hintereinander schreiben.
  * - Richtige Zahl → ✅, falsche Zahl → ❌, Neustart bei 1 und die Person
  *   wird (mit wechselnden Sprüchen) geoutet.
+ * - Bei einer falschen Zahl dreht der Bot hin und wieder komplett durch:
+ *   Wut-Ausruf, mehrfache Ping-Salve und Nachtreter in mehreren Nachrichten.
  * - Zwei Zahlen derselben Person hintereinander → Nachricht wird nur
  *   gelöscht, der Zählstand bleibt.
  * - Text statt Zahl → Nachricht wird gelöscht, der Zählstand bleibt.
@@ -29,7 +31,15 @@ const TOPIC_UPDATE_INTERVAL_MS = 10 * 60 * 1000;
 const TOPIC_MAX_LENGTH = 1024;
 const RECOVERY_SCAN_LIMIT = 100;
 /** Anzahl der Spott-Varianten in `languages.js` (countFail1 … countFailN). */
-const FAIL_VARIANTS = 6;
+const FAIL_VARIANTS = 12;
+/** Anzahl der „Durchdreh“-Bausteine in `languages.js` (countRageTitle1…/Body1…). */
+const RAGE_VARIANTS = 4;
+/** Wie oft der Bot beim Durchdrehen den Übeltäter in einem Rutsch pingt. */
+const FREAKOUT_PINGS = 10;
+/** Wahrscheinlichkeit, dass der Bot bei einer falschen Zahl „durchdreht“. */
+const FREAKOUT_CHANCE = 0.35;
+/** Kleine Pause zwischen den Nachrichten des Ausrasters (Rate-Limit-Schutz). */
+const FREAKOUT_MESSAGE_DELAY_MS = 400;
 
 const OK_EMOJI = '✅';
 const FAIL_EMOJI = '❌';
@@ -87,6 +97,35 @@ function failureText(lang, vars, index = Math.floor(Math.random() * FAIL_VARIANT
   return t(`countFail${variant + 1}`, lang, vars);
 }
 
+/** Entscheidet zufällig, ob der Bot bei einer falschen Zahl „durchdreht“. */
+function shouldFreakout(random = Math.random, chance = FREAKOUT_CHANCE) {
+  return Number(random()) < Math.max(0, Math.min(1, Number(chance) || 0));
+}
+
+/** Pings den Übeltäter mehrfach in einem Rutsch – der reine Dramatik-Effekt. */
+function pingBomb(vars) {
+  const mention = String(vars?.user || '').trim();
+  if (!mention) return '';
+  return Array.from({ length: FREAKOUT_PINGS }, () => mention).join(' ');
+}
+
+/**
+ * Baut einen „Ausrast-Moment": ein Wut-Ausruf, eine Ping-Salve und eine
+ * Nachtreter-Zeile. Titel und Nachtreter werden unabhängig gewürfelt, sodass
+ * sich die Varianten mischen (RAGE_VARIANTS × RAGE_VARIANTS Kombinationen).
+ * → Array aus Nachrichten-Texten (ohne Discord-Mentions zu unterdrücken).
+ */
+function buildFreakoutLines(lang, vars, random = Math.random) {
+  const pick = (max) => Math.min(max - 1, Math.max(0, Math.floor(Number(random()) * max)));
+  const title = t(`countRageTitle${pick(RAGE_VARIANTS) + 1}`, lang, vars);
+  const body = t(`countRageBody${pick(RAGE_VARIANTS) + 1}`, lang, vars);
+  const pings = pingBomb(vars);
+  const lines = [title];
+  if (pings) lines.push(`🔔 ${pings} 🔔`);
+  lines.push(body);
+  return lines;
+}
+
 /* ------------------------------------------------------------------ *
  * Kanal-Thema als Speicher
  * ------------------------------------------------------------------ */
@@ -138,7 +177,14 @@ function buildCountingTopic(topic, count, lang = 'en') {
  * Discord-Anbindung
  * ------------------------------------------------------------------ */
 
-function createCountingManager(ctx) {
+function createCountingManager(
+  ctx,
+  {
+    random = Math.random,
+    freakoutChance = FREAKOUT_CHANCE,
+    messageDelayMs = FREAKOUT_MESSAGE_DELAY_MS,
+  } = {}
+) {
   /** channelId -> { guildId, count, lastUserId, recovered, topicWrittenAt, timer, pending } */
   const channels = new Map();
 
@@ -313,6 +359,31 @@ function createCountingManager(ctx) {
     }
   }
 
+  /**
+   * Reagiert auf eine falsche Zahl. Meist gibt es einen einzelnen Spott-Spruch;
+   * hin und wieder „dreht der Bot durch" und feuert eine kleine Salve ab:
+   * Wut-Ausruf, Ping-Salve (mehrfaches Erwähnen des Übeltäters) und Nachtreter.
+   */
+  async function sendFailureReaction(channel, userId, lang, vars) {
+    const mentionOptions = { users: [userId], parse: [] };
+
+    if (!shouldFreakout(random, freakoutChance)) {
+      const text = failureText(lang, vars, Math.floor(Number(random()) * FAIL_VARIANTS));
+      await channel.send({ content: text, allowedMentions: mentionOptions }).catch(() => {});
+      return;
+    }
+
+    const lines = buildFreakoutLines(lang, vars, random);
+    for (const content of lines) {
+      await channel.send({ content, allowedMentions: mentionOptions }).catch(() => {});
+      if (content !== lines[lines.length - 1]) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, Math.max(0, Number(messageDelayMs) || 0));
+        });
+      }
+    }
+  }
+
   async function handleMessage(message) {
     // Bots und Webhooks spielen nicht mit.
     if (!message.guildId || message.author?.bot || message.webhookId || message.system) return null;
@@ -343,14 +414,12 @@ function createCountingManager(ctx) {
       entry.count = 0;
       entry.lastUserId = '';
       await message.react(FAIL_EMOJI).catch(() => {});
-      const text = failureText(lang, {
+      const vars = {
         user: `<@${message.author.id}>`,
         expected: result.expected,
         got: result.got,
-      });
-      await channel
-        .send({ content: text, allowedMentions: { users: [message.author.id], parse: [] } })
-        .catch(() => {});
+      };
+      await sendFailureReaction(channel, message.author.id, lang, vars);
       scheduleTopicUpdate(channel, entry, lang, true);
       return result;
     });
@@ -377,12 +446,19 @@ module.exports = {
   TOPIC_UPDATE_INTERVAL_MS,
   TOPIC_MAX_LENGTH,
   FAIL_VARIANTS,
+  RAGE_VARIANTS,
+  FREAKOUT_PINGS,
+  FREAKOUT_CHANCE,
+  FREAKOUT_MESSAGE_DELAY_MS,
   OK_EMOJI,
   FAIL_EMOJI,
   parseCountingNumber,
   createCountingState,
   evaluateCount,
   failureText,
+  shouldFreakout,
+  pingBomb,
+  buildFreakoutLines,
   parseCountingTopic,
   stripCountingTopic,
   buildCountingTopic,
