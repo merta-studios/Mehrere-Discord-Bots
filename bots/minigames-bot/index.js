@@ -7,11 +7,12 @@
  * Kanal-Thema) und überleben Neustarts.
  */
 
-const { GatewayIntentBits, ActivityType, Events, REST } = require('discord.js');
+const { GatewayIntentBits, Partials, ActivityType, Events, REST } = require('discord.js');
 
 const { createStore } = require('./src/store');
 const { createGameManager } = require('./src/game-manager');
 const { createCountingManager } = require('./src/counting');
+const { createVoicePresenceManager } = require('./src/voice-presence');
 const { startScheduler } = require('./src/scheduler');
 const { registerCommands } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
@@ -26,10 +27,16 @@ module.exports = {
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
     // Für das Counting-Spiel müssen die Zahlen im Channel gelesen werden.
     GatewayIntentBits.MessageContent,
+    // Die Owner-Funktion „Call joinen“ braucht Voice-State/Server-Updates.
+    GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.DirectMessages,
   ],
+  // So werden fremde Reaktionen auch auf älteren, nicht mehr gecachten
+  // Counting-Nachrichten zuverlässig entfernt.
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 
   async create({ client, token, logger, env }) {
     const ctx = {
@@ -52,6 +59,7 @@ module.exports = {
     };
     ctx.gameManager = createGameManager(ctx);
     ctx.countingManager = createCountingManager(ctx);
+    ctx.voiceManager = createVoicePresenceManager(ctx);
 
     const updatePresence = () => {
       const activeGames = ctx.store.allGames().length;
@@ -104,6 +112,12 @@ module.exports = {
       });
     });
 
+    client.on(Events.MessageReactionAdd, (reaction, user) => {
+      void ctx.countingManager.handleReactionAdd(reaction, user).catch((err) => {
+        logger.warn('[minigames-bot] Counting-Reaktionsfehler:', err.message);
+      });
+    });
+
     client.on(Events.MessageDelete, (message) => {
       if (!message.guildId) return;
       ctx.gameManager.untrack(message.guildId, message.channelId, message.id);
@@ -117,6 +131,7 @@ module.exports = {
     client.on(Events.GuildDelete, (guild) => {
       ctx.gameManager.deleteGuild(guild.id);
       ctx.countingManager.forgetGuild(guild.id);
+      ctx.voiceManager.forgetGuild(guild.id);
       logger.info(`[minigames-bot] Server „${guild.name}“ verlassen/entfernt – Cache bereinigt.`);
     });
 

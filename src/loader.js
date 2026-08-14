@@ -9,6 +9,7 @@
  *     name: 'Mein Bot',
  *     tokenEnv: 'MEIN_BOT_TOKEN',          // Name der Env-Variable mit dem Token
  *     intents: [GatewayIntentBits.Guilds], // gewünschte Intents
+ *     partials: [],                        // optionale Discord-Partials
  *     async create({ client, token, logger, env, status }) { ... }
  *   };
  *
@@ -64,7 +65,10 @@ async function startAll({ logger, env }) {
       logger.info(`[${botId}] Nutzt aus Kompatibilitätsgründen Token aus „${selectedTokenEnv}“`);
     }
 
-    const client = new Client({ intents: bot.intents || [GatewayIntentBits.Guilds] });
+    const client = new Client({
+      intents: bot.intents || [GatewayIntentBits.Guilds],
+      partials: Array.isArray(bot.partials) ? bot.partials : [],
+    });
 
     client.on('error', (err) => logger.error(`[${botId}] Client-Fehler:`, err.message));
     client.on('warn', (msg) => logger.warn(`[${botId}] Warnung:`, msg));

@@ -2,7 +2,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { MessageFlags } = require('discord.js');
+const { EventEmitter } = require('node:events');
+const { MessageFlags, ChannelType } = require('discord.js');
 
 const {
   GAME_TTT,
@@ -54,7 +55,13 @@ const {
   parseCountingTopic,
   stripCountingTopic,
   TOPIC_MAX_LENGTH,
+  createCountingManager,
 } = require('../bots/minigames-bot/src/counting');
+const {
+  pickVoiceChannel,
+  createVoicePresenceManager,
+} = require('../bots/minigames-bot/src/voice-presence');
+const { renderDetailPayload } = require('../bots/minigames-bot/src/admin-panel');
 const { T } = require('../bots/minigames-bot/src/languages');
 
 function asMessage(container) {
@@ -535,4 +542,216 @@ test('Das Kanal-Thema trägt sichtbaren Hinweis und unsichtbaren Marker', () => 
   const updated = buildCountingTopic(topic, 43, 'de');
   assert.deepEqual(parseCountingTopic(updated), { count: 43 });
   assert.equal(stripCountingTopic(updated), 'Allgemeiner Talk');
+});
+
+test('Counting entfernt jede fremde Reaktion – auch dasselbe ✅/❌ wie der Bot', async () => {
+  const removed = [];
+  const warnings = [];
+  const ctx = {
+    client: { user: { id: 'minigames-bot' } },
+    logger: { warn: (text) => warnings.push(text) },
+    store: { withLock: async (_key, fn) => fn(), getServerLang: () => 'de' },
+  };
+  const manager = createCountingManager(ctx);
+  const channel = { id: 'counting', topic: buildCountingTopic('', 12, 'de') };
+  const makeReaction = (emoji) => ({
+    emoji: { name: emoji },
+    message: { guildId: 'guild', channel },
+    users: { remove: async (userId) => removed.push([emoji, userId]) },
+  });
+
+  assert.equal(await manager.handleReactionAdd(makeReaction('✅'), { id: 'user-1' }), true);
+  assert.equal(await manager.handleReactionAdd(makeReaction('❌'), { id: 'user-2' }), true);
+  assert.equal(await manager.handleReactionAdd(makeReaction('🎉'), { id: 'user-3' }), true);
+  assert.deepEqual(removed, [
+    ['✅', 'user-1'],
+    ['❌', 'user-2'],
+    ['🎉', 'user-3'],
+  ]);
+
+  assert.equal(await manager.handleReactionAdd(makeReaction('✅'), { id: 'minigames-bot' }), false);
+  assert.equal(removed.length, 3, 'die eigene Bot-Reaktion bleibt bestehen');
+
+  const normalChannelReaction = makeReaction('✅');
+  normalChannelReaction.message.channel = { id: 'normal', topic: 'Allgemeiner Chat' };
+  assert.equal(await manager.handleReactionAdd(normalChannelReaction, { id: 'user-4' }), false);
+  assert.equal(removed.length, 3, 'außerhalb des Counting-Channels wird nichts entfernt');
+  assert.deepEqual(warnings, []);
+});
+
+test('Counting-Reaktionsschutz lädt Partials nach einem Neustart nach', async () => {
+  const removed = [];
+  const channel = { id: 'counting', topic: buildCountingTopic('', 3, 'de') };
+  const fullReaction = {
+    partial: false,
+    message: {
+      partial: true,
+      fetch: async () => ({ guildId: 'guild', channel }),
+    },
+    users: { remove: async (userId) => removed.push(userId) },
+  };
+  const manager = createCountingManager({
+    client: { user: { id: 'bot' } },
+    logger: { warn() {} },
+    store: { withLock: async (_key, fn) => fn() },
+  });
+
+  const handled = await manager.handleReactionAdd(
+    { partial: true, fetch: async () => fullReaction },
+    { id: 'user-after-restart' }
+  );
+  assert.equal(handled, true);
+  assert.deepEqual(removed, ['user-after-restart']);
+});
+
+function fakeVoiceChannel(id, memberIds = []) {
+  return {
+    id,
+    name: id,
+    type: ChannelType.GuildVoice,
+    joinable: true,
+    members: new Map(memberIds.map((memberId) => [memberId, { id: memberId }])),
+    permissionsFor: () => ({ has: () => true }),
+  };
+}
+
+test('Call-Auswahl nimmt den vollsten Voice-Channel und bei leeren Calls einen zufälligen', () => {
+  const ctx = { client: { user: { id: 'bot' } } };
+  const guild = { voiceAdapterCreator() {}, members: { me: { id: 'bot' } } };
+  const empty = fakeVoiceChannel('empty');
+  const busy = fakeVoiceChannel('busy', ['u1', 'u2', 'u3']);
+  const medium = fakeVoiceChannel('medium', ['u4']);
+
+  const populatedPick = pickVoiceChannel(ctx, guild, [empty, medium, busy], () => 0);
+  assert.equal(populatedPick.channel.id, 'busy');
+  assert.equal(populatedPick.mode, 'most-members');
+  assert.equal(populatedPick.members, 3);
+
+  const randomPick = pickVoiceChannel(
+    ctx,
+    guild,
+    [fakeVoiceChannel('first'), fakeVoiceChannel('second')],
+    () => 0.99
+  );
+  assert.equal(randomPick.channel.id, 'second');
+  assert.equal(randomPick.mode, 'random');
+});
+
+test('Voice-Manager joint stumm/taub, erkennt die Verbindung und verlässt sie wieder', async () => {
+  const channels = new Map([
+    ['empty', fakeVoiceChannel('empty')],
+    ['busy', fakeVoiceChannel('busy', ['u1', 'u2'])],
+  ]);
+  const guild = {
+    id: 'g1',
+    name: 'Testserver',
+    voiceAdapterCreator() {},
+    members: { me: { voice: { channelId: null, channel: null } } },
+    channels: { cache: channels, fetch: async () => channels },
+  };
+  const client = Object.assign(new EventEmitter(), {
+    user: { id: 'bot' },
+    guilds: { cache: new Map([['g1', guild]]) },
+  });
+
+  let connection = null;
+  let joinOptions = null;
+  const statuses = {
+    Ready: 'ready',
+    Connecting: 'connecting',
+    Signalling: 'signalling',
+    Disconnected: 'disconnected',
+    Destroyed: 'destroyed',
+  };
+  const voice = {
+    VoiceConnectionStatus: statuses,
+    getVoiceConnection: () => connection,
+    joinVoiceChannel: (options) => {
+      joinOptions = options;
+      connection = Object.assign(new EventEmitter(), {
+        joinConfig: { channelId: options.channelId },
+        state: { status: statuses.Ready },
+        setSpeaking(value) { this.speaking = value; },
+        rejoin(next) {
+          this.joinConfig.channelId = next.channelId;
+          this.state = { status: statuses.Ready };
+          return true;
+        },
+        destroy() {
+          const oldState = this.state;
+          this.state = { status: statuses.Destroyed };
+          this.emit('stateChange', oldState, this.state);
+        },
+      });
+      return connection;
+    },
+    entersState: async (candidate, status) => {
+      assert.equal(candidate.state.status, status);
+      return candidate;
+    },
+  };
+  const manager = createVoicePresenceManager(
+    { client, logger: { warn() {} } },
+    { voice, random: () => 0, watchdogIntervalMs: 1_000_000 }
+  );
+
+  const joined = await manager.joinGuild(guild);
+  assert.equal(joined.ok, true);
+  assert.equal(joined.channel.id, 'busy');
+  assert.equal(joinOptions.selfDeaf, true);
+  assert.equal(joinOptions.selfMute, true);
+  assert.equal(joinOptions.group, 'minigames:bot');
+  assert.equal(connection.speaking, false);
+  assert.equal(manager.isConnected(guild), true);
+
+  // Discord.js aktualisiert diesen Cache beim Leave nicht zwingend vor dem
+  // nächsten Panel-Render. Der Manager darf deshalb keinen falschen Button zeigen.
+  guild.members.me.voice.channelId = 'busy';
+  guild.members.me.voice.channel = channels.get('busy');
+  const left = await manager.leaveGuild(guild);
+  assert.equal(left.ok, true);
+  assert.equal(connection.state.status, statuses.Destroyed);
+  assert.equal(manager.isConnected(guild), false);
+  assert.equal(manager.currentChannel(guild), null);
+  assert.equal(manager.desired.size, 0);
+  manager.shutdown();
+});
+
+test('Minigames-Owner-Panel schaltet zwischen „Call joinen“ und „Call verlassen“ um', async () => {
+  const voiceChannel = fakeVoiceChannel('voice-1', ['u1']);
+  const guild = {
+    id: 'g1',
+    name: 'Testgilde',
+    ownerId: 'owner',
+    memberCount: 4,
+    members: { me: { voice: { channelId: null, channel: null } } },
+    channels: { cache: new Map([[voiceChannel.id, voiceChannel]]) },
+  };
+  let connected = false;
+  const ctx = {
+    client: { guilds: { cache: new Map([['g1', guild]]) } },
+    store: { countGames: () => 0 },
+    panelSessions: new Map(),
+    voiceManager: {
+      isConnected: () => connected,
+      currentChannel: () => (connected ? voiceChannel : null),
+    },
+  };
+
+  const joinPayload = await renderDetailPayload(ctx, 'owner', 'g1');
+  const joinJson = joinPayload.components[0].toJSON();
+  const joinLabels = joinJson.components
+    .filter((component) => component.type === 1)
+    .flatMap((row) => row.components.map((button) => button.label));
+  assert.ok(joinLabels.includes('🔊 Call joinen'));
+  assert.match(JSON.stringify(joinJson), /Nicht im Call/);
+
+  connected = true;
+  const leavePayload = await renderDetailPayload(ctx, 'owner', 'g1');
+  const leaveJson = leavePayload.components[0].toJSON();
+  const leaveLabels = leaveJson.components
+    .filter((component) => component.type === 1)
+    .flatMap((row) => row.components.map((button) => button.label));
+  assert.ok(leaveLabels.includes('🔇 Call verlassen'));
+  assert.match(JSON.stringify(leaveJson), /voice-1/);
 });

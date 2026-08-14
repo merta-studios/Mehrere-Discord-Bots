@@ -7,8 +7,10 @@
  * - Serverliste mit Seiten (◀ ▶), sortiert: erst Server ohne den
  *   Bot-Owner (🔴), dann nach Mitgliederzahl (absteigend).
  * - Server-Detail: Owner-Mention, Name, Mitglieder und laufende Battles.
- * - Buttons: Zurück, Einladung (1h, 1× nutzbar), Verlassen
- *   (mit Sicherheitsabfrage).
+ * - Buttons: Zurück, Einladung (1h, 1× nutzbar), stillen Call
+ *   joinen/verlassen und Server verlassen (mit Sicherheitsabfrage).
+ * - Die Call-Funktion ist durch den Panel-Guard ausschließlich für den
+ *   konfigurierten Bot-Owner erreichbar.
  */
 
 const {
@@ -179,6 +181,15 @@ async function renderDetailPayload(ctx, userId, guildId) {
   }
 
   const games = ctx.store.countGames(guildId);
+  const voiceChannel =
+    ctx.voiceManager?.currentChannel?.(guild) || guild.members?.me?.voice?.channel || null;
+  const voiceConnected =
+    ctx.voiceManager?.isConnected?.(guild) || Boolean(guild.members?.me?.voice?.channelId);
+  const voiceStatus = voiceConnected
+    ? voiceChannel?.id
+      ? `🔊 <#${voiceChannel.id}>`
+      : '🔊 Verbunden'
+    : 'Nicht im Call';
 
   const lines = [
     `# ${t('apDetailTitle', 'de')}`,
@@ -186,16 +197,20 @@ async function renderDetailPayload(ctx, userId, guildId) {
     t('apDetailName', 'de', { name: guild.name }),
     t('apDetailOwner', 'de', { mention: `<@${guild.ownerId}>` }),
     t('apDetailMembers', 'de', { count: guild.memberCount.toLocaleString('de-DE') }),
+    t('apDetailVoice', 'de', { status: voiceStatus }),
     '',
     t('apDetailGames', 'de', { count: games }),
   ];
 
   if (session.leaving) {
     lines.push('', `⚠️ ${t('apLeaveAsk', 'de', { name: guild.name })}`);
-  } else if (session.inviteUrl) {
-    lines.push('', `**${t('apInviteSent', 'de')}**`, t('apInviteLink', 'de', { url: session.inviteUrl }));
-  } else if (session.inviteError) {
-    lines.push('', session.inviteError);
+  } else {
+    if (session.voiceNotice) lines.push('', session.voiceNotice);
+    if (session.inviteUrl) {
+      lines.push('', `**${t('apInviteSent', 'de')}**`, t('apInviteLink', 'de', { url: session.inviteUrl }));
+    } else if (session.inviteError) {
+      lines.push('', session.inviteError);
+    }
   }
 
   const container = new ContainerBuilder().addTextDisplayComponents(
@@ -225,6 +240,10 @@ async function renderDetailPayload(ctx, userId, guildId) {
         .setCustomId(`${PANEL_PREFIX}invite`)
         .setStyle(ButtonStyle.Primary)
         .setLabel(t('apBtnInvite', 'de')),
+      new ButtonBuilder()
+        .setCustomId(`${PANEL_PREFIX}voice`)
+        .setStyle(voiceConnected ? ButtonStyle.Secondary : ButtonStyle.Success)
+        .setLabel(t(voiceConnected ? 'apBtnCallLeave' : 'apBtnCallJoin', 'de')),
       new ButtonBuilder()
         .setCustomId(`${PANEL_PREFIX}leave`)
         .setStyle(ButtonStyle.Danger)
@@ -297,6 +316,33 @@ async function handlePanelButton(ctx, interaction) {
       return interaction.editReply(await renderDetailPayload(ctx, userId, session.guildId));
     }
 
+    case `${PANEL_PREFIX}voice`: {
+      await interaction.deferUpdate();
+      const guild = ctx.client.guilds.cache.get(session.guildId);
+      if (!guild) {
+        session.guildId = null;
+        return interaction.editReply(await renderListPayload(ctx, userId));
+      }
+
+      session.voiceNotice = null;
+      if (!ctx.voiceManager) {
+        session.voiceNotice = t('apCallFailed', 'de', { error: 'Voice-Manager nicht verfügbar.' });
+      } else if (ctx.voiceManager.isConnected(guild)) {
+        const result = await ctx.voiceManager.leaveGuild(guild);
+        session.voiceNotice = result.ok
+          ? t('apCallLeft', 'de')
+          : t('apCallFailed', 'de', { error: result.error });
+      } else {
+        const result = await ctx.voiceManager.joinGuild(guild);
+        session.voiceNotice = result.ok
+          ? t('apCallJoined', 'de', {
+              channel: result.channel?.id ? `<#${result.channel.id}>` : 'dem ausgewählten Call',
+            })
+          : t('apCallFailed', 'de', { error: result.error });
+      }
+      return interaction.editReply(await renderDetailPayload(ctx, userId, session.guildId));
+    }
+
     case `${PANEL_PREFIX}leave`: {
       await interaction.deferUpdate();
       session.leaving = true;
@@ -317,6 +363,7 @@ async function handlePanelButton(ctx, interaction) {
         return interaction.editReply(await renderListPayload(ctx, userId));
       }
       const name = guild.name;
+      ctx.voiceManager?.forgetGuild?.(guild.id);
       if (ctx.gameManager?.deleteGuild) ctx.gameManager.deleteGuild(guild.id);
       else ctx.store.deleteGuild(guild.id);
       await guild.leave().catch(() => {});
@@ -345,6 +392,7 @@ async function handlePanelSelect(ctx, interaction) {
   session.leaving = false;
   session.inviteUrl = null;
   session.inviteError = null;
+  session.voiceNotice = null;
 
   await interaction.deferUpdate();
   return interaction.editReply(await renderDetailPayload(ctx, interaction.user.id, guildId));
