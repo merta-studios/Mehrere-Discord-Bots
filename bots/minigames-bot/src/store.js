@@ -53,6 +53,11 @@ function createStore() {
     return languages.get(guildId)?.lang || null;
   }
 
+  function getServerLanguageConfig(guildId) {
+    const config = languages.get(guildId);
+    return config ? { ...config } : null;
+  }
+
   function deleteGuild(guildId) {
     games.delete(guildId);
     languages.delete(guildId);
@@ -78,6 +83,7 @@ function createStore() {
     countGames,
     setServerLang,
     getServerLang,
+    getServerLanguageConfig,
     deleteGuild,
     withLock,
   };

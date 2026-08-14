@@ -53,6 +53,7 @@ const {
   FAIL_VARIANTS,
   RAGE_VARIANTS,
   FREAKOUT_PINGS,
+  FREAKOUT_CHANCE,
   shouldFreakout,
   pingBomb,
   buildFreakoutLines,
@@ -540,8 +541,9 @@ test('Es gibt mehrere abwechslungsreiche Spott-Texte in allen Sprachen', () => {
 });
 
 test('Beim Durchdrehen pingt der Bot mehrfach und mischt Wut-Titel mit Nachtretern', () => {
-  assert.equal(shouldFreakout(() => 0, 0.35), true);
-  assert.equal(shouldFreakout(() => 0.99, 0.35), false);
+  assert.equal(FREAKOUT_CHANCE, 0.6, 'Standardchance ist deutlich höher als zuvor');
+  assert.equal(shouldFreakout(() => 0, FREAKOUT_CHANCE), true);
+  assert.equal(shouldFreakout(() => 0.99, FREAKOUT_CHANCE), false);
 
   const vars = { user: '<@u42>', expected: 6, got: 9 };
   const pings = pingBomb(vars);
@@ -561,7 +563,7 @@ test('Das Kanal-Thema trägt sichtbaren Hinweis und unsichtbaren Marker', () => 
   assert.ok(topic.includes('42'), 'sichtbarer Zählstand');
   assert.ok(topic.includes('Counting-Channel'), 'sichtbarer Hinweis');
   assert.ok(topic.includes('Allgemeiner Talk'), 'bestehendes Thema bleibt erhalten');
-  assert.deepEqual(parseCountingTopic(topic), { count: 42 });
+  assert.deepEqual(parseCountingTopic(topic), { count: 42, lang: 'de' });
   assert.ok(topic.length <= TOPIC_MAX_LENGTH);
 
   assert.equal(parseCountingTopic('Allgemeiner Talk'), null);
@@ -570,7 +572,7 @@ test('Das Kanal-Thema trägt sichtbaren Hinweis und unsichtbaren Marker', () => 
 
   // Der Zählstand lässt sich aktualisieren, ohne dass sich das Thema aufbläht.
   const updated = buildCountingTopic(topic, 43, 'de');
-  assert.deepEqual(parseCountingTopic(updated), { count: 43 });
+  assert.deepEqual(parseCountingTopic(updated), { count: 43, lang: 'de' });
   assert.equal(stripCountingTopic(updated), 'Allgemeiner Talk');
 });
 
@@ -632,6 +634,42 @@ test('Counting-Reaktionsschutz lädt Partials nach einem Neustart nach', async (
   );
   assert.equal(handled, true);
   assert.deepEqual(removed, ['user-after-restart']);
+});
+
+test('Counting stellt die Sprache nach einem Neustart dauerhaft aus dem Kanal-Thema wieder her', async () => {
+  const sent = [];
+  let languageConfig = null;
+  const channel = {
+    id: 'counting',
+    guildId: 'guild',
+    topic: buildCountingTopic('', 4, 'de', 12345),
+    send: async (payload) => sent.push(payload.content),
+    setTopic: async () => {},
+  };
+  const manager = createCountingManager({
+    client: { user: { id: 'minigames-bot' } },
+    logger: { warn() {} },
+    store: {
+      withLock: async (_key, fn) => fn(),
+      getServerLang: () => languageConfig?.lang || null,
+      getServerLanguageConfig: () => languageConfig,
+      setServerLang: (_guildId, lang, changedAt) => {
+        languageConfig = { lang, changedAt };
+      },
+    },
+  }, { random: () => 0.5, freakoutChance: 0, messageDelayMs: 0 });
+
+  await manager.handleMessage({
+    guildId: 'guild',
+    author: { id: 'noob', bot: false },
+    content: '999',
+    channel,
+    react: async () => {},
+  });
+
+  assert.deepEqual(languageConfig, { lang: 'de', changedAt: 12345 });
+  assert.equal(sent[0], failureText('de', { user: '<@noob>', expected: 5, got: 999 }, 6));
+  manager.shutdown();
 });
 
 test('Falsche Zahl dreht manchmal durch: mehrere Nachrichten inkl. Ping-Salve', async () => {

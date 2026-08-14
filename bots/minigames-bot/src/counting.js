@@ -37,7 +37,7 @@ const RAGE_VARIANTS = 4;
 /** Wie oft der Bot beim Durchdrehen den Übeltäter in einem Rutsch pingt. */
 const FREAKOUT_PINGS = 10;
 /** Wahrscheinlichkeit, dass der Bot bei einer falschen Zahl „durchdreht“. */
-const FREAKOUT_CHANCE = 0.35;
+const FREAKOUT_CHANCE = 0.6;
 /** Kleine Pause zwischen den Nachrichten des Ausrasters (Rate-Limit-Schutz). */
 const FREAKOUT_MESSAGE_DELAY_MS = 400;
 
@@ -130,10 +130,14 @@ function buildFreakoutLines(lang, vars, random = Math.random) {
  * Kanal-Thema als Speicher
  * ------------------------------------------------------------------ */
 
-function encodeCountingMarker(count) {
-  const payload = Buffer.from(JSON.stringify({ n: Math.max(0, Number(count) || 0) }), 'utf8').toString(
-    'base64url'
-  );
+function encodeCountingMarker(count, lang = '', languageChangedAt = 0) {
+  const data = { n: Math.max(0, Number(count) || 0) };
+  // Die Sprache steckt zusätzlich im dauerhaft sichtbaren Kanal-Thema. Anders
+  // als die /set_language-Bestätigung fällt dieser Marker nie aus dem
+  // Nachrichten-Scan, wenn im Channel viel geschrieben wurde.
+  if (lang) data.l = String(lang);
+  if (Number(languageChangedAt) > 0) data.t = Number(languageChangedAt);
+  const payload = Buffer.from(JSON.stringify(data), 'utf8').toString('base64url');
   return encodeHidden(`${COUNT_MARKER}${payload}`);
 }
 
@@ -142,7 +146,10 @@ function decodeCountingMarker(text) {
     if (!payload.startsWith(COUNT_MARKER)) continue;
     try {
       const data = JSON.parse(Buffer.from(payload.slice(COUNT_MARKER.length), 'base64url').toString('utf8'));
-      return { count: Math.max(0, Number(data?.n) || 0) };
+      const result = { count: Math.max(0, Number(data?.n) || 0) };
+      if (data?.l) result.lang = String(data.l);
+      if (Number(data?.t) > 0) result.languageChangedAt = Number(data.t);
+      return result;
     } catch {
       return { count: 0 };
     }
@@ -165,10 +172,10 @@ function stripCountingTopic(topic) {
 }
 
 /** Baut das neue Thema: sichtbarer Hinweis + unsichtbarer Marker + Rest. */
-function buildCountingTopic(topic, count, lang = 'en') {
+function buildCountingTopic(topic, count, lang = 'en', languageChangedAt = 0) {
   const rest = stripCountingTopic(topic);
   const label = t('countingTopicLabel', lang, { count: Math.max(0, Number(count) || 0) });
-  const head = `${label}${encodeCountingMarker(count)}`;
+  const head = `${label}${encodeCountingMarker(count, lang, languageChangedAt)}`;
   const full = rest ? `${head}\n${rest}` : head;
   return full.length <= TOPIC_MAX_LENGTH ? full : head;
 }
@@ -210,8 +217,8 @@ function createCountingManager(
     return Boolean(channel.permissionsFor(me)?.has(PermissionFlagsBits.ManageMessages));
   }
 
-  async function writeTopic(channel, count, lang) {
-    const topic = buildCountingTopic(channel.topic, count, lang);
+  async function writeTopic(channel, count, lang, languageChangedAt = 0) {
+    const topic = buildCountingTopic(channel.topic, count, lang, languageChangedAt);
     try {
       await channel.setTopic(topic);
       return true;
@@ -226,8 +233,17 @@ function createCountingManager(
    * Deshalb wird der aktuelle Stand gesammelt und höchstens alle zehn Minuten
    * nachgezogen. Der exakte Stand steckt ohnehin in den Nachrichten selbst.
    */
-  function scheduleTopicUpdate(channel, entry, lang, immediate = false) {
-    entry.pending = { count: entry.count, lang };
+  function scheduleTopicUpdate(channel, entry, lang, immediate = false, languageChangedAt = 0) {
+    entry.lang = lang || entry.lang || 'en';
+    entry.languageChangedAt = Math.max(
+      Number(entry.languageChangedAt) || 0,
+      Number(languageChangedAt) || 0
+    );
+    entry.pending = {
+      count: entry.count,
+      lang: entry.lang,
+      languageChangedAt: entry.languageChangedAt,
+    };
     if (entry.timer) return;
 
     const since = Date.now() - (entry.topicWrittenAt || 0);
@@ -238,7 +254,12 @@ function createCountingManager(
       entry.pending = null;
       if (!pending) return;
       entry.topicWrittenAt = Date.now();
-      await writeTopic(channel, pending.count, pending.lang);
+      await writeTopic(
+        channel,
+        pending.count,
+        pending.lang,
+        pending.languageChangedAt
+      );
     };
 
     if (delay === 0) {
@@ -287,8 +308,21 @@ function createCountingManager(
     entry.guildId = channel.guildId;
     entry.count = recovered.count;
     entry.lastUserId = recovered.lastUserId;
+    entry.lang = topicState.lang || ctx.store.getServerLang?.(channel.guildId) || 'en';
+    entry.languageChangedAt = Number(topicState.languageChangedAt) || 0;
     entry.recovered = true;
     channels.set(channel.id, entry);
+
+    // Nach einem Neustart stellt das Kanal-Thema die Server-Sprache wieder her,
+    // selbst wenn die alte Bestätigungsnachricht längst aus den letzten 50
+    // Nachrichten verschwunden ist.
+    if (topicState.lang) {
+      ctx.store.setServerLang?.(
+        channel.guildId,
+        topicState.lang,
+        topicState.languageChangedAt || Date.now()
+      );
+    }
     return entry;
   }
 
@@ -306,13 +340,17 @@ function createCountingManager(
       return { ok: true, enabled: false };
     }
 
-    const ok = await writeTopic(channel, 0, lang);
+    const languageConfig = ctx.store.getServerLanguageConfig?.(channel.guildId);
+    const languageChangedAt = Number(languageConfig?.changedAt) || Date.now();
+    const ok = await writeTopic(channel, 0, lang, languageChangedAt);
     if (!ok) return { ok: false, error: 'topic' };
     forget(channel.id);
     channels.set(channel.id, {
       guildId: channel.guildId,
       count: 0,
       lastUserId: '',
+      lang,
+      languageChangedAt,
       recovered: true,
       topicWrittenAt: Date.now(),
       timer: null,
@@ -323,6 +361,51 @@ function createCountingManager(
 
   function isCountingChannel(channel) {
     return Boolean(channel && parseCountingTopic(channel.topic));
+  }
+
+  /**
+   * Schreibt eine neu gewählte Server-Sprache auch in alle Counting-Themen.
+   * Damit ist `/set_language` nicht nur im RAM bzw. in einer alten Nachricht
+   * gespeichert, sondern wird nach jedem Prozess-Neustart sicher gefunden.
+   */
+  async function setGuildLanguage(guild, lang, changedAt = Date.now()) {
+    let guildChannels;
+    try {
+      guildChannels = [...(await guild.channels.fetch()).values()].filter(Boolean);
+    } catch {
+      guildChannels = [...(guild.channels?.cache?.values?.() || [])];
+    }
+
+    let updated = 0;
+    for (const channel of guildChannels) {
+      const topicState = parseCountingTopic(channel?.topic);
+      if (!topicState || typeof channel.setTopic !== 'function') continue;
+
+      const entry = channels.get(channel.id) || {
+        guildId: guild.id,
+        count: topicState.count,
+        lastUserId: '',
+        recovered: false,
+        topicWrittenAt: 0,
+        timer: null,
+        pending: null,
+      };
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.timer = null;
+      entry.lang = lang;
+      entry.languageChangedAt = Number(changedAt) || Date.now();
+      entry.pending = null;
+      channels.set(channel.id, entry);
+
+      if (await writeTopic(channel, entry.count, lang, entry.languageChangedAt)) {
+        entry.topicWrittenAt = Date.now();
+        updated += 1;
+      } else {
+        // Bei einem Discord-Topic-Rate-Limit später automatisch nachziehen.
+        scheduleTopicUpdate(channel, entry, lang, false, entry.languageChangedAt);
+      }
+    }
+    return updated;
   }
 
   /**
@@ -394,7 +477,9 @@ function createCountingManager(
       const entry = await ensureEntry(channel);
       if (!entry) return null;
 
-      const lang = ctx.store.getServerLang(message.guildId) || 'en';
+      const languageConfig = ctx.store.getServerLanguageConfig?.(message.guildId);
+      const lang = languageConfig?.lang || entry.lang || 'en';
+      const languageChangedAt = Number(languageConfig?.changedAt) || entry.languageChangedAt || 0;
       const result = evaluateCount(entry, { userId: message.author.id, content: message.content });
 
       if (result.action === 'delete') {
@@ -406,7 +491,7 @@ function createCountingManager(
         entry.count = result.state.count;
         entry.lastUserId = result.state.lastUserId;
         await message.react(OK_EMOJI).catch(() => {});
-        scheduleTopicUpdate(channel, entry, lang);
+        scheduleTopicUpdate(channel, entry, lang, false, languageChangedAt);
         return result;
       }
 
@@ -420,7 +505,7 @@ function createCountingManager(
         got: result.got,
       };
       await sendFailureReaction(channel, message.author.id, lang, vars);
-      scheduleTopicUpdate(channel, entry, lang, true);
+      scheduleTopicUpdate(channel, entry, lang, true, languageChangedAt);
       return result;
     });
   }
@@ -433,6 +518,7 @@ function createCountingManager(
     handleMessage,
     handleReactionAdd,
     setCountingChannel,
+    setGuildLanguage,
     isCountingChannel,
     entryFor,
     forget,
