@@ -250,17 +250,32 @@ async function setLanguageCmd(ctx, interaction) {
   if (!isAdmin(interaction)) return privateReply(interaction, t('errNoPermission', currentLang), currentLang);
 
   const newLang = interaction.options.getString('sprache');
+  // Discord liefert bei einer Choice normalerweise nur gültige Werte. Die
+  // zusätzliche Prüfung verhindert trotzdem, dass ein manipuliertes Payload
+  // eine kaputte Sprache im Store oder im Kanal-Thema hinterlässt.
+  if (!newLang || !LANGS[newLang]) {
+    return privateReply(interaction, t('errGeneric', currentLang), currentLang);
+  }
+
   await interaction.deferReply();
   const changedAt = Date.now();
   ctx.store.setServerLang(interaction.guildId, newLang, changedAt);
-  // Aktive Counting-Channels tragen die Sprache dauerhaft im Kanal-Thema. So
-  // überlebt die Auswahl Neustarts und große Mengen neuer Nachrichten.
-  await ctx.countingManager?.setGuildLanguage?.(interaction.guild, newLang, changedAt);
-  const label = `${LANGS[newLang]?.flag || '🌍'} ${LANGS[newLang]?.name || newLang}`;
+  const label = `${LANGS[newLang].flag} ${LANGS[newLang].name}`;
   const text = t('setLangUpdated', newLang, { lang: label });
-  return interaction.editReply(
+
+  // Wichtig: Die Antwort darf nicht auf Discord-Requests für jedes einzelne
+  // Counting-Channel-Thema warten. Bei vielen Channels oder einem Discord-
+  // Rate-Limit blieb die Interaction sonst minutenlang bei „denkt nach …“.
+  // Die Sprache ist bereits im Store gespeichert; die Themen werden danach
+  // best-effort im Hintergrund aktualisiert und beim nächsten Start erneut
+  // synchronisiert.
+  const response = await interaction.editReply(
     componentsV2Payload([buildLanguageContainer(interaction.guildId, newLang, text, changedAt)])
   );
+  void Promise.resolve()
+    .then(() => ctx.countingManager?.setGuildLanguage?.(interaction.guild, newLang, changedAt))
+    .catch((err) => ctx.logger?.warn?.('[minigames-bot] Counting-Sprachen konnten nicht synchronisiert werden:', err.message));
+  return response;
 }
 
 async function setCountingChannelCmd(ctx, interaction) {

@@ -44,12 +44,13 @@ const {
   buildLanguageContainer,
   connect4Cursor,
 } = require('../bots/minigames-bot/src/embed-builder');
-const { defineCommands } = require('../bots/minigames-bot/src/commands');
+const { defineCommands, setLanguageCmd } = require('../bots/minigames-bot/src/commands');
 const {
   parseCountingNumber,
   evaluateCount,
   createCountingState,
   failureText,
+  safeFailureText,
   FAIL_VARIANTS,
   RAGE_VARIANTS,
   FREAKOUT_PINGS,
@@ -57,6 +58,8 @@ const {
   shouldFreakout,
   pingBomb,
   buildFreakoutLines,
+  buildEscalationLines,
+  rageTierForCount,
   buildCountingTopic,
   parseCountingTopic,
   stripCountingTopic,
@@ -411,6 +414,36 @@ test('nur die sechs gewünschten Slash-Commands sind registriert und API-valide'
   }
 });
 
+test('/set_language bestätigt sofort, auch wenn die Counting-Synchronisierung hängt', async () => {
+  const { createStore } = require('../bots/minigames-bot/src/store');
+  let edited = false;
+  const interaction = {
+    guildId: 'guild-language',
+    guild: { id: 'guild-language' },
+    inGuild: () => true,
+    memberPermissions: { has: () => true },
+    options: { getString: () => 'de' },
+    deferReply: async () => {},
+    editReply: async () => {
+      edited = true;
+      return { id: 'language-confirmation' };
+    },
+  };
+  const ctx = {
+    store: createStore(),
+    countingManager: { setGuildLanguage: () => new Promise(() => {}) },
+    logger: { warn() {} },
+  };
+
+  const result = await Promise.race([
+    setLanguageCmd(ctx, interaction),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Command blockiert')), 250)),
+  ]);
+  assert.deepEqual(result, { id: 'language-confirmation' });
+  assert.equal(edited, true);
+  assert.equal(ctx.store.getServerLang('guild-language'), 'de');
+});
+
 /* ------------------------------------------------------------------ *
  * Offene Herausforderung & zufälliger Startspieler
  * ------------------------------------------------------------------ */
@@ -540,7 +573,7 @@ test('Es gibt mehrere abwechslungsreiche Spott-Texte in allen Sprachen', () => {
   }
 });
 
-test('Beim Durchdrehen pingt der Bot mehrfach und mischt Wut-Titel mit Nachtretern', () => {
+test('Beim Durchdrehen bleibt die Show begrenzt und erwähnt niemanden mehrfach', () => {
   assert.equal(FREAKOUT_CHANCE, 0.6, 'Standardchance ist deutlich höher als zuvor');
   assert.equal(shouldFreakout(() => 0, FREAKOUT_CHANCE), true);
   assert.equal(shouldFreakout(() => 0.99, FREAKOUT_CHANCE), false);
@@ -548,14 +581,35 @@ test('Beim Durchdrehen pingt der Bot mehrfach und mischt Wut-Titel mit Nachtrete
   const vars = { user: '<@u42>', expected: 6, got: 9 };
   const pings = pingBomb(vars);
   assert.equal(pings.split(' ').filter(Boolean).length, FREAKOUT_PINGS);
-  assert.ok(pings.includes('<@u42>'));
+  assert.equal(pings, '<@u42>');
 
-  const lines = buildFreakoutLines('de', vars, () => 0);
-  assert.equal(lines.length, 3, 'Titel, Ping-Salve und Nachtreter');
-  assert.match(lines[0], /WIE KONNTEST DU NUR/);
-  assert.equal(lines[1].split(' ').filter(Boolean).length, FREAKOUT_PINGS + 2, 'Pings plus 🔔-Rahmen');
-  assert.match(lines[2], /6/);
-  assert.match(lines[2], /9/);
+  const lines = buildFreakoutLines('de', { ...vars, streak: 5 });
+  assert.equal(lines.length, 3, 'Titel, Puls und Nachtreter');
+  assert.ok(lines[0].includes('COUNTING-ALARM'));
+  assert.equal(lines.join(' ').split('<@u42>').length - 1, 1, 'höchstens eine Erwähnung');
+  assert.match(lines[0], /6/);
+  assert.match(lines[0], /9/);
+});
+
+test('Die sichere Ausrast-Show skaliert mit dem bisherigen Zählstand ohne Ping-Salve', () => {
+  assert.equal(rageTierForCount(0), 0);
+  assert.equal(rageTierForCount(9), 0);
+  assert.equal(rageTierForCount(10), 1);
+  assert.equal(rageTierForCount(50), 2);
+  assert.equal(rageTierForCount(100), 3);
+
+  const low = buildEscalationLines('de', {
+    user: '<@u42>', expected: 6, got: 9, streak: 5,
+  });
+  const high = buildEscalationLines('de', {
+    user: '<@u42>', expected: 101, got: 999, streak: 100,
+  });
+  assert.equal(low.length, 3);
+  assert.equal(high.length, 3);
+  assert.ok(high[0].includes('IV'));
+  assert.ok(high[0].includes('🌋🌋🌋🌋'));
+  assert.equal(high.join(' ').split('<@u42>').length - 1, 1, 'höchstens eine gezielte Erwähnung');
+  assert.ok(high[2].includes('Kein Spam'));
 });
 
 test('Das Kanal-Thema trägt sichtbaren Hinweis und unsichtbaren Marker', () => {
@@ -668,11 +722,11 @@ test('Counting stellt die Sprache nach einem Neustart dauerhaft aus dem Kanal-Th
   });
 
   assert.deepEqual(languageConfig, { lang: 'de', changedAt: 12345 });
-  assert.equal(sent[0], failureText('de', { user: '<@noob>', expected: 5, got: 999 }, 6));
+  assert.equal(sent[0], safeFailureText('de', { user: '<@noob>', expected: 5, got: 999 }, 6));
   manager.shutdown();
 });
 
-test('Falsche Zahl dreht manchmal durch: mehrere Nachrichten inkl. Ping-Salve', async () => {
+test('Falsche Zahl dreht manchmal durch: begrenzte, sichere Showeinlage', async () => {
   const sent = [];
   const channel = {
     id: 'counting',
@@ -709,9 +763,9 @@ test('Falsche Zahl dreht manchmal durch: mehrere Nachrichten inkl. Ping-Salve', 
 
   assert.equal(result.action, 'reset');
   assert.equal(result.reason, 'wrong');
-  assert.equal(sent.length, 3, 'Titel, Ping-Salve, Nachtreter');
-  assert.ok(sent[1].includes('<@noob>'), 'die Ping-Salve erwähnt den Übeltäter');
-  assert.ok(sent[1].split(' ').filter((part) => part === '<@noob>').length >= FREAKOUT_PINGS);
+  assert.equal(sent.length, 3, 'Titel, Puls, Nachtreter');
+  assert.equal(sent.join(' ').split('<@noob>').length - 1, 1, 'die Person wird höchstens einmal erwähnt');
+  assert.ok(sent[2].includes('Kein Spam'), 'keine Mass-Pings oder Server-Spam');
   manager.shutdown();
 });
 

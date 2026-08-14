@@ -10,10 +10,11 @@
  * Regeln:
  * - Es beginnt bei 1.
  * - Niemand darf zwei Zahlen hintereinander schreiben.
- * - Richtige Zahl → ✅, falsche Zahl → ❌, Neustart bei 1 und die Person
- *   wird (mit wechselnden Sprüchen) geoutet.
- * - Bei einer falschen Zahl dreht der Bot hin und wieder komplett durch:
- *   Wut-Ausruf, mehrfache Ping-Salve und Nachtreter in mehreren Nachrichten.
+ * - Richtige Zahl → ✅, falsche Zahl → ❌, Neustart bei 1 und eine neutrale
+ *   Fehlermeldung (mit wechselnden Sprüchen).
+ * - Bei einer falschen Zahl zeigt der Bot hin und wieder eine kurze, sichere
+ *   Ausrast-Show. Die Dramaturgie steigt mit dem bisherigen Zählstand, bleibt
+ *   aber auf höchstens drei Bot-Nachrichten und verwendet keine Mass-Pings.
  * - Zwei Zahlen derselben Person hintereinander → Nachricht wird nur
  *   gelöscht, der Zählstand bleibt.
  * - Text statt Zahl → Nachricht wird gelöscht, der Zählstand bleibt.
@@ -34,12 +35,16 @@ const RECOVERY_SCAN_LIMIT = 100;
 const FAIL_VARIANTS = 12;
 /** Anzahl der „Durchdreh“-Bausteine in `languages.js` (countRageTitle1…/Body1…). */
 const RAGE_VARIANTS = 4;
-/** Wie oft der Bot beim Durchdrehen den Übeltäter in einem Rutsch pingt. */
-const FREAKOUT_PINGS = 10;
+/** Legacy-Konstante; eine Fehlermeldung darf höchstens einmal erwähnen. */
+const FREAKOUT_PINGS = 1;
 /** Wahrscheinlichkeit, dass der Bot bei einer falschen Zahl „durchdreht“. */
 const FREAKOUT_CHANCE = 0.6;
 /** Kleine Pause zwischen den Nachrichten des Ausrasters (Rate-Limit-Schutz). */
 const FREAKOUT_MESSAGE_DELAY_MS = 400;
+/** Kein einzelner Discord-Request darf eine Sprach-Synchronisierung blockieren. */
+const DISCORD_OPERATION_TIMEOUT_MS = 8_000;
+/** Die Reaktion bleibt theatralisch, aber der Bot spammt niemals den Channel. */
+const MAX_RAGE_MESSAGES = 3;
 
 const OK_EMOJI = '✅';
 const FAIL_EMOJI = '❌';
@@ -97,33 +102,73 @@ function failureText(lang, vars, index = Math.floor(Math.random() * FAIL_VARIANT
   return t(`countFail${variant + 1}`, lang, vars);
 }
 
+/** Neutrale Fehlermeldung für die aktive Counting-Engine. */
+function safeFailureText(lang, vars, index = Math.floor(Math.random() * FAIL_VARIANTS)) {
+  const variant = ((Number(index) % FAIL_VARIANTS) + FAIL_VARIANTS) % FAIL_VARIANTS;
+  return t('countFailureSafe', lang, { ...vars, variant: variant + 1 });
+}
+
 /** Entscheidet zufällig, ob der Bot bei einer falschen Zahl „durchdreht“. */
 function shouldFreakout(random = Math.random, chance = FREAKOUT_CHANCE) {
   return Number(random()) < Math.max(0, Math.min(1, Number(chance) || 0));
 }
 
-/** Pings den Übeltäter mehrfach in einem Rutsch – der reine Dramatik-Effekt. */
+/**
+ * Kompatibilitätshelfer für ältere Integrationen. Die Counting-Engine ruft
+ * ihn bewusst nicht mehr auf, damit ein Fehler niemals eine Ping-Salve auslöst.
+ */
 function pingBomb(vars) {
   const mention = String(vars?.user || '').trim();
-  if (!mention) return '';
-  return Array.from({ length: FREAKOUT_PINGS }, () => mention).join(' ');
+  return mention ? mention : '';
 }
 
 /**
- * Baut einen „Ausrast-Moment": ein Wut-Ausruf, eine Ping-Salve und eine
- * Nachtreter-Zeile. Titel und Nachtreter werden unabhängig gewürfelt, sodass
- * sich die Varianten mischen (RAGE_VARIANTS × RAGE_VARIANTS Kombinationen).
- * → Array aus Nachrichten-Texten (ohne Discord-Mentions zu unterdrücken).
+ * Kompatibilitätsalias für ältere Integrationen. Die frühere Ping-Salve wurde
+ * absichtlich durch die sichere, begrenzte Show ersetzt.
  */
-function buildFreakoutLines(lang, vars, random = Math.random) {
-  const pick = (max) => Math.min(max - 1, Math.max(0, Math.floor(Number(random()) * max)));
-  const title = t(`countRageTitle${pick(RAGE_VARIANTS) + 1}`, lang, vars);
-  const body = t(`countRageBody${pick(RAGE_VARIANTS) + 1}`, lang, vars);
-  const pings = pingBomb(vars);
-  const lines = [title];
-  if (pings) lines.push(`🔔 ${pings} 🔔`);
-  lines.push(body);
-  return lines;
+function buildFreakoutLines(lang, vars) {
+  return buildEscalationLines(lang, vars);
+}
+
+/**
+ * Gibt die sichere Intensitätsstufe anhand des bisherigen Zählstands zurück.
+ * Die Stufen machen die Show dramatischer, ändern aber keine Rollen, löschen
+ * keine fremden Nachrichten und pingen niemals den ganzen Server.
+ */
+function rageTierForCount(count) {
+  const value = Math.max(0, Number(count) || 0);
+  if (value >= 100) return 3;
+  if (value >= 50) return 2;
+  if (value >= 10) return 1;
+  return 0;
+}
+
+function rageBar(tier) {
+  return ['⚡', '🔥', '🚨', '🌋'][Math.max(0, Math.min(3, Number(tier) || 0))].repeat(
+    Math.max(1, Math.min(4, Number(tier) + 1))
+  );
+}
+
+/**
+ * Öffentliche, aber harmlose Ausrast-Show. Es gibt höchstens drei kurze
+ * Bot-Nachrichten, eine einzige gezielte Erwähnung und keine Ping-Salve.
+ * Der bisherige Stand beeinflusst sichtbar die Stufe und den Umfang der
+ * Dramaturgie.
+ */
+function buildEscalationLines(lang, vars = {}) {
+  const streak = Math.max(0, Number(vars.streak ?? vars.expected - 1) || 0);
+  const tier = rageTierForCount(streak);
+  const values = {
+    ...vars,
+    streak,
+    level: ['I', 'II', 'III', 'IV'][tier],
+    bar: rageBar(tier),
+  };
+  return [
+    t('countRageSafeTitle', lang, values),
+    t('countRageSafePulse', lang, values),
+    t('countRageSafeBody', lang, values),
+  ].slice(0, MAX_RAGE_MESSAGES);
 }
 
 /* ------------------------------------------------------------------ *
@@ -217,10 +262,44 @@ function createCountingManager(
     return Boolean(channel.permissionsFor(me)?.has(PermissionFlagsBits.ManageMessages));
   }
 
+  /**
+   * Discord.js-Requests können bei Netzwerkproblemen oder einem hängenden
+   * Mock/Adapter offen bleiben. Für Counting ist das nicht kritisch genug,
+   * um eine Interaction oder den gesamten Sprachabgleich festzuhalten.
+   */
+  function withTimeout(task, timeoutMs = DISCORD_OPERATION_TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        const error = new Error(`Discord-Request Timeout nach ${timeoutMs} ms`);
+        error.code = 'DISCORD_REQUEST_TIMEOUT';
+        reject(error);
+      }, timeoutMs);
+      timer.unref?.();
+
+      Promise.resolve()
+        .then(task)
+        .then((value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        });
+    });
+  }
+
   async function writeTopic(channel, count, lang, languageChangedAt = 0) {
     const topic = buildCountingTopic(channel.topic, count, lang, languageChangedAt);
     try {
-      await channel.setTopic(topic);
+      await withTimeout(() => channel.setTopic(topic));
       return true;
     } catch (err) {
       ctx.logger.warn(`[minigames-bot] Kanal-Thema konnte nicht gesetzt werden: ${err.message}`);
@@ -332,7 +411,7 @@ function createCountingManager(
       forget(channel.id);
       const rest = stripCountingTopic(channel.topic);
       try {
-        await channel.setTopic(rest || null);
+        await withTimeout(() => channel.setTopic(rest || null));
       } catch (err) {
         ctx.logger.warn(`[minigames-bot] Kanal-Thema konnte nicht bereinigt werden: ${err.message}`);
         return { ok: false, error: 'topic' };
@@ -371,8 +450,10 @@ function createCountingManager(
   async function setGuildLanguage(guild, lang, changedAt = Date.now()) {
     let guildChannels;
     try {
-      guildChannels = [...(await guild.channels.fetch()).values()].filter(Boolean);
-    } catch {
+      const fetched = await withTimeout(() => guild.channels.fetch());
+      guildChannels = [...(fetched?.values?.() || [])].filter(Boolean);
+    } catch (err) {
+      ctx.logger.warn(`[minigames-bot] Counting-Kanäle konnten nicht geladen werden: ${err.message}`);
       guildChannels = [...(guild.channels?.cache?.values?.() || [])];
     }
 
@@ -443,20 +524,23 @@ function createCountingManager(
   }
 
   /**
-   * Reagiert auf eine falsche Zahl. Meist gibt es einen einzelnen Spott-Spruch;
-   * hin und wieder „dreht der Bot durch" und feuert eine kleine Salve ab:
-   * Wut-Ausruf, Ping-Salve (mehrfaches Erwähnen des Übeltäters) und Nachtreter.
+   * Reagiert auf eine falsche Zahl. Kleine Fehler bekommen einen kurzen
+   * Spruch. Bei langen Streaks oder einem zufälligen Ausraster zeigt der Bot
+   * eine begrenzte, skalierende Showeinlage – ohne Mass-Pings, Rollenaktionen,
+   * DMs oder fremde Nachrichten anzufassen.
    */
   async function sendFailureReaction(channel, userId, lang, vars) {
     const mentionOptions = { users: [userId], parse: [] };
+    const streak = Math.max(0, Number(vars.streak ?? vars.expected - 1) || 0);
+    const forceEscalation = streak >= 10;
 
-    if (!shouldFreakout(random, freakoutChance)) {
-      const text = failureText(lang, vars, Math.floor(Number(random()) * FAIL_VARIANTS));
+    if (!forceEscalation && !shouldFreakout(random, freakoutChance)) {
+      const text = safeFailureText(lang, vars, Math.floor(Number(random()) * FAIL_VARIANTS));
       await channel.send({ content: text, allowedMentions: mentionOptions }).catch(() => {});
       return;
     }
 
-    const lines = buildFreakoutLines(lang, vars, random);
+    const lines = buildEscalationLines(lang, { ...vars, streak });
     for (const content of lines) {
       await channel.send({ content, allowedMentions: mentionOptions }).catch(() => {});
       if (content !== lines[lines.length - 1]) {
@@ -503,6 +587,9 @@ function createCountingManager(
         user: `<@${message.author.id}>`,
         expected: result.expected,
         got: result.got,
+        // Vor dem Reset ist `expected - 1` der erreichte Stand. Dieser Wert
+        // steuert die Intensitätsstufe der sicheren Ausrast-Show.
+        streak: Math.max(0, Number(result.expected) - 1),
       };
       await sendFailureReaction(channel, message.author.id, lang, vars);
       scheduleTopicUpdate(channel, entry, lang, true, languageChangedAt);
@@ -536,15 +623,21 @@ module.exports = {
   FREAKOUT_PINGS,
   FREAKOUT_CHANCE,
   FREAKOUT_MESSAGE_DELAY_MS,
+  DISCORD_OPERATION_TIMEOUT_MS,
+  MAX_RAGE_MESSAGES,
   OK_EMOJI,
   FAIL_EMOJI,
   parseCountingNumber,
   createCountingState,
   evaluateCount,
   failureText,
+  safeFailureText,
   shouldFreakout,
   pingBomb,
   buildFreakoutLines,
+  rageTierForCount,
+  rageBar,
+  buildEscalationLines,
   parseCountingTopic,
   stripCountingTopic,
   buildCountingTopic,
