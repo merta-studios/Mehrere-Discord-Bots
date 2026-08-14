@@ -55,11 +55,14 @@ const {
   RAGE_VARIANTS,
   FREAKOUT_PINGS,
   FREAKOUT_CHANCE,
+  FREAKOUT_MESSAGE_DELAY_MS,
+  MAX_RAGE_MESSAGES,
   shouldFreakout,
   pingBomb,
   buildFreakoutLines,
   buildEscalationLines,
   rageTierForCount,
+  rageDelayForLine,
   buildCountingTopic,
   parseCountingTopic,
   stripCountingTopic,
@@ -564,34 +567,45 @@ test('Es gibt mehrere abwechslungsreiche Spott-Texte in allen Sprachen', () => {
     }
   }
 
-  // Die Durchdreh-Bausteine müssen ebenfalls in allen Sprachen vorliegen.
+  // Auch alle menschlichen Durchdreh-Bausteine müssen lokalisiert sein.
+  const rageLanguages = ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it'];
   for (let i = 1; i <= RAGE_VARIANTS; i += 1) {
-    for (const lang of ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it']) {
+    for (const lang of rageLanguages) {
       assert.ok(T[`countRageTitle${i}`][lang], `countRageTitle${i} fehlt in ${lang}`);
       assert.ok(T[`countRageBody${i}`][lang], `countRageBody${i} fehlt in ${lang}`);
+      assert.ok(T[`countRageSpiral${i}`][lang], `countRageSpiral${i} fehlt in ${lang}`);
+      assert.ok(T[`countRageReset${i}`][lang], `countRageReset${i} fehlt in ${lang}`);
     }
+  }
+  for (const key of ['countRageAside', 'countRageStreakLoss', 'countRageAftershock', 'countRageCatastrophe']) {
+    for (const lang of rageLanguages) assert.ok(T[key][lang], `${key} fehlt in ${lang}`);
   }
 });
 
-test('Beim Durchdrehen bleibt die Show begrenzt und erwähnt niemanden mehrfach', () => {
-  assert.equal(FREAKOUT_CHANCE, 0.6, 'Standardchance ist deutlich höher als zuvor');
+test('Beim Durchdrehen klingt der Bot hektisch-menschlich und erwähnt niemanden mehrfach', () => {
+  assert.equal(FREAKOUT_CHANCE, 1, 'standardmäßig dreht der Bot bei jedem Zahlenfehler durch');
   assert.equal(shouldFreakout(() => 0, FREAKOUT_CHANCE), true);
-  assert.equal(shouldFreakout(() => 0.99, FREAKOUT_CHANCE), false);
+  assert.equal(shouldFreakout(() => 0.99, FREAKOUT_CHANCE), true);
+  assert.equal(shouldFreakout(() => 0.99, 0.6), false, 'die Chance bleibt konfigurierbar');
 
   const vars = { user: '<@u42>', expected: 6, got: 9 };
   const pings = pingBomb(vars);
   assert.equal(pings.split(' ').filter(Boolean).length, FREAKOUT_PINGS);
   assert.equal(pings, '<@u42>');
 
-  const lines = buildFreakoutLines('de', { ...vars, streak: 5 });
-  assert.equal(lines.length, 3, 'Titel, Puls und Nachtreter');
-  assert.ok(lines[0].includes('COUNTING-ALARM'));
+  const lines = buildEscalationLines('de', { ...vars, streak: 5 }, 0);
+  assert.equal(lines.length, 4, 'Einstieg, Fakten, hektischer Vertipper und Neustart');
+  assert.match(lines[2], /nien|nich/, 'absichtlicher Tippfehler macht den Text weniger steril');
   assert.equal(lines.join(' ').split('<@u42>').length - 1, 1, 'höchstens eine Erwähnung');
-  assert.match(lines[0], /6/);
-  assert.match(lines[0], /9/);
+  assert.match(lines.join(' '), /6/);
+  assert.match(lines.join(' '), /9/);
+  assert.match(lines.at(-1), /1/);
+
+  const legacyAlias = buildFreakoutLines('de', { ...vars, streak: 5 });
+  assert.equal(legacyAlias.length, 4);
 });
 
-test('Die sichere Ausrast-Show skaliert mit dem bisherigen Zählstand ohne Ping-Salve', () => {
+test('Die menschliche Ausrast-Sequenz skaliert mit dem bisherigen Zählstand ohne Ping-Salve', () => {
   assert.equal(rageTierForCount(0), 0);
   assert.equal(rageTierForCount(9), 0);
   assert.equal(rageTierForCount(10), 1);
@@ -600,16 +614,45 @@ test('Die sichere Ausrast-Show skaliert mit dem bisherigen Zählstand ohne Ping-
 
   const low = buildEscalationLines('de', {
     user: '<@u42>', expected: 6, got: 9, streak: 5,
-  });
+  }, 0);
   const high = buildEscalationLines('de', {
     user: '<@u42>', expected: 101, got: 999, streak: 100,
-  });
-  assert.equal(low.length, 3);
-  assert.equal(high.length, 3);
-  assert.ok(high[0].includes('IV'));
-  assert.ok(high[0].includes('🌋🌋🌋🌋'));
+  }, 0);
+  assert.equal(low.length, 4);
+  assert.equal(high.length, MAX_RAGE_MESSAGES);
+  assert.ok(high.some((line) => line.includes('🌋🌋🌋🌋')));
+  assert.ok(high.some((line) => /100\*\* ZAHLEN/.test(line)));
   assert.equal(high.join(' ').split('<@u42>').length - 1, 1, 'höchstens eine gezielte Erwähnung');
-  assert.ok(high[2].includes('Kein Spam'));
+  assert.match(high.at(-1), /1/, 'am Ende ist trotz Ausraster klar, wie es weitergeht');
+});
+
+test('Schreibpausen variieren menschlich, sind begrenzt und in Tests abschaltbar', () => {
+  assert.equal(rageDelayForLine('egal', 0, () => 0.5), 0);
+  const fast = rageDelayForLine('kurz', FREAKOUT_MESSAGE_DELAY_MS, () => 0);
+  const slow = rageDelayForLine('eine deutlich längere Nachricht', FREAKOUT_MESSAGE_DELAY_MS, () => 1);
+  assert.ok(fast >= 250);
+  assert.ok(slow > fast);
+  assert.ok(slow <= 1_500);
+});
+
+test('Alle Ausrast-Varianten sind vollständig, ping-sicher und Discord-tauglich', () => {
+  const languages = ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it'];
+  for (const lang of languages) {
+    for (const streak of [0, 10, 50, 100]) {
+      for (let variant = 0; variant < RAGE_VARIANTS; variant += 1) {
+        const expected = streak + 1;
+        const lines = buildEscalationLines(lang, {
+          user: '<@u42>', expected, got: 999, streak,
+        }, variant);
+        const fullText = lines.join(' ');
+        assert.ok(fullText.includes(String(expected)), `${lang}/${streak}/${variant}: Erwartung fehlt`);
+        assert.ok(fullText.includes('999'), `${lang}/${streak}/${variant}: Eingabe fehlt`);
+        assert.equal(fullText.split('<@u42>').length - 1, 1, `${lang}/${streak}/${variant}: Pinganzahl`);
+        assert.doesNotMatch(fullText, /\{\w+\}/, `${lang}/${streak}/${variant}: Platzhalter übrig`);
+        assert.ok(lines.every((line) => line.length <= 2_000), `${lang}/${streak}/${variant}: Discord-Limit`);
+      }
+    }
+  }
 });
 
 test('Das Kanal-Thema trägt sichtbaren Hinweis und unsichtbaren Marker', () => {
@@ -726,12 +769,14 @@ test('Counting stellt die Sprache nach einem Neustart dauerhaft aus dem Kanal-Th
   manager.shutdown();
 });
 
-test('Falsche Zahl dreht manchmal durch: begrenzte, sichere Showeinlage', async () => {
+test('Falsche Zahl löst die menschliche Durchdreh-Sequenz mit Tippanzeige aus', async () => {
   const sent = [];
+  let typingCalls = 0;
   const channel = {
     id: 'counting',
     guildId: 'guild',
     topic: buildCountingTopic('', 4, 'de'),
+    sendTyping: async () => { typingCalls += 1; },
     send: async (payload) => {
       sent.push(payload.content);
       return payload;
@@ -763,9 +808,11 @@ test('Falsche Zahl dreht manchmal durch: begrenzte, sichere Showeinlage', async 
 
   assert.equal(result.action, 'reset');
   assert.equal(result.reason, 'wrong');
-  assert.equal(sent.length, 3, 'Titel, Puls, Nachtreter');
+  assert.equal(sent.length, 4, 'Einstieg, Fakten, Tippfehler und Neustart');
+  assert.equal(typingCalls, sent.length - 1, 'vor jeder Folgenachricht erscheint „tippt …“');
   assert.equal(sent.join(' ').split('<@noob>').length - 1, 1, 'die Person wird höchstens einmal erwähnt');
-  assert.ok(sent[2].includes('Kein Spam'), 'keine Mass-Pings oder Server-Spam');
+  assert.match(sent[2], /nien|nich/, 'die Sequenz enthält den gewollten hektischen Vertipper');
+  assert.match(sent.at(-1), /1/, 'der Neustart bleibt eindeutig');
   manager.shutdown();
 });
 

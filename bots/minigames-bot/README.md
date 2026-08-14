@@ -99,12 +99,14 @@ weiter; eine Datenbank ist nicht erforderlich.
 - **Nur der Bot darf im Counting-Channel reagieren.** Jede von Nutzern oder
   anderen Bots hinzugefügte Reaktion wird wieder entfernt – auch ein zusätzliches
   **✅** oder **❌**. Die Reaktion des Minigames-Bots selbst bleibt bestehen.
-- **Falsche Zahl → Neustart bei 1**, und der Bot erklärt neutral, was erwartet
-  wurde. Es gibt zwölf wechselnde Sprüche (in allen 10 Sprachen). Mit **60 %
-  Chance** startet zusätzlich eine kurze, harmlose Showeinlage. Die Intensität
-  steigt mit dem erreichten Stand: ab 10/50/100 gibt es sichtbar stärkere
-  Alarm-Stufen. Der Bot erwähnt höchstens die verursachende Person einmal und
-  verschickt **keine Mass-Pings, DMs, Rollenaktionen oder Server-Spam**.
+- **Falsche Zahl → Neustart bei 1**, und der Bot dreht jetzt **jedes Mal** in
+  einer kleinen, menschlich wirkenden Chat-Sequenz durch: mehrere wechselnde
+  Einstiege, abgebrochene Gedanken, absichtliche Tippfehler, Selbstkorrekturen,
+  „tippt …“-Anzeige und variierende Schreibpausen. Die Intensität und Länge
+  steigen mit dem zerstörten Streak (Stufen ab 10/50/100), bleiben aber hart
+  auf höchstens sieben kurze Nachrichten begrenzt. Der Bot nennt immer die
+  falsche und die erwartete Zahl, erwähnt die verursachende Person höchstens
+  einmal und verschickt **keine Mass-Pings, DMs oder Rollenaktionen**.
 - **Zwei Zahlen derselben Person hintereinander** → Nachricht wird nur
   **gelöscht**, der Zählstand bleibt stehen.
 - **Text statt Zahl** → Nachricht wird ebenfalls nur gelöscht, kein Neustart.
