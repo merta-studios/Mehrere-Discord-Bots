@@ -250,11 +250,15 @@ async function setLanguageCmd(ctx, interaction) {
   if (!isAdmin(interaction)) return privateReply(interaction, t('errNoPermission', currentLang), currentLang);
 
   const newLang = interaction.options.getString('sprache');
+  await interaction.deferReply();
   const changedAt = Date.now();
   ctx.store.setServerLang(interaction.guildId, newLang, changedAt);
+  // Aktive Counting-Channels tragen die Sprache dauerhaft im Kanal-Thema. So
+  // überlebt die Auswahl Neustarts und große Mengen neuer Nachrichten.
+  await ctx.countingManager?.setGuildLanguage?.(interaction.guild, newLang, changedAt);
   const label = `${LANGS[newLang]?.flag || '🌍'} ${LANGS[newLang]?.name || newLang}`;
   const text = t('setLangUpdated', newLang, { lang: label });
-  return interaction.reply(
+  return interaction.editReply(
     componentsV2Payload([buildLanguageContainer(interaction.guildId, newLang, text, changedAt)])
   );
 }

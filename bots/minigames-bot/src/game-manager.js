@@ -5,6 +5,7 @@
 
 const { PermissionFlagsBits } = require('discord.js');
 const { parseGameMessage, parseLanguageMessage, buildGamePayload } = require('./embed-builder');
+const { parseCountingTopic } = require('./counting');
 const {
   STATUS_PENDING,
   STATUS_ACTIVE,
@@ -118,6 +119,20 @@ function createGameManager(ctx) {
     let gamesFound = 0;
     let newestLanguage = null;
     for (const channel of channels) {
+      // Counting-Themen sind ein dauerhafter zweiter Speicher für die
+      // Server-Sprache und verschwinden nicht aus einem Nachrichtenfenster.
+      const counting = parseCountingTopic(channel?.topic);
+      if (
+        counting?.lang &&
+        (!newestLanguage || Number(counting.languageChangedAt) >= newestLanguage.changedAt)
+      ) {
+        newestLanguage = {
+          guildId: guild.id,
+          lang: counting.lang,
+          changedAt: Number(counting.languageChangedAt) || 1,
+        };
+      }
+
       if (!channel?.isTextBased?.() || channel.viewable === false || !channel.messages?.fetch) continue;
       const me = guild.members?.me;
       if (me && channel.permissionsFor?.(me)?.has(PermissionFlagsBits.ViewChannel) === false) continue;

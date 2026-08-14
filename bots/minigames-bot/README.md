@@ -88,7 +88,9 @@ weiter; eine Datenbank ist nicht erforderlich.
 
 - **Gemerkt wird der Channel im Kanal-Thema** – passend zum datenbanklosen
   Konzept des Bots. Sichtbar steht dort `🔢 Counting-Channel | Aktuelle Zahl: 42`,
-  direkt dahinter ein unsichtbarer Marker, den nur der Bot liest. Ein bereits
+  direkt dahinter ein unsichtbarer Marker, den nur der Bot liest. Dieser hält
+  neben dem Zählstand auch die mit `/set_language` gewählte Sprache dauerhaft
+  fest, sodass sie Neustarts und lange Chatverläufe überlebt. Ein bereits
   vorhandenes Thema bleibt erhalten.
 - **Es beginnt bei 1.** Jede Zahl muss genau die nächste sein.
 - **Niemand darf zweimal hintereinander zählen** – es muss immer abgewechselt
@@ -98,7 +100,7 @@ weiter; eine Datenbank ist nicht erforderlich.
   anderen Bots hinzugefügte Reaktion wird wieder entfernt – auch ein zusätzliches
   **✅** oder **❌**. Die Reaktion des Minigames-Bots selbst bleibt bestehen.
 - **Falsche Zahl → Neustart bei 1**, und der Bot outet die Person mit einem von
-  zwölf wechselnden Sprüchen (in allen 10 Sprachen). Hin und wieder **dreht der
+  zwölf wechselnden Sprüchen (in allen 10 Sprachen). Mit **60 % Chance dreht der
   Bot komplett durch**: Er feuert einen Wut-Ausruf ab, pingt den Übeltäter mehrfach
   in einer Ping-Salve und legt mit einem Nachtreter nach.
 - **Zwei Zahlen derselben Person hintereinander** → Nachricht wird nur
