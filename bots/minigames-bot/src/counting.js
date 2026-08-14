@@ -10,11 +10,11 @@
  * Regeln:
  * - Es beginnt bei 1.
  * - Niemand darf zwei Zahlen hintereinander schreiben.
- * - Richtige Zahl → ✅, falsche Zahl → ❌, Neustart bei 1 und eine neutrale
- *   Fehlermeldung (mit wechselnden Sprüchen).
- * - Bei einer falschen Zahl zeigt der Bot hin und wieder eine kurze, sichere
- *   Ausrast-Show. Die Dramaturgie steigt mit dem bisherigen Zählstand, bleibt
- *   aber auf höchstens drei Bot-Nachrichten und verwendet keine Mass-Pings.
+ * - Richtige Zahl → ✅, falsche Zahl → ❌ und Neustart bei 1.
+ * - Bei einer falschen Zahl dreht der Bot in einer kurzen Chat-Sequenz durch:
+ *   abgebrochene Gedanken, absichtliche Tippfehler, Selbstkorrekturen und eine
+ *   menschlich wirkende Schreib-Pause. Je länger der zerstörte Streak war,
+ *   desto stärker fällt die Reaktion aus – ohne Mass-Pings.
  * - Zwei Zahlen derselben Person hintereinander → Nachricht wird nur
  *   gelöscht, der Zählstand bleibt.
  * - Text statt Zahl → Nachricht wird gelöscht, der Zählstand bleibt.
@@ -37,14 +37,14 @@ const FAIL_VARIANTS = 12;
 const RAGE_VARIANTS = 4;
 /** Legacy-Konstante; eine Fehlermeldung darf höchstens einmal erwähnen. */
 const FREAKOUT_PINGS = 1;
-/** Wahrscheinlichkeit, dass der Bot bei einer falschen Zahl „durchdreht“. */
-const FREAKOUT_CHANCE = 0.6;
-/** Kleine Pause zwischen den Nachrichten des Ausrasters (Rate-Limit-Schutz). */
-const FREAKOUT_MESSAGE_DELAY_MS = 400;
+/** Standardmäßig folgt auf jede falsche Zahl eine Ausrast-Sequenz. */
+const FREAKOUT_CHANCE = 1;
+/** Grundtempo der variierenden Schreibpausen zwischen den Chat-Nachrichten. */
+const FREAKOUT_MESSAGE_DELAY_MS = 650;
 /** Kein einzelner Discord-Request darf eine Sprach-Synchronisierung blockieren. */
 const DISCORD_OPERATION_TIMEOUT_MS = 8_000;
-/** Die Reaktion bleibt theatralisch, aber der Bot spammt niemals den Channel. */
-const MAX_RAGE_MESSAGES = 3;
+/** Auch auf der höchsten Stufe bleibt der Ausraster hart begrenzt. */
+const MAX_RAGE_MESSAGES = 7;
 
 const OK_EMOJI = '✅';
 const FAIL_EMOJI = '❌';
@@ -149,26 +149,61 @@ function rageBar(tier) {
   );
 }
 
+function normalizedVariant(index, size = RAGE_VARIANTS) {
+  return ((Math.floor(Number(index) || 0) % size) + size) % size;
+}
+
 /**
- * Öffentliche, aber harmlose Ausrast-Show. Es gibt höchstens drei kurze
- * Bot-Nachrichten, eine einzige gezielte Erwähnung und keine Ping-Salve.
- * Der bisherige Stand beeinflusst sichtbar die Stufe und den Umfang der
- * Dramaturgie.
+ * Baut eine kleine Chat-Szene statt einer sterilen Bot-Fehlermeldung. Titel,
+ * Fakten, Tippfehler und Reset werden aus getrennten Varianten kombiniert.
+ * So klingt nicht jeder Ausraster gleich. Mit dem verlorenen Streak kommen
+ * zusätzliche Nachrichten hinzu; nur der Titel enthält die User-Erwähnung.
  */
-function buildEscalationLines(lang, vars = {}) {
+function buildEscalationLines(
+  lang,
+  vars = {},
+  index = Math.floor(Math.random() * RAGE_VARIANTS)
+) {
   const streak = Math.max(0, Number(vars.streak ?? vars.expected - 1) || 0);
   const tier = rageTierForCount(streak);
+  const variant = normalizedVariant(index);
+  const bodyVariant = normalizedVariant(variant + tier + 1);
   const values = {
     ...vars,
     streak,
     level: ['I', 'II', 'III', 'IV'][tier],
     bar: rageBar(tier),
   };
-  return [
-    t('countRageSafeTitle', lang, values),
-    t('countRageSafePulse', lang, values),
-    t('countRageSafeBody', lang, values),
-  ].slice(0, MAX_RAGE_MESSAGES);
+
+  const lines = [
+    // Nur hier steht die echte Erwähnung. Nachfolgende Zeilen sprechen die
+    // Person menschlich an, ohne Discord bei jeder Nachricht erneut pingen zu lassen.
+    t(`countRageTitle${variant + 1}`, lang, values),
+    t(`countRageBody${bodyVariant + 1}`, lang, {
+      ...values,
+      user: t('countRageAside', lang),
+    }),
+    t(`countRageSpiral${variant + 1}`, lang, values),
+  ];
+
+  if (tier >= 1) lines.push(t('countRageStreakLoss', lang, values));
+  if (tier >= 2) lines.push(t('countRageAftershock', lang, values));
+  if (tier >= 3) lines.push(t('countRageCatastrophe', lang, values));
+  lines.push(t(`countRageReset${bodyVariant + 1}`, lang, values));
+
+  return lines.slice(0, MAX_RAGE_MESSAGES);
+}
+
+/**
+ * Menschliche Schreibgeschwindigkeit mit etwas Jitter. Kurze Einwürfe kommen
+ * schneller, längere Wut-Nachrichten brauchen sichtbar ein bisschen länger.
+ */
+function rageDelayForLine(content, baseDelayMs = FREAKOUT_MESSAGE_DELAY_MS, random = Math.random) {
+  const base = Math.max(0, Number(baseDelayMs) || 0);
+  if (base === 0) return 0;
+  const jitter = 0.7 + Math.max(0, Math.min(1, Number(random()) || 0)) * 0.6;
+  const typingTime = Math.min(350, String(content || '').length * 3);
+  return Math.max(250, Math.min(1_500, Math.round(base * jitter + typingTime)));
 }
 
 /* ------------------------------------------------------------------ *
@@ -524,10 +559,11 @@ function createCountingManager(
   }
 
   /**
-   * Reagiert auf eine falsche Zahl. Kleine Fehler bekommen einen kurzen
-   * Spruch. Bei langen Streaks oder einem zufälligen Ausraster zeigt der Bot
-   * eine begrenzte, skalierende Showeinlage – ohne Mass-Pings, Rollenaktionen,
-   * DMs oder fremde Nachrichten anzufassen.
+   * Reagiert auf eine falsche Zahl. Standardmäßig folgt die menschlich
+   * geschriebene Ausrast-Sequenz immer; die injizierbare Wahrscheinlichkeit
+   * bleibt für Tests bzw. ruhigere Integrationen konfigurierbar. Lange Streaks
+   * verlängern die Szene, ohne Mass-Pings, Rollenaktionen, DMs oder fremde
+   * Nachrichten anzufassen.
    */
   async function sendFailureReaction(channel, userId, lang, vars) {
     const mentionOptions = { users: [userId], parse: [] };
@@ -540,14 +576,23 @@ function createCountingManager(
       return;
     }
 
-    const lines = buildEscalationLines(lang, { ...vars, streak });
-    for (const content of lines) {
-      await channel.send({ content, allowedMentions: mentionOptions }).catch(() => {});
-      if (content !== lines[lines.length - 1]) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, Math.max(0, Number(messageDelayMs) || 0));
-        });
+    const variant = Math.floor(Number(random()) * RAGE_VARIANTS);
+    const lines = buildEscalationLines(lang, { ...vars, streak }, variant);
+    for (let index = 0; index < lines.length; index += 1) {
+      const content = lines[index];
+
+      // Die erste Reaktion kommt sofort. Danach zeigt Discord kurz „tippt …“
+      // und die variierende Pause lässt die Folge wie echte Chat-Nachrichten
+      // statt wie einen auf einmal ausgespuckten Textblock wirken.
+      if (index > 0) {
+        await channel.sendTyping?.().catch(() => {});
+        const delay = rageDelayForLine(content, messageDelayMs, random);
+        if (delay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
       }
+
+      await channel.send({ content, allowedMentions: mentionOptions }).catch(() => {});
     }
   }
 
@@ -637,6 +682,7 @@ module.exports = {
   buildFreakoutLines,
   rageTierForCount,
   rageBar,
+  rageDelayForLine,
   buildEscalationLines,
   parseCountingTopic,
   stripCountingTopic,

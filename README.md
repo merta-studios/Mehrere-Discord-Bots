@@ -305,8 +305,10 @@ Details siehe [`bots/minigames-bot/README.md`](bots/minigames-bot/README.md):
   (Nachricht wird nur gelöscht), Text wird gelöscht, Bots und Webhooks zählen
   nicht mit. Nur der Minigames-Bot darf dort reagieren; fremde Reaktionen werden
   auch bei ✅/❌ sofort entfernt. Bei einer falschen Zahl geht es zurück auf 1 und
-  der Bot outet die Person mit einem von sechs wechselnden Sprüchen. Der Zählstand steht sichtbar
-  im **Kanal-Thema** (`🔢 Counting-Channel | Aktuelle Zahl: 42`) plus
+  der Bot dreht in einer gestaffelten, menschlich wirkenden Chat-Sequenz mit
+  Tippfehlern, Selbstkorrekturen, „tippt …“-Anzeige und variierenden Pausen
+  durch. Längere zerstörte Streaks lösen stärkere, aber begrenzte Reaktionen aus.
+  Der Zählstand steht sichtbar im **Kanal-Thema** (`🔢 Counting-Channel | Aktuelle Zahl: 42`) plus
   unsichtbarem Marker – wieder **ohne Datenbank**.
 - Zugreihenfolge, belegte Felder, volle Spalten, Siege in allen Richtungen und
   Unentschieden werden serverseitig geprüft; fremde Zuschauer können nicht ziehen.
