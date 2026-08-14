@@ -85,8 +85,9 @@ function createVoicePresenceManager(
   // guildId -> { channelId, mode, members, established, joining, retryTimer }
   const desired = new Map();
   const observedConnections = new WeakSet();
-  // Verhindert, dass ein noch nicht aktualisierter Discord.js-VoiceState direkt
-  // nach einem Owner-Leave den Button fälschlich weiter als „verlassen“ rendert.
+  // Verhindert, dass ein noch nicht aktualisierter Discord.js-VoiceState den
+  // Button fälschlich als „verbunden“ rendert – direkt nach einem Owner-Leave
+  // oder nach einem fehlgeschlagenen Join.
   const ownerDisconnected = new Set();
   let stopped = false;
 
@@ -178,6 +179,38 @@ function createVoicePresenceManager(
     });
   }
 
+  /**
+   * Wartet, bis der Bot wirklich „im Call" ist. Als verbunden gilt, sobald
+   * entweder die Voice-Library den Zustand Ready meldet **oder** Discord den
+   * Bot sichtbar im Zielkanal führt (Voice-State). Manche Hoster blockieren
+   * den Audio-UDP-Pfad, sodass @discordjs/voice nie Ready meldet, obwohl der
+   * Bot stabil und sichtbar im Call steht – für die stille Präsenz genügt
+   * genau das. Erst wenn beides ausbleibt, gilt der Join als fehlgeschlagen.
+   */
+  function waitForVoiceReady(guild, connection, expectedChannelId, timeoutMs) {
+    const wanted = String(expectedChannelId || '');
+    const inChannel = () => actualChannelId(guild) === wanted;
+    const ready = () => connection?.state?.status === voice.VoiceConnectionStatus.Ready;
+    if (inChannel() || ready()) return Promise.resolve();
+
+    const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setInterval(() => {
+        if (settled) return;
+        if (inChannel() || ready()) {
+          settled = true;
+          clearInterval(timer);
+          resolve();
+        } else if (Date.now() >= deadline) {
+          settled = true;
+          clearInterval(timer);
+          reject(new Error('Der Call konnte nicht beigetreten werden (Zeitüberschreitung).'));
+        }
+      }, 250);
+    });
+  }
+
   async function resolveTarget(guild, entry) {
     let channel = channelById(guild, entry.channelId);
     if (canJoinVoiceChannel(ctx, guild, channel)) return channel;
@@ -232,7 +265,7 @@ function createVoicePresenceManager(
       }
 
       observeConnection(id, connection);
-      await voice.entersState(connection, voice.VoiceConnectionStatus.Ready, readyTimeoutMs);
+      await waitForVoiceReady(guild, connection, channel.id, readyTimeoutMs);
       connection.setSpeaking?.(false);
       entry.established = true;
       ownerDisconnected.delete(id);
@@ -281,7 +314,10 @@ function createVoicePresenceManager(
       if (connection && connection.state?.status !== voice.VoiceConnectionStatus.Destroyed) {
         connection.destroy();
       }
-      if (wasOwnerDisconnected) ownerDisconnected.add(id);
+      // Auch nach einem fehlgeschlagenen Join darf das Panel keinen falschen
+      // „verbunden"-Zustand anzeigen – der Discord.js-VoiceState-Cache kann
+      // hier noch auf den (zwischenzeitlich verlassenen) Kanal zeigen.
+      ownerDisconnected.add(id);
       return { ok: false, error: err.message };
     }
   }
@@ -344,10 +380,15 @@ function createVoicePresenceManager(
       if (actualId && actualId !== entry.channelId) entry.channelId = actualId;
       const connection = connectionFor(guildId);
       const status = connection?.state?.status;
+
+      // Ready ist die maßgebliche Quelle für „verbunden". Ein (noch) leerer
+      // Voice-State-Cache darf deshalb keinen erzwungenen Rejoin auslösen –
+      // sonst reißt der Watchdog eine gesunde Verbindung wieder ab.
+      if (status === voice.VoiceConnectionStatus.Ready) continue;
+
       if (
         actualId &&
-        (status === voice.VoiceConnectionStatus.Ready ||
-          status === voice.VoiceConnectionStatus.Connecting ||
+        (status === voice.VoiceConnectionStatus.Connecting ||
           status === voice.VoiceConnectionStatus.Signalling)
       ) {
         continue;
