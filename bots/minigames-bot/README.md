@@ -14,7 +14,7 @@ Dauer-Spiel **Counting** für einen eigenen Channel.
 | `/set_counting_channel [channel] (aktiv)` | Nur Admins: erklärt einen Textkanal zum Counting-Channel. `aktiv: False` schaltet ihn wieder ab. |
 | `/admin_set_bot_profile [image]` | Nur Admins: setzt das serverspezifische Bot-Bild auf Standard, Server-Icon oder Owner-Profilbild. |
 | `/help` | Zeigt Spiele, Ablauf und Befehle. |
-| `/adminpanel` | Owner-Panel im DM: Serverliste, Einladungslink und Server verlassen. |
+| `/adminpanel` | Owner-Panel im DM: Serverliste, Einladungslink, still einen Call joinen/verlassen und Server verlassen. |
 
 ## Ablauf einer Herausforderung
 
@@ -94,6 +94,9 @@ weiter; eine Datenbank ist nicht erforderlich.
 - **Niemand darf zweimal hintereinander zählen** – es muss immer abgewechselt
   werden.
 - Der Bot reagiert auf jede gültige Zahl mit **✅**, auf eine falsche mit **❌**.
+- **Nur der Bot darf im Counting-Channel reagieren.** Jede von Nutzern oder
+  anderen Bots hinzugefügte Reaktion wird wieder entfernt – auch ein zusätzliches
+  **✅** oder **❌**. Die Reaktion des Minigames-Bots selbst bleibt bestehen.
 - **Falsche Zahl → Neustart bei 1**, und der Bot outet die Person mit einem von
   sechs wechselnden Sprüchen (in allen 10 Sprachen).
 - **Zwei Zahlen derselben Person hintereinander** → Nachricht wird nur
@@ -104,6 +107,20 @@ weiter; eine Datenbank ist nicht erforderlich.
   Zählstands *Kanal verwalten*. Fehlt ein Recht, sagt der Command das direkt.
 - `/set_counting_channel #channel aktiv:False` schaltet den Kanal wieder ab und
   räumt das Thema auf.
+
+## 🔊 Stille Call-Präsenz im Owner-Panel
+
+Nur der konfigurierte Bot-Owner kann diese Funktion im DM-`/adminpanel`
+verwenden. In der Server-Detailansicht erscheint **Call joinen**:
+
+- Gibt es bereits belegte, beitretbare Voice-Channels, joint der Bot den mit den
+  meisten Mitgliedern. Bei Gleichstand wird zufällig gewählt.
+- Sind alle beitretbaren Voice-Channels leer, wird einer zufällig gewählt.
+- Der Bot startet keinen Audio-Player und joint stumm/taub. Ein 15-Sekunden-
+  Watchdog stellt die gewünschte Verbindung nach einem unerwarteten Disconnect
+  wieder her und weicht auf einen anderen Voice-Channel aus, falls das Ziel
+  gelöscht oder nicht mehr beitretbar ist.
+- Solange der Bot verbunden ist, heißt derselbe Button **Call verlassen**.
 
 ## Design-Prinzip der Spielfelder
 
@@ -148,5 +165,6 @@ Fallback unterstützt. Es ist also kein neuer Bot-Token erforderlich.
   (Message Content wird für das Counting-Spiel gebraucht)
 - Rechte: Kanäle ansehen, Nachrichten senden, Links einbetten, Reaktionen
   hinzufügen; für Counting zusätzlich *Nachrichten verwalten* und
-  *Kanal verwalten*; für das Owner-Panel optional Einladungen erstellen; für
-  den Profilbefehl das serverspezifische Profil bearbeiten
+  *Kanal verwalten*; für das Owner-Panel optional *Einladungen erstellen* und
+  für die Call-Funktion *Verbinden*; für den Profilbefehl das serverspezifische
+  Profil bearbeiten

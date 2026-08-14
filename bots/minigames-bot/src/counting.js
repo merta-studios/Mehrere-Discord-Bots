@@ -279,6 +279,40 @@ function createCountingManager(ctx) {
     return Boolean(channel && parseCountingTopic(channel.topic));
   }
 
+  /**
+   * In einem Counting-Channel gehören alle Reaktionen ausschließlich dem Bot.
+   * Das gilt auch dann, wenn jemand exakt dasselbe Emoji (✅/❌) wie der Bot
+   * hinzufügt. `reaction.users.remove(id)` entfernt nur die Reaktion dieser
+   * Person und lässt die Bot-Reaktion bestehen.
+   */
+  async function handleReactionAdd(reaction, user) {
+    if (!user?.id || user.id === ctx.client.user?.id) return false;
+
+    // Mit Partials funktioniert die Regel auch für Nachrichten, die vor einem
+    // Bot-Neustart geschrieben wurden und deshalb nicht mehr im Cache liegen.
+    if (reaction?.partial) {
+      reaction = await reaction.fetch().catch(() => null);
+    }
+    if (!reaction) return false;
+
+    let message = reaction.message;
+    if (message?.partial) {
+      message = await message.fetch().catch(() => null);
+    }
+    const channel = message?.channel;
+    if (!message?.guildId || !channel || !parseCountingTopic(channel.topic)) return false;
+
+    try {
+      await reaction.users.remove(user.id);
+      return true;
+    } catch (err) {
+      ctx.logger.warn(
+        `[minigames-bot] Fremde Counting-Reaktion von ${user.id} konnte nicht entfernt werden: ${err.message}`
+      );
+      return false;
+    }
+  }
+
   async function handleMessage(message) {
     // Bots und Webhooks spielen nicht mit.
     if (!message.guildId || message.author?.bot || message.webhookId || message.system) return null;
@@ -328,6 +362,7 @@ function createCountingManager(ctx) {
 
   return {
     handleMessage,
+    handleReactionAdd,
     setCountingChannel,
     isCountingChannel,
     entryFor,
