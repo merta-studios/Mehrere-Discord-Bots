@@ -447,24 +447,16 @@ function hasLevelPlaceholder(template) {
 
 // ---------------------------------------------------------------------------
 // Voice XP Logik (testbar)
+//
+// Seit v2: Voice-XP gibt es einfach dafür, dass man im Voice-Channel ist –
+// egal ob stumm/taub (self/server mute/deaf, suppress), egal ob allein oder
+// mit anderen. „Anwesend = XP“. Keine Speaking-/Pausen-Heuristik mehr, die
+// realen Voicestates ohnehin nicht zuverlässig beobachtet (Discord liefert
+// ohne Receiver keine Speaking-Events).
 // ---------------------------------------------------------------------------
 
-function shouldGrantVoiceXp({ secondsSpoken, totalSeconds, hadPause, eligible }) {
-  if (!eligible) return false;
-  if (secondsSpoken < 5) return false; // mindestens 5 sec gesprochen
-  if (secondsSpoken >= totalSeconds) return false; // durchgehend ohne Pause
-  if (!hadPause) return false;
-  return true;
-}
-
-function isVoiceEligible(memberVoiceState, channelMemberCount) {
-  // memberVoiceState muss Objekt mit mute/deaf flags haben
-  if (!memberVoiceState) return false;
-  const { selfMute, selfDeaf, serverMute, serverDeaf, suppress } = memberVoiceState;
-  if (selfMute || selfDeaf || serverMute || serverDeaf || suppress) return false;
-  // braucht mindestens eine weitere eligible Person im selben Channel
-  if (channelMemberCount < 2) return false;
-  return true;
+function shouldGrantVoiceXp({ present }) {
+  return Boolean(present);
 }
 
 // ---------------------------------------------------------------------------
@@ -607,7 +599,6 @@ module.exports = {
   hasLvlTag,
   getMedal,
   shouldGrantVoiceXp,
-  isVoiceEligible,
   MEDIA_XP,
   MAX_MESSAGE_XP,
   isMediaContentType,
