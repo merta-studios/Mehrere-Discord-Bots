@@ -18,13 +18,16 @@
  *  - Täglich 0 Uhr (TZ pro Sprache): 5% Decay; wer 24h keine XP verdient hat,
  *    bekommt +3 Prozentpunkte pro weiterem inaktivem Tag (5→8→11→14%…),
  *    Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
- *  - Voice 25XP/min: nicht muted, mit mind. 1 anderer, >=5s gesprochen, Pause nötig
+ *  - Voice 10XP/min: einfach nur im Voice-Channel sein (egal ob Mute/Deaf/allein)
  *  - Leaderboard stündlich + bei Level-Up/Down (max alle 10 Min), Container V2,
  *    Top15, kurzer Decay-Hinweis, Zeit+TZ, Self-Healing über Marker
  *  - /rank für alle, /help, /admin_set_bot_profile, /adminpanel (Owner DM)
  *  - /toggle_nicknames (Admin, nach /setup): Level-Tags in Nicknames an/aus (Standard: an)
  *  - /sync_nicknames (Admin, nach /setup): alle Mitglieder-Nicknames mit Ladeanzeige abgleichen
  *  - /set_inactive_role (Admin, nach /setup): Inaktiv-Rolle nach N Tagen ohne XP, Sync um 0 Uhr + beim Command
+ *  - /ping_inactive_people [Main Channel|Direct] (Admin, nach /setup): Formular-Nachricht,
+ *    Main Channel = {ROLEPING}→Inaktiv-Rollen-Mention in den Command-Kanal, Direct = DM an alle
+ *    Inaktiven mit Fortschrittsbalken nur für den Command-Nutzer
  *  - Nicknames: [Lvl X 🥇] Name (Top3 Medaillen), bei Erfolg sofort, 32 Zeichen
  *  - Bei Verlassen: Daten löschen
  *  - Turso: RAM-first, Dirty-Tracking, Batch-Flush bei SIGTERM + alle 5min Backup
@@ -34,7 +37,7 @@
 const { GatewayIntentBits, ActivityType, Events, MessageFlags } = require('discord.js');
 
 const { createXpStore } = require('./src/store');
-const { registerCommands } = require('./src/commands');
+const { registerCommands, registerGuildCommands } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
 const { sendJoinNotice } = require('./src/admin-panel');
 const { startScheduler } = require('./src/scheduler');
@@ -381,12 +384,13 @@ module.exports = {
     client.on('guildCreate', (guild) => {
       void sendJoinNotice(ctx, guild);
       updatePresence();
-      if (!ctx.devGuildId) {
-        const clientId = client.user?.id;
-        if (clientId) {
-          ctx.rest.put(Routes.applicationGuildCommands(clientId, guild.id), { body: [] }).catch(() => {});
-        }
-      }
+      // Server-Commands SOFORT auf den neuen Server schreiben (ohne Dev-Gilde).
+      // Früher wurde hier `body: []` (leeren Guild-Satz) geputzt – das hat auf
+      // manchen Servern veraltete Sets hinterlassen bzw. nach dem Neustart
+      // Duplikate durch global registrierte Kopien erzeugt.
+      void registerGuildCommands(ctx, guild.id).catch((e) =>
+        logger.warn('[xp-level-bot] guildCreate Command-Registrierung fehlgeschlagen:', e.message)
+      );
     });
 
     // ---------------- Nickname bei Serverbeitritt (ab Level 1) ----------------

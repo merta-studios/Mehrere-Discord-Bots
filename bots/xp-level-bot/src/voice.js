@@ -1,22 +1,23 @@
 /**
- * Voice XP Tracker – vergibt alle 60s 25 XP pro User der:
- * - nicht stumm/taub (self/server mute/deaf, suppress)
- * - mit mind. einer anderen nicht-stummen Person im selben Voice-Channel ist
- * - in der Minute mind. 5s aktiv gesprochen hat
- * - UND mindestens eine Sprechpause hatte (nicht 60s durchgehend)
+ * Voice XP Tracker – vergibt alle 60s **10 XP** pro User, der einfach in
+ * einem Voice-Channel ist.
  *
- * Speaking-Erkennung: Da Discord ohne Bot im Channel keine echten Speaking-Events liefert,
- * tracken wir Speaking über VoiceState-Mute-Toggles + Channel-Präsenz als Heuristik,
- * UND unterstützen optional @discordjs/voice Receiver wenn verfügbar.
+ * Seit v2 (Fix „Voice XP geht immer noch nicht“):
+ * - Es gibt KEINE Bedingungen mehr an Mute/Deaf/Suppress (self ODER server),
+ *   an Sprechzeit, Sprechpausen oder die Anzahl weiterer Personen im Channel.
+ * - „Anwesend = XP“: Ob man stumm ist, taub gestellt, allein im Channel oder
+ *   im Stage – man bekommt pro angefangener Minute 10 XP.
+ * - Fairer Wert: Chat-XP bringt bis zu 30 XP pro Nachricht bei 30s Cooldown
+ *   (≈60 XP/min für sehr aktive Chatter). 10 XP/min reine Anwesenheit belohnt
+ *   das „Im-Call-Sein“ spürbar, ohne aktives Chatten zu überholen.
  *
- * Für robuste Tests ist die Kern-Entscheidung in `shouldGrantVoiceXp` rein funktional.
- *
- * FIXES:
- * - Bootstrapping: Beim Start (und regelmäßig im Tick) werden bestehende VoiceStates
- *   aus dem Cache gelesen und Sessions dafür angelegt. Ohne das bekäme niemand XP,
- *   wenn der Bot neu startet während Nutzer schon im Call sind (genau der gemeldete Bug).
- * - Eligible-Zählung nutzt jetzt guild.voiceStates.cache (verlässlicher als channel.members)
- *   und filtert Bots heraus.
+ * Technik:
+ * - Sessions (guildId:userId -> voiceSession) werden beim Join, beim
+ *   Bootstrap (Bot-Start während Leute schon im Call sind) und einmal pro
+ *   Tick nachgezogen, damit nie jemand durch einen verpassten
+ *   voiceStateUpdate leer ausgeht.
+ * - Nur Menschen (keine Bots) und nur konfigurierte Gilden
+ *   (cfg.leaderboardChannelId) bekommen XP.
  */
 
 const { shouldGrantVoiceXp } = require('./logic');
@@ -25,14 +26,16 @@ const { maybeRefreshLeaderboard } = require('./scheduler');
 const { syncLevelRolesForUser } = require('./level-roles');
 const { sendLevelAnnouncement } = require('./level-announcements');
 
+/** Fairer Wert: 10 XP pro Minute Anwesenheit im Voice-Channel. */
+const VOICE_XP_PER_MINUTE = 10;
+
 function createVoiceTracker({ client, store, logger, getGuildConfig }) {
   // guildId:userId -> voiceSession
   const sessions = new Map();
 
   function key(guildId, userId){ return `${guildId}:${userId}`; }
 
-  // Session Struktur:
-  // { guildId, userId, channelId, joinedAt, lastMinuteStart, secondsSpoken, hadPause, lastSpokeAt, muteToggleCount }
+  // Session Struktur: { guildId, userId, channelId, joinedAt, lastMinuteStart }
   function ensureSession(guildId, userId, channelId) {
     const k = key(guildId,userId);
     let s = sessions.get(k);
@@ -41,18 +44,12 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
         guildId, userId, channelId,
         joinedAt: Date.now(),
         lastMinuteStart: Date.now(),
-        secondsSpoken: 0,
-        hadPause: false,
-        lastSpokeAt: 0,
-        muteToggleCount: 0,
-        accumulated: 0,
       };
       sessions.set(k,s);
     }
     // Falls Channel gewechselt hat, aktualisieren
     if (s.channelId !== channelId) {
       s.channelId = channelId;
-      s.hadPause = true;
     }
     return s;
   }
@@ -61,75 +58,20 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
     sessions.delete(key(guildId,userId));
   }
 
-  // Wird bei jedem voiceStateUpdate aufgerufen – trackt Mute-Wechsel als Pause-Indikator
+  // Wird bei jedem voiceStateUpdate aufgerufen – legt Sessions an bzw. räumt auf
   function onVoiceStateUpdate(oldState, newState){
     const guildId = newState.guild?.id || oldState.guild?.id;
     const userId = newState.id || oldState.id;
     if (!guildId || !userId) return;
-    const k = key(guildId,userId);
     const channelId = newState.channelId;
-    const oldChannel = oldState.channelId;
 
     if (!channelId) {
       // Verlassen
-      sessions.delete(k);
+      sessions.delete(key(guildId,userId));
       return;
     }
     // Gejoint oder gewechselt
-    const s = ensureSession(guildId, userId, channelId);
-    s.channelId = channelId;
-
-    // Mute/Deaf Wechsel erkennen -> hatte Pause (speaking unterbrochen)
-    const wasMuted = oldState.selfMute || oldState.serverMute || oldState.selfDeaf || oldState.serverDeaf || oldState.suppress;
-    const isMuted = newState.selfMute || newState.serverMute || newState.selfDeaf || newState.serverDeaf || newState.suppress;
-    if (wasMuted !== isMuted) {
-      s.hadPause = true;
-      s.muteToggleCount++;
-    }
-    // Auch Channel-Wechsel zählt als Pause
-    if (oldChannel && oldChannel !== channelId) s.hadPause = true;
-  }
-
-  /**
-   * Zählt zuverlässig die nicht-gemuteten, nicht-Bot-Nutzer in einem Voice-Channel.
-   * Primär über guild.voiceStates.cache (verlässlich selbst wenn channel.members leer ist),
-   * Fallback über channel.members.
-   */
-  function getEligibleCount(guild, channelId) {
-    let count = 0;
-    try {
-      if (guild.voiceStates?.cache) {
-        for (const vs of guild.voiceStates.cache.values()) {
-          if (vs.channelId !== channelId) continue;
-          if (vs.selfMute || vs.serverMute || vs.selfDeaf || vs.serverDeaf || vs.suppress) continue;
-          const mem = guild.members?.cache?.get(vs.id);
-          if (mem?.user?.bot) continue;
-          count++;
-        }
-        // Wenn wir über voiceStates schon >=2 gefunden haben, reicht das
-        if (count >= 2) return count;
-        // Falls count <2, aber voiceStates könnte unvollständig sein (Bots nicht im Cache),
-        // versuchen wir zusätzlich channel.members als zweite Quelle und nehmen das Maximum.
-      }
-    } catch {}
-
-    try {
-      const channel = guild.channels.cache.get(channelId);
-      if (channel?.members) {
-        let channelCount = 0;
-        for (const m of channel.members.values()) {
-          if (m.user?.bot) continue;
-          const v = m.voice;
-          if (!v) continue;
-          if (v.selfMute || v.serverMute || v.selfDeaf || v.serverDeaf || v.suppress) continue;
-          channelCount++;
-        }
-        // Nimm den größeren der beiden Zählungen (voiceStates vs channel.members)
-        count = Math.max(count, channelCount);
-      }
-    } catch {}
-
-    return count;
+    ensureSession(guildId, userId, channelId);
   }
 
   /**
@@ -173,7 +115,7 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
       const channel = guild.channels.cache.get(sess.channelId);
       if (!channel || !channel.isVoiceBased?.()) { sessions.delete(k); continue; }
 
-      // Prüfe ob user noch in Channel ist (über voiceStates oder fetch)
+      // Prüfe ob user noch in Channel ist (über voiceStates)
       let voiceState = null;
       try { voiceState = guild.voiceStates.cache.get(sess.userId) || null; } catch {}
       if (voiceState) {
@@ -193,43 +135,24 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
       }
       // Bots bekommen keinerlei XP
       if (member?.user?.bot) { sessions.delete(k); continue; }
-      // Falls member nicht gefetched werden konnte, aber voiceState vorhanden, nutze voiceState für Mute-Check
+      // Falls member nicht gefetched werden konnte, aber voiceState vorhanden, nutze voiceState
       const vs = member?.voice || voiceState;
-      if (!vs) { sessions.delete(k); continue; }
-      const muted = vs.selfMute || vs.serverMute || vs.selfDeaf || vs.serverDeaf || vs.suppress;
-
-      // Zähle eligible Mitglieder im Channel (ohne Bots)
-      const eligibleCount = getEligibleCount(guild, sess.channelId);
-      const eligible = !muted && eligibleCount >= 2;
+      if (!vs || !vs.channelId) { sessions.delete(k); continue; }
 
       // Zeit seit letztem Tick
       const elapsedSec = Math.round((now - sess.lastMinuteStart)/1000);
       if (elapsedSec < 60) continue; // erst nach 60s werten
 
-      // Schätze secondsSpoken: wenn eligible, dann 25-35 sec mit Pausen, sonst 0
-      let secondsSpoken = 0;
-      let hadPause = sess.hadPause;
-      if (eligible) {
-        secondsSpoken = 25 + Math.floor(Math.random()*10); // 25-35
-        if (!hadPause) {
-          hadPause = true; // natürliche Sprechpausen annehmen
-        }
-      } else {
-        secondsSpoken = 0;
-        hadPause = false;
-      }
-
-      const grant = shouldGrantVoiceXp({ secondsSpoken, totalSeconds: 60, hadPause, eligible });
+      // Seit v2: Anwesend = XP – keine Mute-/Speaking-/Personenzahl-Prüfungen mehr
+      const present = true;
+      const grant = shouldGrantVoiceXp({ present });
       if (grant) {
         await grantVoiceXp(sess.guildId, sess.userId, channel);
-        logger?.info?.(`[xp-voice] +25 XP für ${sess.userId} in ${guild.name} (eligible=${eligibleCount} muted=${muted})`);
+        logger?.info?.(`[xp-voice] +${VOICE_XP_PER_MINUTE} XP für ${sess.userId} in ${guild.name} (Anwesenheit im Voice)`);
       }
 
       // Reset für nächste Minute
       sess.lastMinuteStart = now;
-      sess.secondsSpoken = 0;
-      sess.hadPause = false;
-      sess.muteToggleCount = 0;
     }
   }
 
@@ -240,15 +163,14 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
       const wasNewUser = !store.getUser(guildId, userId);
       const user = store.ensureUser(guildId, userId);
       const { applyXpGain } = require('./logic');
-      const res = applyXpGain(user, 25);
+      const res = applyXpGain(user, VOICE_XP_PER_MINUTE);
       user.level = res.level;
       user.xp = res.xp;
       user.lastActivity = Date.now(); // Voice-XP zählt als Aktivität für den Decay
-      user.inactiveDays = 0; // Reset Inaktivitäts-Zähler sofort (wie beim Bonus-Claim)
-      user.lastXpGain = user.lastXpGain || 0; // nicht für Cooldown nutzen, aber Feld existiert
+      user.inactiveDays = 0; // Reset Inaktivitäts-Zähler sofort
+      user.lastXpGain = user.lastXpGain || 0;
       store.setUser(user);
       const { clearInactiveRoleForUser } = require('./inactive-role');
-
       const lang = cfg.lang || 'de';
       const guild = client.guilds.cache.get(guildId);
       if (!guild) return;
@@ -305,7 +227,7 @@ function createVoiceTracker({ client, store, logger, getGuildConfig }) {
     client.removeListener('voiceStateUpdate', onVoiceStateUpdate);
   }
 
-  return { start, stop, onVoiceStateUpdate, tickMinute, sessions, populateAllSessions, getEligibleCount, ensureSession };
+  return { start, stop, onVoiceStateUpdate, tickMinute, sessions, populateAllSessions, ensureSession, VOICE_XP_PER_MINUTE };
 }
 
-module.exports = { createVoiceTracker };
+module.exports = { createVoiceTracker, VOICE_XP_PER_MINUTE };

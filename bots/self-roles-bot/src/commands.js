@@ -188,16 +188,42 @@ function defineCommands() {
   ];
 }
 
-/** Registriert Guild-Commands direkt auf einem Server. */
+/** Nur global registrierte Commands (DM-only). */
+const GLOBAL_COMMAND_NAMES = ['adminpanel'];
+
+/** Server-Commands (ohne /adminpanel). */
+function guildCommandJson() {
+  return defineCommands()
+    .filter((c) => !GLOBAL_COMMAND_NAMES.includes(c.name))
+    .map((c) => c.toJSON());
+}
+
+/** Globaler Payload: NUR die DM-Commands (/adminpanel). */
+function globalCommandJson() {
+  return defineCommands()
+    .filter((c) => GLOBAL_COMMAND_NAMES.includes(c.name))
+    .map((c) => c.toJSON());
+}
+
+function rememberGuildIds(ctx, guildId, ids) {
+  if (!guildId || !ids) return;
+  ctx.guildCommandIds = ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds : new Map();
+  ctx.guildCommandIds.set(String(guildId), ids);
+}
+
+/**
+ * Registriert Guild-Commands direkt auf einem Server.
+ * FIX („Commands doppelt registriert“): Server-Commands existieren NUR als
+ * Guild-Commands, nie zusätzlich global – sonst zeigt Discord beide Kopien.
+ */
 async function registerGuildCommands(ctx, guildId, { rest } = {}) {
   const clientId = ctx.client?.user?.id;
   if (!clientId || !guildId) return null;
   const api = rest || new REST({ version: '10' }).setToken(ctx.token);
-  const guildCmds = defineCommands()
-    .filter((c) => c.name !== 'adminpanel')
-    .map((c) => c.toJSON());
+  const guildCmds = guildCommandJson();
   try {
     const res = await api.put(Routes.applicationGuildCommands(clientId, guildId), { body: guildCmds });
+    rememberGuildIds(ctx, guildId, Object.fromEntries((res || []).map((c) => [c.name, c.id])));
     ctx.logger?.info?.(`[self-roles-bot] Commands für Server ${guildId} registriert.`);
     return res;
   } catch (err) {
@@ -206,34 +232,39 @@ async function registerGuildCommands(ctx, guildId, { rest } = {}) {
   }
 }
 
-/** Registriert die Commands global UND auf allen bestehenden Servern. */
+/**
+ * Registriert die Commands ohne Duplikate:
+ * - global NUR /adminpanel (Bot-DM) – der globale PUT ersetzt den kompletten
+ *   globalen Satz und löscht damit alte globale Server-Commands (Duplikat-Fix).
+ * - alle Server-Commands als Guild-Commands auf jeden bestehenden Server.
+ */
 async function registerCommands(ctx) {
-  const commands = defineCommands().map((c) => c.toJSON());
   const rest = new REST({ version: '10' }).setToken(ctx.token);
   const clientId = ctx.client.user.id;
 
   try {
     if (ctx.devGuildId) {
-      const registered = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), { body: commands });
+      // Dev-Modus: kompletter Satz (inkl. /adminpanel) nur in der Dev-Gilde.
+      const registered = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), { body: defineCommands().map((c) => c.toJSON()) });
       ctx.commandIds = Object.fromEntries((registered || []).map((c) => [c.name, c.id]));
       ctx.logger.info(`[self-roles-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert.`);
-    } else {
-      const registered = await rest.put(Routes.applicationCommands(clientId), { body: commands });
-      ctx.commandIds = Object.fromEntries((registered || []).map((c) => [c.name, c.id]));
-
-      // Direkt auf jedem bestehenden Server als Guild-Commands registrieren,
-      // damit neue Commands (wie /set_role_logging) sofort verfügbar sind!
-      const guildCommands = defineCommands()
-        .filter((c) => c.name !== 'adminpanel')
-        .map((c) => c.toJSON());
-
-      for (const guild of ctx.client.guilds.cache.values()) {
-        await rest
-          .put(Routes.applicationGuildCommands(clientId, guild.id), { body: guildCommands })
-          .catch((err) => ctx.logger.warn(`[self-roles-bot] Guild-Commands für ${guild.id} fehlgeschlagen:`, err.message));
-      }
-      ctx.logger.info('[self-roles-bot] Commands global & auf allen bestehenden Servern registriert.');
+      return;
     }
+
+    const registered = await rest.put(Routes.applicationCommands(clientId), { body: globalCommandJson() });
+    ctx.commandIds = Object.fromEntries((registered || []).map((c) => [c.name, c.id]));
+
+    // Server-Commands auf jedem bestehenden Server registrieren, damit neue
+    // Commands (wie /set_role_logging) sofort verfügbar sind!
+    const guildCommands = guildCommandJson();
+
+    for (const guild of ctx.client.guilds.cache.values()) {
+      const res = await rest
+        .put(Routes.applicationGuildCommands(clientId, guild.id), { body: guildCommands })
+        .catch((err) => ctx.logger.warn(`[self-roles-bot] Guild-Commands für ${guild.id} fehlgeschlagen:`, err.message));
+      if (res) rememberGuildIds(ctx, guild.id, Object.fromEntries((res || []).map((c) => [c.name, c.id])));
+    }
+    ctx.logger.info('[self-roles-bot] Commands global (nur /adminpanel) & als Guild-Satz auf allen bestehenden Servern registriert.');
   } catch (err) {
     ctx.logger.error('[self-roles-bot] Command-Registrierung fehlgeschlagen:', err.message);
   }
@@ -432,13 +463,19 @@ async function profileCmd(ctx, interaction) {
   }
 }
 
-function commandMention(ctx, name) {
-  return ctx.commandIds?.[name] ? `</${name}:${ctx.commandIds[name]}>` : `/${name}`;
+function commandMention(ctx, name, guildId = null) {
+  let id = null;
+  if (guildId && ctx.guildCommandIds instanceof Map) {
+    id = ctx.guildCommandIds.get(String(guildId))?.[name] || null;
+  }
+  if (!id) id = ctx.commandIds?.[name] || null;
+  return id ? `</${name}:${id}>` : `/${name}`;
 }
 
 /** /help – Befehlsübersicht (ohne /adminpanel). */
 async function helpCmd(ctx, interaction) {
   const lang = langFromDiscord(interaction.locale);
+  const guildId = interaction.guildId || null;
 
   const container = new ContainerBuilder().addTextDisplayComponents(
     new TextDisplayBuilder().setContent(
@@ -446,15 +483,15 @@ async function helpCmd(ctx, interaction) {
         `# ${t('helpTitle', lang)}`,
         t('helpDesc', lang),
         '',
-        `**${commandMention(ctx, 'create_self_role')}**\n${t('helpCreate', lang)}`,
+        `**${commandMention(ctx, 'create_self_role', guildId)}**\n${t('helpCreate', lang)}`,
         '',
-        `**${commandMention(ctx, 'edit_self_role')}**\n${t('helpEdit', lang)}`,
+        `**${commandMention(ctx, 'edit_self_role', guildId)}**\n${t('helpEdit', lang)}`,
         '',
-        `**${commandMention(ctx, 'set_role_logging')}**\n${t('helpSetRoleLogging', lang)}`,
+        `**${commandMention(ctx, 'set_role_logging', guildId)}**\n${t('helpSetRoleLogging', lang)}`,
         '',
-        `**${commandMention(ctx, 'admin_set_bot_profile')}**\n${t('helpSetProfile', lang)}`,
+        `**${commandMention(ctx, 'admin_set_bot_profile', guildId)}**\n${t('helpSetProfile', lang)}`,
         '',
-        `**${commandMention(ctx, 'help')}**\n${t('helpHelp', lang)}`,
+        `**${commandMention(ctx, 'help', guildId)}**\n${t('helpHelp', lang)}`,
         '',
         t('helpFooter', lang),
         t('helpLanguageHint', lang),

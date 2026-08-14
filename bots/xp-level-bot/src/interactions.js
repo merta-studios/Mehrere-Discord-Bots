@@ -4,6 +4,7 @@ const { smallContainer } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
 const { MODAL_ID, handleLevelRolesModalSubmit } = require('./level-roles');
+const { PING_MODAL_PREFIX, handlePingModalSubmit } = require('./ping-inactive');
 const { BONUS_CLAIM_PREFIX } = require('./bonus');
 
 async function handleInteraction(ctx, interaction){
@@ -24,6 +25,7 @@ async function handleInteraction(ctx, interaction){
     }
     if (interaction.isModalSubmit()){
       if (interaction.customId === MODAL_ID) return await handleLevelRolesModalSubmit(ctx, interaction);
+      if (interaction.customId.startsWith(PING_MODAL_PREFIX)) return await handlePingModalSubmit(ctx, interaction);
     }
     return null;
   } catch(err){

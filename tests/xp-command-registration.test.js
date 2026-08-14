@@ -103,22 +103,24 @@ function makeCtx(overrides = {}) {
   };
 }
 
-const ALL_CMD_NAMES = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role', 'adminpanel'];
+const ALL_CMD_NAMES = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role', 'ping_inactive_people', 'adminpanel'];
+const GUILD_ONLY_CMD_NAMES = ALL_CMD_NAMES.filter((n) => n !== 'adminpanel');
+const GLOBAL_ONLY_CMD_NAMES = ['adminpanel'];
 
 function fakeCommandList(idFor = (name) => `id-${name}`) {
   const idFn = typeof idFor === 'function' ? idFor : (name) => `${idFor}${name}`;
   return ALL_CMD_NAMES.map((name) => ({ id: idFn(name), name }));
 }
 
-test('alle 10 Command-JSONs sind Discord-API-valide (inkl. /set_inactive_role)', () => {
+test('alle 11 Command-JSONs sind Discord-API-valide (inkl. /set_inactive_role & /ping_inactive_people)', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 10);
+  assert.equal(cmds.length, 11);
   for (const c of cmds) {
     assert.deepEqual(validateCommand(c), [], `Command "${c.name}" würde von Discord abgelehnt`);
   }
 });
 
-test('registerCommands registriert global UND schreibt /set_inactive_role sofort auf jede Gilde', async () => {
+test('registerCommands registriert NUR /adminpanel global und schreibt den vollen Server-Satz (inkl. /ping_inactive_people) auf jede Gilde – keine Duplikate', async () => {
   const calls = [];
   const fakeRest = {
     put: async (route, { body }) => {
@@ -132,26 +134,29 @@ test('registerCommands registriert global UND schreibt /set_inactive_role sofort
   assert.equal(ok, true);
   assert.equal(ctx.commandsRegistered, true);
 
-  // Erster Call: globaler PUT mit ALLEN Commands inkl. /set_inactive_role
+  // Erster Call: globaler PUT enthält NUR /adminpanel (DM) – der globale Satz wird
+  // damit auch von alten Server-Commands bereinigt (Fix „doppelt registriert“).
   assert.equal(calls[0].route, Routes.applicationCommands('app1'));
   const names = calls[0].body.map((c) => c.name);
-  assert.ok(names.includes('set_inactive_role'), `/set_inactive_role fehlt im globalen Payload! Enthalten: ${names.join(', ')}`);
-  assert.deepEqual(names, ALL_CMD_NAMES);
+  assert.deepEqual(names, GLOBAL_ONLY_CMD_NAMES, `global dürfen nur DM-Commands liegen: ${names.join(', ')}`);
 
-  // Zweiter Call: voller Guild-Satz (nicht leer!) – sonst bleibt ein alter 9er-Satz
-  // stehen und überschattet das neue globale /set_inactive_role.
+  // Zweiter Call: voller Guild-Satz (nicht leer!) – inkl. /set_inactive_role & /ping_inactive_people,
+  // ohne /adminpanel (bleibt nur global).
   assert.equal(calls[1].route, Routes.applicationGuildCommands('app1', 'g1'));
   const guildNames = calls[1].body.map((c) => c.name);
-  assert.ok(guildNames.includes('set_inactive_role'));
+  assert.deepEqual(guildNames, GUILD_ONLY_CMD_NAMES);
+  assert.ok(guildNames.includes('ping_inactive_people'), '/ping_inactive_people fehlt im Guild-Satz!');
   assert.ok(!guildNames.includes('adminpanel'), '/adminpanel bleibt nur global (DM)');
   assert.ok(calls[1].body.length > 0);
 
-  assert.equal(ctx.commandIds.level_roles, 'id-level_roles');
-  assert.equal(ctx.store.getCommandId('level_roles'), 'id-level_roles');
+  assert.equal(ctx.commandIds.adminpanel, 'id-adminpanel');
+  assert.equal(ctx.store.getCommandId('adminpanel'), 'id-adminpanel');
+  assert.equal(ctx.commandIds.set_inactive_role, undefined, 'Server-Commands dürfen nicht mehr global liegen');
   assert.equal(ctx.guildCommandIds.get('g1').set_inactive_role, 'id-set_inactive_role');
+  assert.equal(ctx.guildCommandIds.get('g1').ping_inactive_people, 'id-ping_inactive_people');
 });
 
-test('registerCommands mit Dev-Gilde registriert TROTZDEM global plus jede Gilde inkl. /set_inactive_role', async () => {
+test('registerCommands mit Dev-Gilde schreibt global nur /adminpanel und auf Dev-Gilde + jeder Gilde den vollen Satz', async () => {
   const calls = [];
   const fakeRest = {
     put: async (route, { body }) => {
@@ -163,16 +168,19 @@ test('registerCommands mit Dev-Gilde registriert TROTZDEM global plus jede Gilde
   const ok = await registerCommands(ctx, { restFactory: () => fakeRest, retryDelays: [0] });
 
   assert.equal(ok, true);
-  assert.ok(calls.length >= 2);
+  assert.ok(calls.length >= 3);
   assert.equal(calls[0].route, Routes.applicationCommands('app1'));
-  assert.ok(calls[0].body.some((c) => c.name === 'set_inactive_role'));
+  assert.deepEqual(calls[0].body.map((c) => c.name), GLOBAL_ONLY_CMD_NAMES);
   assert.ok(calls.some((c) => c.route === Routes.applicationGuildCommands('app1', '123456789012345678')));
   assert.ok(calls.some((c) => c.route === Routes.applicationGuildCommands('app1', 'g1')));
+  const devGuildPut = calls.find((c) => c.route === Routes.applicationGuildCommands('app1', '123456789012345678'));
+  assert.deepEqual(devGuildPut.body.map((c) => c.name), GUILD_ONLY_CMD_NAMES);
 
-  assert.equal(ctx.commandIds.set_inactive_role, 'id-set_inactive_role');
-  assert.equal(ctx.store.getCommandId('set_inactive_role'), 'id-set_inactive_role');
+  assert.equal(ctx.commandIds.adminpanel, 'id-adminpanel');
+  assert.equal(ctx.store.getCommandId('adminpanel'), 'id-adminpanel');
   assert.equal(ctx.commandIdScope, 'global');
   assert.equal(ctx.guildCommandIds.get('123456789012345678').set_inactive_role, 'id-set_inactive_role');
+  assert.equal(ctx.guildCommandIds.get('123456789012345678').ping_inactive_people, 'id-ping_inactive_people');
 });
 
 test('registerCommands ignoriert leere/Whitespace Dev-Gilde und registriert global', async () => {
@@ -238,6 +246,7 @@ test('ensureCommandIds lädt IDs von Discord REST GET nach wenn RAM und Store le
         { id: '1008', name: 'toggle_nicknames' },
         { id: '1009', name: 'sync_nicknames' },
         { id: '1010', name: 'set_inactive_role' },
+        { id: '1011', name: 'ping_inactive_people' },
         { id: '1007', name: 'adminpanel' },
       ];
     },
@@ -331,6 +340,7 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
       { id: '2008', name: 'toggle_nicknames' },
       { id: '2009', name: 'sync_nicknames' },
       { id: '2010', name: 'set_inactive_role' },
+      { id: '2011', name: 'ping_inactive_people' },
       { id: '2007', name: 'adminpanel' },
     ],
   };
@@ -362,6 +372,7 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
   assert.ok(text.includes('</admin_set_bot_profile:2004>'), 'admin_set_bot_profile muss klickbar sein');
   assert.ok(text.includes('</level_roles:2005>'), 'level_roles muss klickbar sein');
   assert.ok(text.includes('</toggle_nicknames:2008>'), 'toggle_nicknames muss klickbar sein');
+  assert.ok(text.includes('</ping_inactive_people:2011>'), 'ping_inactive_people muss klickbar sein');
   assert.ok(text.includes('</sync_nicknames:2009>'), 'sync_nicknames muss klickbar sein');
   assert.ok(text.includes('</set_inactive_role:2010>'), 'set_inactive_role muss klickbar sein');
   assert.ok(text.includes('</help:2003>'), 'help muss klickbar sein');
@@ -377,12 +388,12 @@ test('store persistiert commandIds über setCommandIds und getCommandIds', () =>
   assert.deepEqual(store.getCommandIds(), { level_roles: '9999', setup: '8888' });
 });
 
-test('ensureCommandIds registriert automatisch neu, falls REST GET unvollständig ist (z.B. /level_roles fehlt)', async () => {
+test('ensureCommandIds global: registriert fehlendes /adminpanel automatisch nach (DM-Scope)', async () => {
   let putCalled = false;
   const fakeRest = {
     get: async (route) => {
       assert.equal(route, Routes.applicationCommands('app1'));
-      // Unvollständige Antwort von Discord (ohne level_roles)
+      // Unvollständige Antwort von Discord (ohne /adminpanel)
       return [
         { id: '3001', name: 'setup' },
         { id: '3002', name: 'rank' },
@@ -397,9 +408,9 @@ test('ensureCommandIds registriert automatisch neu, falls REST GET unvollständi
   const ctx = makeCtx({ rest: fakeRest, commandIds: {} });
   const ids = await ensureCommandIds(ctx);
 
-  assert.equal(putCalled, true, 'Sollte registerCommands ausführen, um fehlenden Command /level_roles zu registrieren');
-  assert.equal(ids.level_roles, 'new-level_roles');
-  assert.equal(ctx.commandIds.level_roles, 'new-level_roles');
+  assert.equal(putCalled, true, 'Sollte registerCommands ausführen, um fehlendes /adminpanel zu registrieren');
+  assert.equal(ids.adminpanel, 'new-adminpanel');
+  assert.equal(ctx.commandIds.adminpanel, 'new-adminpanel');
 });
 
 test('/level_roles ist ein valider Admin-Command für globale Registrierung (Prüfpunkt 2)', () => {
@@ -418,7 +429,7 @@ test('/level_roles ist ein valider Admin-Command für globale Registrierung (Pr�
   assert.deepEqual(validateCommand(cmd), [], 'level_roles-JSON muss Discord-API-valide sein');
 });
 
-test('globale Registrierung schreibt den aktuellen Guild-Satz inkl. /set_inactive_role (kein leeres Wipe)', async () => {
+test('Registrierung schreibt den vollen Guild-Satz inkl. /set_inactive_role & /ping_inactive_people (kein leeres Wipe, keine globalen Duplikate)', async () => {
   const calls = [];
   const fakeRest = {
     put: async (route, { body }) => {
@@ -434,9 +445,12 @@ test('globale Registrierung schreibt den aktuellen Guild-Satz inkl. /set_inactiv
   const guildPut = calls.find((c) => String(c.route).includes('/guilds/'));
   assert.ok(guildPut, 'Guild-PUT muss stattfinden');
   assert.ok(guildPut.body.some((c) => c.name === 'set_inactive_role'));
+  assert.ok(guildPut.body.some((c) => c.name === 'ping_inactive_people'));
   assert.ok(guildPut.body.length > 0, 'kein leeres Wipe mehr');
-  assert.equal(ctx.commandIds.set_inactive_role, 'global-set_inactive_role');
+  assert.equal(ctx.commandIds.set_inactive_role, undefined, 'Server-Commands dürfen global nicht mehr existieren (Duplikat-Fix)');
+  assert.equal(ctx.commandIds.adminpanel, 'global-adminpanel');
   assert.equal(ctx.guildCommandIds.get('g1').set_inactive_role, 'global-set_inactive_role');
+  assert.equal(ctx.guildCommandIds.get('g1').ping_inactive_people, 'global-ping_inactive_people');
   assert.equal(ctx.commandIdScope, 'global');
 });
 
@@ -455,6 +469,7 @@ test('ensureCommandIds lädt auf normalen Servern GLOBALE Commands, auch wenn De
         { id: '4008', name: 'toggle_nicknames' },
         { id: '4009', name: 'sync_nicknames' },
         { id: '4010', name: 'set_inactive_role' },
+        { id: '4011', name: 'ping_inactive_people' },
         { id: '4007', name: 'adminpanel' },
       ];
     },
@@ -485,6 +500,7 @@ test('ensureCommandIds lädt auf der Dev-Gilde die Guild-Commands und verschmutz
         { id: '5008', name: 'toggle_nicknames' },
         { id: '5009', name: 'sync_nicknames' },
         { id: '5010', name: 'set_inactive_role' },
+        { id: '5011', name: 'ping_inactive_people' },
         { id: '5007', name: 'adminpanel' },
       ];
     },
@@ -621,6 +637,7 @@ test('verifizierte IDs werden innerhalb der TTL aus dem Memory genutzt (kein RES
         { id: '8', name: 'toggle_nicknames' },
         { id: '9', name: 'sync_nicknames' },
         { id: '10', name: 'set_inactive_role' },
+        { id: '11', name: 'ping_inactive_people' },
         { id: '7', name: 'adminpanel' },
       ];
     },
@@ -660,6 +677,7 @@ test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Sto
     toggle_nicknames: '3008',
     sync_nicknames: '3009',
     set_inactive_role: '3010',
+    ping_inactive_people: '3011',
     adminpanel: '3007',
   });
 
@@ -674,6 +692,7 @@ test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Sto
       { id: '3008', name: 'toggle_nicknames' },
       { id: '3009', name: 'sync_nicknames' },
       { id: '3010', name: 'set_inactive_role' },
+      { id: '3011', name: 'ping_inactive_people' },
       { id: '3007', name: 'adminpanel' },
     ],
   };

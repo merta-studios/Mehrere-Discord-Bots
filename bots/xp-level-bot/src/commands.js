@@ -1,7 +1,8 @@
 /**
  * Slash-Commands XP Bot – Definition, Registrierung & Handler
  * Commands: /setup, /rank, /help, /admin_set_bot_profile, /level_roles,
- *           /update_leaderboard, /toggle_nicknames, /sync_nicknames, /set_inactive_role, /adminpanel
+ *           /update_leaderboard, /toggle_nicknames, /sync_nicknames,
+ *           /set_inactive_role, /ping_inactive_people, /adminpanel
  */
 
 const {
@@ -23,14 +24,25 @@ const { buildRankEmbed, smallContainer, buildLeaderboardEmbed } = require('./emb
 const { componentsV2Payload } = require('./message-payload');
 const { openPanel } = require('./admin-panel');
 const { handleLevelRolesCommand } = require('./level-roles');
+const { handlePingInactiveCommand } = require('./ping-inactive');
 
-/** Alle Slash-Commands inkl. Owner-DM-Panel. */
+/**
+ * Alle Slash-Commands inkl. Owner-DM-Panel.
+ * WICHTIG (Fix „Commands doppelt registriert“):
+ * - GLOBAL wird NUR /adminpanel registriert (Bot-DM).
+ * - ALLE anderen Commands werden ausschließlich als GUILD-Commands auf jeden
+ *   Server geschrieben (sofort sichtbar, keine doppelten Einträge mehr durch
+ *   globalen + Guild-Command mit demselben Namen).
+ */
 const ALL_COMMAND_NAMES = [
   'setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles',
-  'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role', 'adminpanel',
+  'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role',
+  'ping_inactive_people', 'adminpanel',
 ];
+/** Nur global registrierte Commands (DM-only). */
+const GLOBAL_COMMAND_NAMES = ['adminpanel'];
 /** Commands, die auf einem Server existieren müssen (ohne /adminpanel). */
-const GUILD_COMMAND_NAMES = ALL_COMMAND_NAMES.filter((n) => n !== 'adminpanel');
+const GUILD_COMMAND_NAMES = ALL_COMMAND_NAMES.filter((n) => !GLOBAL_COMMAND_NAMES.includes(n));
 
 function pick(key) {
   const map = {};
@@ -133,6 +145,21 @@ function defineCommands() {
         .setRequired(false)),
 
     new SlashCommandBuilder()
+      .setName('ping_inactive_people')
+      .setDescription('Pingt inaktive Mitglieder: Main Channel (Rollen-Ping) oder Direct (DM). Nur Admins.')
+      .setDescriptionLocalizations(pick('pingInactiveHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addStringOption((o) => o
+        .setName('mode')
+        .setDescription('Wie sollen die inaktiven Mitglieder erreicht werden?')
+        .setDescriptionLocalizations(pick('pingInactiveModeDesc'))
+        .setRequired(true)
+        .addChoices(
+          { name: 'Main Channel', value: 'main_channel', name_localizations: pick('pingInactiveModeMainChannel') },
+          { name: 'Direct', value: 'direct', name_localizations: pick('pingInactiveModeDirect') },
+        )),
+
+    new SlashCommandBuilder()
       .setName('adminpanel')
       .setDescription('Owner-Admin-Panel (nur im DM)')
       .setDescriptionLocalizations(pick('helpAdminPanel'))
@@ -152,12 +179,19 @@ function defineCommands() {
 
 function guildCommandJson() {
   return defineCommands()
-    .filter((c) => c.name !== 'adminpanel')
+    .filter((c) => !GLOBAL_COMMAND_NAMES.includes(c.name))
     .map((c) => c.toJSON());
 }
 
+/**
+ * Globaler Payload: NUR die DM-Commands (/adminpanel).
+ * Server-Commands global zu registrieren hat die doppelten Einträge im
+ * /-Menü verursacht – sie werden stattdessen pro Gilde geschrieben.
+ */
 function allCommandJson() {
-  return defineCommands().map((c) => c.toJSON());
+  return defineCommands()
+    .filter((c) => GLOBAL_COMMAND_NAMES.includes(c.name))
+    .map((c) => c.toJSON());
 }
 
 function idsFromDiscord(list) {
@@ -222,7 +256,8 @@ function logRegistration(logger, scopeLabel, res) {
 /**
  * Schreibt die Server-Commands (ohne /adminpanel) in EINE Gilde.
  * Guild-Commands sind sofort sichtbar und überschreiben einen veralteten
- * 9er-Satz, der sonst ein neues /set_inactive_role global unsichtbar macht.
+ * Guild-Satz (PUT ersetzt komplett) – so kommen neue Commands wie
+ * /set_inactive_role & /ping_inactive_people sofort auf bestehende Server.
  */
 async function registerGuildCommands(ctx, guildId, { rest, restFactory } = {}) {
   const clientId = ctx.client?.user?.id;
@@ -240,15 +275,16 @@ async function registerGuildCommands(ctx, guildId, { rest, restFactory } = {}) {
 /**
  * Registriert die Slash-Commands bei Discord.
  *
- * Wichtig (Fix /set_inactive_role „existiert nicht“ / /help „Kein Befehl gefunden“):
- * 1. IMMER global registrieren – auch wenn XP_BOT_GUILD_ID gesetzt ist.
- *    Sonst bleibt auf echten Servern der alte Command-Satz ohne den neuen Befehl.
- * 2. ZUSÄTZLICH denselben aktuellen Satz als Guild-Commands auf JEDEN Server
- *    schreiben. Guild-Commands sind sofort im /-Menü und in /help-Chips gültig.
- *    Ein leeres `{ body: [] }` hat das Gegenteil bewirkt: blieb irgendwo ein
- *    alter Guild-Satz stehen, hat er das neue globale /set_inactive_role
- *    unsichtbar gemacht. Der Chip in /help zeigte dann die globale ID,
- *    Discord sagte „Dieser Befehl ist nicht verfügbar“.
+ * Design (Fix „Commands doppelt registriert“ + „/set_inactive_role existiert nicht“):
+ * 1. Global wird NUR /adminpanel registriert (Bot-DM). Der globale PUT ersetzt
+ *    dabei den kompletten globalen Satz – dadurch werden automatisch ALLE
+ *    alten globalen Kopien der Server-Commands gelöscht, die auf manchen
+ *    Servern als Duplikate im /-Menü erschienen sind.
+ * 2. Die 10 Server-Commands (inkl. /set_inactive_role und
+ *    /ping_inactive_people) werden als Guild-Commands auf JEDEN Server
+ *    geschrieben (PUT ersetzt den kompletten Guild-Satz – sofort sichtbar,
+ *    kein 1h-Propagations-Timeout, kein Duplikat, weil es global keine
+ *    gleichnamigen Commands mehr gibt).
  * 3. /adminpanel bleibt nur global (Bot-DM). Auf Gilden wird er nicht gelegt.
  * 4. /help verwendet auf einem Server immer die IDs DIESER Gilde – nie die
  *    einer fremden Dev-Gilde.
@@ -322,7 +358,7 @@ function hasNames(obj, names) {
 
 async function ensureCommandIds(ctx, guildId = null) {
   const neededGuild = GUILD_COMMAND_NAMES;
-  const neededGlobal = ALL_COMMAND_NAMES;
+  const neededGlobal = GLOBAL_COMMAND_NAMES; // nur DM-Commands (/adminpanel) sind global
   const gid = guildId ? String(guildId) : null;
   const verifyScope = gid ? `guild:${gid}` : 'global';
   const needed = gid ? neededGuild : neededGlobal;
@@ -446,6 +482,8 @@ async function handleChatInput(ctx, interaction) {
       return syncNicknamesCmd(ctx, interaction);
     case 'set_inactive_role':
       return setInactiveRoleCmd(ctx, interaction);
+    case 'ping_inactive_people':
+      return handlePingInactiveCommand(ctx, interaction);
     case 'adminpanel':
       return openPanel(ctx, interaction);
     default:
@@ -590,6 +628,8 @@ async function helpCmd(ctx, interaction) {
       `**${commandMention(ctx, 'sync_nicknames', interaction.guildId)}**\n${t('syncNicknamesHelp', lang)}`,
       '',
       `**${commandMention(ctx, 'set_inactive_role', interaction.guildId)}**\n${t('setInactiveRoleHelp', lang)}`,
+      '',
+      `**${commandMention(ctx, 'ping_inactive_people', interaction.guildId)}**\n${t('pingInactiveHelp', lang)}`,
       '',
       `**${commandMention(ctx, 'help', interaction.guildId)}**\n${t('helpHelp', lang)}`,
     ].join('\n'))
@@ -953,7 +993,7 @@ async function verifyCommandsLive(ctx) {
     const route = Routes.applicationCommands(clientId);
     let live = await rest.get(route);
     let liveNames = new Set((Array.isArray(live) ? live : []).map((c) => c.name));
-    let missing = ALL_COMMAND_NAMES.filter((n) => !liveNames.has(n));
+    let missing = GLOBAL_COMMAND_NAMES.filter((n) => !liveNames.has(n));
     if (missing.length > 0) {
       ctx.logger?.warn?.(
         `[xp-level-bot] Command-Verifikation (Scope: global): Discord fehlen ${missing.map((n) => `/${n}`).join(', ')} – registriere sofort nach...`
@@ -961,11 +1001,11 @@ async function verifyCommandsLive(ctx) {
       await registerCommands(ctx, { restFactory: () => rest, retryDelays: [0] });
       live = await rest.get(route).catch(() => null);
       liveNames = new Set((Array.isArray(live) ? live : []).map((c) => c.name));
-      missing = ALL_COMMAND_NAMES.filter((n) => !liveNames.has(n));
+      missing = GLOBAL_COMMAND_NAMES.filter((n) => !liveNames.has(n));
     }
     if (missing.length === 0) {
       ctx.logger?.info?.(
-        `[xp-level-bot] Command-Verifikation OK (Scope: global) – alle ${ALL_COMMAND_NAMES.length} Commands live: ${ALL_COMMAND_NAMES.map((n) => `/${n}`).join(', ')}`
+        `[xp-level-bot] Command-Verifikation OK (Scope: global) – DM-Commands live: ${GLOBAL_COMMAND_NAMES.map((n) => `/${n}`).join(', ')}`
       );
     } else {
       ok = false;
@@ -995,7 +1035,7 @@ async function verifyCommandsLive(ctx) {
       }
       if (missing.length === 0) {
         ctx.logger?.info?.(
-          `[xp-level-bot] Command-Verifikation OK (Scope: guild ${guildId}) – ${GUILD_COMMAND_NAMES.length} Server-Commands inkl. /set_inactive_role`
+          `[xp-level-bot] Command-Verifikation OK (Scope: guild ${guildId}) – ${GUILD_COMMAND_NAMES.length} Server-Commands inkl. /set_inactive_role & /ping_inactive_people`
         );
       } else {
         ok = false;
@@ -1021,5 +1061,6 @@ module.exports = {
   pick,
   commandMention,
   ALL_COMMAND_NAMES,
+  GLOBAL_COMMAND_NAMES,
   GUILD_COMMAND_NAMES,
 };
