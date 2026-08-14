@@ -108,9 +108,17 @@ module.exports = {
       panelSessions: new Map(),
     };
 
-    // Scheduler & VoiceTracker werden nach Ready gestartet, aber vorher initialisieren
+    // Den Voice-Listener absichtlich bereits VOR client.login() anhängen. So
+    // gehen auch frühe VoiceState-Events während READY/RESUME nicht verloren.
+    // Der Tracker pollt zusätzlich regelmäßig beide Discord-Caches.
     let schedulerStop = null;
-    let voiceTracker = null;
+    const voiceTracker = createVoiceTracker({
+      client,
+      store,
+      logger,
+      getGuildConfig: (guildId) => store.getGuild(guildId),
+    });
+    voiceTracker.start();
 
     // Status: zeigt Anzahl der verwalteten Server
     const updatePresence = () => {
@@ -126,16 +134,18 @@ module.exports = {
     client.once(Events.ClientReady, async () => {
       updatePresence();
 
-      // Scheduler & Voice ZUERST starten. registerCommands hängt an Discord-REST
+      // Scheduler ZUERST starten. registerCommands hängt an Discord-REST
       // (Retries, kein hartes Timeout) – genau das hat Bonus-Drops zuvor
       // unsichtbar gemacht, weil der Minuten-Tick nie anlief, während XP und
-      // alte Slash-Commands trotzdem funktionierten.
+      // alte Slash-Commands trotzdem funktionierten. Der Voice-Tracker lauscht
+      // bereits seit create() und gleicht jetzt den vollständig geladenen
+      // Ready-Cache noch einmal ab.
       schedulerStop = startScheduler({ ctx });
-      voiceTracker = createVoiceTracker({ client, store, logger, getGuildConfig: (gid) => store.getGuild(gid) });
-      voiceTracker.start();
+      const visibleVoiceUsers = voiceTracker.populateAllSessions();
       logger.info(
-        `[xp-level-bot] Scheduler & Voice laufen – Bonus-Ticks aktiv. ` +
-          `${client.guilds.cache.size} Server, ${store.getAllUsersCount()} Nutzer im RAM`
+        `[xp-level-bot] Scheduler & Voice-V3 laufen – Bonus-Ticks aktiv. ` +
+          `${client.guilds.cache.size} Server, ${store.getAllUsersCount()} Nutzer im RAM, ` +
+          `${visibleVoiceUsers} Voice-Nutzer sichtbar`
       );
 
       if (ctx.devGuildId) {

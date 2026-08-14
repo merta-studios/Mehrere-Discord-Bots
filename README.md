@@ -229,7 +229,7 @@ Kurzfassung – Details siehe [`bots/xp-level-bot/README.md`](bots/xp-level-bot/
 - **Level-Up-Nachricht**: Die Level-Up-Zeile wird als **`## `-Heading** dargestellt – größerer Text, fällt sofort ins Auge. 🎉
 - **Level-Kurve**: `lvl1→2 80 XP`, `lvl99→100 ~1999 XP` (fast linear, kaum spürbar schwerer, reset auf 0 bei Aufstieg).
 - **Täglich 0 Uhr** (TZ der Server-Sprache): **-5% Basis** von `needed XP` (je weiterem Inaktiv-Tag +3 Prozentpunkte); bei einem Level-Down wird der echte Restbetrag sauber ins vorige Level übernommen statt pauschal auf `93%` zu springen.
-- **Voice**: `10 XP/min` – einfach im Voice-Channel sein, egal ob stumm/taub/allein (Anwesenheit zählt).
+- **Voice**: `10 XP/min` – einfach im Voice-Channel sein, egal ob stumm/taub/allein. Ein 15-Sekunden-Watchdog gleicht VoiceStates + Channel-Mitglieder ab, erkennt bestehende Calls nach Neustarts und holt verspätete volle Minuten nach.
 - **`/level_roles`** (nur Admins): öffnet ein **Formular** – Rollen-Format (Standard `Level {LEVEL}`, `{LEVEL}` = Platzhalter) + Level-Zahlen kommagetrennt (Standard `3,6,10,20`, Tippfehler werden korrigiert). Der Bot löscht alte Level-Rollen, erstellt neue, **sortiert sie (mehr Level = weiter oben)** und legt sie **ganz unten** in der Rollenliste ab. Bei Level Up/Down bekommen Nutzer alle fehlenden Level-Rollen (mehrere möglich), vorhandene werden nie entfernt.
 - **`/rank`** (alle): Platz, Level, `xp/needed`, Balken & fehlende XP.
 - **`/update_leaderboard`** (nur Admins): rendert das Leaderboard **sofort** neu
