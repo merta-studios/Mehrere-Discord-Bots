@@ -99,10 +99,12 @@ weiter; eine Datenbank ist nicht erforderlich.
 - **Nur der Bot darf im Counting-Channel reagieren.** Jede von Nutzern oder
   anderen Bots hinzugefügte Reaktion wird wieder entfernt – auch ein zusätzliches
   **✅** oder **❌**. Die Reaktion des Minigames-Bots selbst bleibt bestehen.
-- **Falsche Zahl → Neustart bei 1**, und der Bot outet die Person mit einem von
-  zwölf wechselnden Sprüchen (in allen 10 Sprachen). Mit **60 % Chance dreht der
-  Bot komplett durch**: Er feuert einen Wut-Ausruf ab, pingt den Übeltäter mehrfach
-  in einer Ping-Salve und legt mit einem Nachtreter nach.
+- **Falsche Zahl → Neustart bei 1**, und der Bot erklärt neutral, was erwartet
+  wurde. Es gibt zwölf wechselnde Sprüche (in allen 10 Sprachen). Mit **60 %
+  Chance** startet zusätzlich eine kurze, harmlose Showeinlage. Die Intensität
+  steigt mit dem erreichten Stand: ab 10/50/100 gibt es sichtbar stärkere
+  Alarm-Stufen. Der Bot erwähnt höchstens die verursachende Person einmal und
+  verschickt **keine Mass-Pings, DMs, Rollenaktionen oder Server-Spam**.
 - **Zwei Zahlen derselben Person hintereinander** → Nachricht wird nur
   **gelöscht**, der Zählstand bleibt stehen.
 - **Text statt Zahl** → Nachricht wird ebenfalls nur gelöscht, kein Neustart.
@@ -148,7 +150,9 @@ Japanisch, Koreanisch, Chinesisch (CN) und Italienisch.
 
 `/set_language` speichert die Server-Sprache zusätzlich unsichtbar in seiner
 Bestätigungsnachricht. Beim Start sucht der Bot diese Markierung wieder und
-stellt die Sprache ohne externe Datenbank wieder her.
+stellt die Sprache ohne externe Datenbank wieder her. Die Counting-Kanal-Themen
+werden nach der schnellen Command-Bestätigung best-effort im Hintergrund
+synchronisiert; ein langsamer Discord-Request hält die Antwort nicht mehr fest.
 
 ## Umgebungsvariablen
 

@@ -120,6 +120,58 @@ const T = {
   rematchShort: { de: 'Revanche mit **/play**.', en: 'Rematch with **/play**.', fr: 'Revanche avec **/play**.', es: 'Revancha con **/play**.', pt: 'Revanche com **/play**.', ru: 'Реванш через **/play**.', ja: '再戦は **/play**。', ko: '재대결은 **/play**.', zh: '再来一局：**/play**。', it: 'Rivincita con **/play**.' },
 
   // --- Counting-Spiel ---------------------------------------------------
+  countFailureSafe: {
+    de: '❌ Zählfehler {variant}: {user} hat **{got}** geschrieben, erwartet war **{expected}**. Der Zähler startet wieder bei **1**.',
+    en: '❌ Counting error {variant}: {user} wrote **{got}**, but **{expected}** was expected. The counter starts again at **1**.',
+    fr: '❌ Erreur de comptage {variant} : {user} a écrit **{got}**, mais **{expected}** était attendu. Le compteur repart à **1**.',
+    es: '❌ Error de conteo {variant}: {user} escribió **{got}**, pero se esperaba **{expected}**. El contador vuelve al **1**.',
+    pt: '❌ Erro de contagem {variant}: {user} escreveu **{got}**, mas o esperado era **{expected}**. O contador volta ao **1**.',
+    ru: '❌ Ошибка счёта {variant}: {user} написал **{got}**, а ожидалось **{expected}**. Счётчик снова с **1**.',
+    ja: '❌ カウントエラー {variant}：{user} は **{got}** と書きましたが、正しくは **{expected}** です。カウンターは **1** から再開します。',
+    ko: '❌ 카운팅 오류 {variant}: {user}님이 **{got}**을 썼지만 **{expected}**가 맞았어요. 카운터는 **1**부터 다시 시작합니다.',
+    zh: '❌ 计数错误 {variant}：{user} 写了 **{got}**，但正确答案是 **{expected}**。计数器从 **1** 重新开始。',
+    it: '❌ Errore di conteggio {variant}: {user} ha scritto **{got}**, ma ci si aspettava **{expected}**. Il contatore riparte da **1**.'
+  },
+  // Sichere, skalierende Showeinlage: Der Bot wird mit dem Zählstand
+  // dramatischer, ohne den User zu beschämen, andere zu pingen oder den Server
+  // mit Spam zu fluten.
+  countRageSafeTitle: {
+    de: '{bar} COUNTING-ALARM {level}: {user} hat **{got}** statt **{expected}** geschrieben. Der Zähler startet bei **1** – dramatischer Soundeffekt inklusive!',
+    en: '{bar} COUNTING ALARM {level}: {user} wrote **{got}** instead of **{expected}**. The counter restarts at **1** — dramatic sound effect included!',
+    fr: '{bar} ALERTE COMPTAGE {level} : {user} a écrit **{got}** au lieu de **{expected}**. Le compteur repart à **1** — effet dramatique inclus !',
+    es: '{bar} ¡ALARMA DE CONTEO {level}! {user} escribió **{got}** en vez de **{expected}**. El contador vuelve al **1** — ¡efecto dramático incluido!',
+    pt: '{bar} ALERTA DE CONTAGEM {level}: {user} escreveu **{got}** em vez de **{expected}**. O contador volta ao **1** — efeito dramático incluído!',
+    ru: '{bar} ТРЕВОГА СЧЁТА {level}: {user} написал **{got}** вместо **{expected}**. Счётчик возвращается к **1** — драматичный эффект прилагается!',
+    ja: '{bar} カウント警報 {level}：{user} は **{expected}** ではなく **{got}** と書きました。カウンターは **1** に戻ります――効果音は想像で！',
+    ko: '{bar} 카운팅 경보 {level}: {user}님이 **{expected}** 대신 **{got}**을 썼어요. 카운터는 **1**로 돌아갑니다 — 극적인 효과음 포함!',
+    zh: '{bar} 计数警报 {level}：{user} 写了 **{got}**，而不是 **{expected}**。计数器回到 **1**——戏剧音效请自行想象！',
+    it: '{bar} ALLARME CONTEGGIO {level}: {user} ha scritto **{got}** invece di **{expected}**. Il contatore riparte da **1** — effetto drammatico incluso!'
+  },
+  countRageSafePulse: {
+    de: '{bar} Wir waren bereits bei **{streak}**. Der Bot schaltet auf Wut-Theater – kurz durchatmen, dann fair gemeinsam bei **1** weitermachen.',
+    en: '{bar} We had already reached **{streak}**. The bot is switching to rage theatre — take a breath, then continue fairly from **1** together.',
+    fr: '{bar} Nous étions déjà à **{streak}**. Le bot passe en théâtre de la colère — on respire, puis on reprend ensemble à **1**.',
+    es: '{bar} Ya habíamos llegado a **{streak}**. El bot activa el teatro de la rabia — respiramos y seguimos juntos desde **1**.',
+    pt: '{bar} Já tínhamos chegado a **{streak}**. O bot ativa o teatro da raiva — respirem e continuem juntos a partir do **1**.',
+    ru: '{bar} Мы уже дошли до **{streak}**. Бот включает театральную ярость — выдыхаем и вместе продолжаем с **1**.',
+    ja: '{bar} すでに **{streak}** まで来ていました。Botは怒りの演出モード――深呼吸して、みんなで **1** から再開しましょう。',
+    ko: '{bar} 이미 **{streak}**까지 왔어요. 봇이 분노 연출 모드로 전환합니다 — 숨을 고르고 **1**부터 함께 다시 시작해요.',
+    zh: '{bar} 我们已经数到 **{streak}** 了。机器人开启戏剧化生气模式——先深呼吸，再一起从 **1** 重新开始。',
+    it: '{bar} Eravamo già arrivati a **{streak}**. Il bot passa alla rabbia teatrale — respiriamo e ripartiamo insieme da **1**.'
+  },
+  countRageSafeBody: {
+    de: '🎬 Kein Spam, keine Jagd: nur eine kurze Showeinlage. Nächster Versuch gemeinsam ab **1**!',
+    en: '🎬 No pile-on, no spam: just a short theatrical bit. Next attempt starts together at **1**!',
+    fr: '🎬 Pas de chasse ni de spam : juste une courte mise en scène. Le prochain essai repart ensemble à **1** !',
+    es: '🎬 Sin acoso ni spam: solo una breve escena teatral. ¡El próximo intento empieza juntos en **1**!',
+    pt: '🎬 Nada de perseguição ou spam: apenas uma pequena cena teatral. A próxima tentativa começa junto no **1**!',
+    ru: '🎬 Никакой травли и спама: только короткая театральная сценка. Следующая попытка вместе с **1**!',
+    ja: '🎬 責めたりスパムしたりせず、短い演出だけ。次はみんなで **1** から！',
+    ko: '🎬 몰아세우기나 스팸 없이 짧은 연출만 할게요. 다음 시도는 **1**부터 함께!',
+    zh: '🎬 不围攻、不刷屏，只来一段短小的戏剧表演。下一次一起从 **1** 开始！',
+    it: '🎬 Niente accanimento né spam: solo una breve scenetta. Il prossimo tentativo riparte insieme da **1**!'
+  },
+
   countingTopicLabel: { de: '🔢 Counting-Channel | Aktuelle Zahl: {count} | weiter geht’s bei der nächsten Zahl', en: '🔢 Counting channel | Current number: {count} | next number continues the streak', fr: '🔢 Salon de comptage | Nombre actuel : {count} | continuez avec le suivant', es: '🔢 Canal de conteo | Número actual: {count} | sigue con el siguiente', pt: '🔢 Canal de contagem | Número atual: {count} | continue com o próximo', ru: '🔢 Канал счёта | Текущее число: {count} | продолжайте следующим', ja: '🔢 カウントチャンネル | 現在の数: {count} | 次の数へ', ko: '🔢 카운팅 채널 | 현재 숫자: {count} | 다음 숫자로 이어가요', zh: '🔢 计数频道 | 当前数字：{count} | 请接着数下一个', it: '🔢 Canale di conteggio | Numero attuale: {count} | si continua col prossimo' },
   countingEnabled: { de: '🔢 {channel} ist jetzt der Counting-Channel!\nEs geht bei **1** los, niemand darf zweimal hintereinander zählen – und bei einem Fehler beginnt alles von vorne.', en: '🔢 {channel} is now the counting channel!\nStart at **1**, nobody may count twice in a row—and one mistake resets everything.', fr: '🔢 {channel} est désormais le salon de comptage !\nOn démarre à **1**, personne ne compte deux fois de suite, et une erreur remet tout à zéro.', es: '🔢 ¡{channel} ahora es el canal de conteo!\nEmpezamos en **1**, nadie cuenta dos veces seguidas y un fallo lo reinicia todo.', pt: '🔢 {channel} agora é o canal de contagem!\nComeça no **1**, ninguém conta duas vezes seguidas e um erro reinicia tudo.', ru: '🔢 {channel} теперь канал для счёта!\nНачинаем с **1**, подряд дважды считать нельзя, ошибка сбрасывает всё.', ja: '🔢 {channel} をカウントチャンネルにしました！\n**1** から開始、同じ人が連続で数えるのは禁止、間違えると最初からです。', ko: '🔢 이제 {channel}이 카운팅 채널이에요!\n**1**부터 시작하고, 연속으로 두 번 셀 수 없으며, 틀리면 처음부터예요.', zh: '🔢 {channel} 现在是计数频道！\n从 **1** 开始，不能连续数两次，数错就全部重来。', it: '🔢 {channel} è ora il canale di conteggio!\nSi parte da **1**, nessuno conta due volte di fila e un errore azzera tutto.' },
   countingDisabled: { de: '🧹 {channel} ist kein Counting-Channel mehr.', en: '🧹 {channel} is no longer a counting channel.', fr: '🧹 {channel} n’est plus un salon de comptage.', es: '🧹 {channel} ya no es un canal de conteo.', pt: '🧹 {channel} não é mais um canal de contagem.', ru: '🧹 {channel} больше не канал для счёта.', ja: '🧹 {channel} はカウントチャンネルではなくなりました。', ko: '🧹 {channel}은(는) 더 이상 카운팅 채널이 아니에요.', zh: '🧹 {channel} 不再是计数频道。', it: '🧹 {channel} non è più un canale di conteggio.' },
