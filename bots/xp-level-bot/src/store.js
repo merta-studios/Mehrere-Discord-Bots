@@ -14,6 +14,11 @@ const LEADERBOARD_MARKER = 'xp_leader::v1::';
 function createXpStore({ logger, env } = {}) {
   const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, lang, leaderboardMessageId, lastDailyDecay, nicknamesEnabled, inactiveRoleEnabled, inactiveRoleDays, inactiveRoleId}
   const users = new Map(); // guildId -> Map(userId -> {guildId,userId,level,xp,lastXpGain})
+  // Invite-XP: Snapshot aller Invites (code -> uses) pro Server + Leave-Log für
+  // den 7-Tage-Rejoin-Schutz. Beides MUSS das Löschen von User-Daten überleben
+  // (guildMemberRemove löscht user_levels), deshalb eigene Tabellen/Maps.
+  const inviteSnapshots = new Map(); // guildId -> { data: {code:uses}, updatedAt }
+  const inviteLeaves = new Map();    // guildId -> Map(userId -> leftAt)
   let commandIds = {}; // cmdName -> id  (NUR globale Command-IDs!)
   const guildCommandIds = new Map(); // guildId -> { [cmdName]: id } (nur Dev-Gilde)
   // Merkt sich, in welchem Scope die gespeicherten IDs zuletzt registriert wurden:
@@ -26,6 +31,9 @@ function createXpStore({ logger, env } = {}) {
   const dirtyUsers = new Set(); // "guildId:userId"
   const deletedUsers = new Set(); // to track deletions for flush
   const deletedGuilds = new Set();
+  const dirtyInviteSnapshots = new Set(); // guildId
+  const dirtyInviteLeaves = new Set();    // "guildId:userId"
+  const deletedInviteLeaves = new Set();  // "guildId:userId"
   let db = null;
   let flushInProgress = false;
   let flushRequested = false;
@@ -116,6 +124,20 @@ function createXpStore({ logger, env } = {}) {
     await db.execute(`CREATE TABLE IF NOT EXISTS bot_metadata (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    );`);
+    // Invite-XP: Invite-Snapshots (code -> uses) und Leave-Log für den
+    // 7-Tage-Rejoin-Schutz. Bewusst getrennt von user_levels, weil Nutzerdaten
+    // beim Verlassen gelöscht werden – das Leave-Log muss das überleben.
+    await db.execute(`CREATE TABLE IF NOT EXISTS invite_snapshots (
+      guild_id TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );`);
+    await db.execute(`CREATE TABLE IF NOT EXISTS invite_leave_log (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      left_at INTEGER NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
     );`);
     // Index für schnelle leaderboard queries falls direkt DB genutzt wird
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_user_levels_guild ON user_levels(guild_id);`);
@@ -210,6 +232,24 @@ function createXpStore({ logger, env } = {}) {
     } catch (e) {
       logger?.warn?.('[xp-level-bot] Laden der bot_metadata fehlgeschlagen:', e.message);
     }
+    // Invite-XP Daten nachladen (Snapshots + Leave-Log)
+    try {
+      const invRes = await db.execute('SELECT guild_id, data, updated_at FROM invite_snapshots');
+      for (const row of invRes.rows) {
+        const data = parseJsonCol(row.data, {});
+        if (data && typeof data === 'object') {
+          inviteSnapshots.set(row.guild_id, { data, updatedAt: Number(row.updated_at) || 0 });
+        }
+      }
+      const leaveRes = await db.execute('SELECT guild_id, user_id, left_at FROM invite_leave_log');
+      for (const row of leaveRes.rows) {
+        let m = inviteLeaves.get(row.guild_id);
+        if (!m) { m = new Map(); inviteLeaves.set(row.guild_id, m); }
+        m.set(row.user_id, Number(row.left_at) || 0);
+      }
+    } catch (e) {
+      logger?.warn?.('[xp-level-bot] Laden der Invite-XP Daten fehlgeschlagen:', e.message);
+    }
   }
 
   function tryLoadFile() {
@@ -252,6 +292,22 @@ function createXpStore({ logger, env } = {}) {
           guildCommandIds.set(gid, ids);
         }
       }
+      if (data.inviteSnapshots && typeof data.inviteSnapshots === 'object') {
+        for (const [gid, snap] of Object.entries(data.inviteSnapshots)) {
+          const dataMap = snap && typeof snap === 'object' && snap.data ? snap.data : snap;
+          if (dataMap && typeof dataMap === 'object') {
+            inviteSnapshots.set(String(gid), { data: { ...dataMap }, updatedAt: Number(snap?.updatedAt) || 0 });
+          }
+        }
+      }
+      if (data.inviteLeaves && typeof data.inviteLeaves === 'object') {
+        for (const [gid, umap] of Object.entries(data.inviteLeaves)) {
+          if (!umap || typeof umap !== 'object') continue;
+          const m = new Map();
+          for (const [uid, leftAt] of Object.entries(umap)) m.set(uid, Number(leftAt) || 0);
+          inviteLeaves.set(gid, m);
+        }
+      }
     } catch (e) {
       logger?.warn?.('[xp-level-bot] Fallback-Datei korrupt:', e.message);
     }
@@ -265,8 +321,12 @@ function createXpStore({ logger, env } = {}) {
       commandIds,
       commandIdScope,
       guildCommandIds: Object.fromEntries([...guildCommandIds.entries()]),
+      inviteSnapshots: {},
+      inviteLeaves: {},
     };
     for (const [gid, m] of users.entries()) obj.users[gid] = Object.fromEntries([...m.entries()]);
+    for (const [gid, snap] of inviteSnapshots.entries()) obj.inviteSnapshots[gid] = { ...snap };
+    for (const [gid, m] of inviteLeaves.entries()) obj.inviteLeaves[gid] = Object.fromEntries([...m.entries()]);
     const json = JSON.stringify(obj);
     for (const p of [localFallback, fallbackPath]) {
       try {
@@ -359,11 +419,19 @@ function createXpStore({ logger, env } = {}) {
     deletedGuilds.delete(id);
   }
   function deleteGuild(guildId) {
-    guilds.delete(guildId);
-    users.delete(guildId);
-    guildCommandIds.delete(guildId);
-    dirtyGuilds.delete(guildId);
-    deletedGuilds.add(guildId);
+    const id = String(guildId);
+    guilds.delete(id);
+    users.delete(id);
+    guildCommandIds.delete(id);
+    inviteSnapshots.delete(id);
+    inviteLeaves.delete(id);
+    dirtyGuilds.delete(id);
+    dirtyInviteSnapshots.delete(id);
+    // Leave-Log-Zeilen der Gilde sind über pendingDeletedGuilds abgedeckt
+    for (const key of [...dirtyInviteLeaves]) {
+      if (key.startsWith(`${id}:`)) dirtyInviteLeaves.delete(key);
+    }
+    deletedGuilds.add(id);
   }
   function getAllGuilds() { return [...guilds.values()]; }
   function getGuildIds() { return [...guilds.keys()]; }
@@ -424,6 +492,65 @@ function createXpStore({ logger, env } = {}) {
     let c=0; for(const m of users.values()) c+=m.size; return c;
   }
 
+  // ----------------- Invite-XP API -----------------
+  // Invite-Snapshot (code -> uses) für die Delta-Erkennung beim Serverbeitritt.
+  function getInviteSnapshot(guildId) {
+    const s = inviteSnapshots.get(String(guildId));
+    if (!s) return null;
+    return { data: s.data ? { ...s.data } : {}, updatedAt: s.updatedAt || 0 };
+  }
+  function setInviteSnapshot(guildId, data, updatedAt = Date.now()) {
+    const id = String(guildId);
+    inviteSnapshots.set(id, { data: data && typeof data === 'object' ? { ...data } : {}, updatedAt });
+    dirtyInviteSnapshots.add(id);
+  }
+  function deleteInviteSnapshot(guildId) {
+    const id = String(guildId);
+    inviteSnapshots.delete(id);
+    dirtyInviteSnapshots.delete(id);
+  }
+
+  // Leave-Log für den 7-Tage-Rejoin-Schutz: Merkt, wann ein Nutzer gegangen ist.
+  // Bewusst getrennt von user_levels – der XP-Datensatz wird beim Verlassen
+  // gelöscht, das Leave-Log muss den Rejoin-Schutz trotzdem überleben.
+  function getLeaveRecord(guildId, userId) {
+    const v = inviteLeaves.get(String(guildId))?.get(String(userId));
+    return v == null ? null : v;
+  }
+  function setLeaveRecord(guildId, userId, leftAt = Date.now()) {
+    const gid = String(guildId);
+    const uid = String(userId);
+    let m = inviteLeaves.get(gid);
+    if (!m) { m = new Map(); inviteLeaves.set(gid, m); }
+    m.set(uid, Number(leftAt) || Date.now());
+    dirtyInviteLeaves.add(`${gid}:${uid}`);
+    deletedInviteLeaves.delete(`${gid}:${uid}`);
+  }
+  function deleteLeaveRecord(guildId, userId) {
+    const gid = String(guildId);
+    const uid = String(userId);
+    const m = inviteLeaves.get(gid);
+    if (m) m.delete(uid);
+    dirtyInviteLeaves.delete(`${gid}:${uid}`);
+    deletedInviteLeaves.add(`${gid}:${uid}`);
+  }
+  /** Entfernt Leave-Einträge, die älter als `before` (ms) sind. */
+  function pruneLeaveRecords(guildId, before = Date.now()) {
+    const gid = String(guildId);
+    const m = inviteLeaves.get(gid);
+    if (!m) return 0;
+    let removed = 0;
+    for (const [uid, leftAt] of [...m.entries()]) {
+      if (Number(leftAt) < before) {
+        m.delete(uid);
+        dirtyInviteLeaves.delete(`${gid}:${uid}`);
+        deletedInviteLeaves.add(`${gid}:${uid}`);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   // ----------------- Persistence -----------------
   async function flush({ force = false } = {}) {
     if (flushInProgress) {
@@ -432,7 +559,7 @@ function createXpStore({ logger, env } = {}) {
       flushRequested = true;
       return;
     }
-    if (!dirtyGuilds.size && !dirtyUsers.size && !deletedUsers.size && !deletedGuilds.size && !dirtyMetadata && !force) return;
+    if (!dirtyGuilds.size && !dirtyUsers.size && !deletedUsers.size && !deletedGuilds.size && !dirtyMetadata && !dirtyInviteSnapshots.size && !dirtyInviteLeaves.size && !deletedInviteLeaves.size && !force) return;
     flushInProgress = true;
     flushRequested = false;
     const start = Date.now();
@@ -446,10 +573,16 @@ function createXpStore({ logger, env } = {}) {
     const pendingDeletedUsers = new Set(deletedUsers);
     const pendingDeletedGuilds = new Set(deletedGuilds);
     const pendingMetadata = dirtyMetadata;
+    const pendingInviteSnapshots = new Set(dirtyInviteSnapshots);
+    const pendingInviteLeaves = new Set(dirtyInviteLeaves);
+    const pendingDeletedInviteLeaves = new Set(deletedInviteLeaves);
     for (const key of pendingGuilds) dirtyGuilds.delete(key);
     for (const key of pendingUsers) dirtyUsers.delete(key);
     for (const key of pendingDeletedUsers) deletedUsers.delete(key);
     for (const key of pendingDeletedGuilds) deletedGuilds.delete(key);
+    for (const key of pendingInviteSnapshots) dirtyInviteSnapshots.delete(key);
+    for (const key of pendingInviteLeaves) dirtyInviteLeaves.delete(key);
+    for (const key of pendingDeletedInviteLeaves) deletedInviteLeaves.delete(key);
     if (pendingMetadata) dirtyMetadata = false;
 
     let flushSucceeded = false;
@@ -461,6 +594,8 @@ function createXpStore({ logger, env } = {}) {
         for (const gid of pendingDeletedGuilds) {
           statements.push({ sql: 'DELETE FROM guild_configs WHERE guild_id = ?', args: [gid] });
           statements.push({ sql: 'DELETE FROM user_levels WHERE guild_id = ?', args: [gid] });
+          statements.push({ sql: 'DELETE FROM invite_snapshots WHERE guild_id = ?', args: [gid] });
+          statements.push({ sql: 'DELETE FROM invite_leave_log WHERE guild_id = ?', args: [gid] });
         }
         for (const key of pendingDeletedUsers) {
           const [gid, uid] = key.split(':');
@@ -523,6 +658,34 @@ function createXpStore({ logger, env } = {}) {
             args: [u.guildId, u.userId, u.level, u.xp, u.lastXpGain || 0, u.inactiveDays || 0, u.lastActivity || 0]
           });
         }
+        // upserts/deletes Invite-XP
+        for (const gid of pendingInviteSnapshots) {
+          const s = inviteSnapshots.get(gid);
+          if (!s) continue;
+          statements.push({
+            sql: `INSERT INTO invite_snapshots (guild_id, data, updated_at)
+                  VALUES (?, ?, ?)
+                  ON CONFLICT(guild_id) DO UPDATE SET
+                    data=excluded.data, updated_at=excluded.updated_at`,
+            args: [gid, JSON.stringify(s.data || {}), s.updatedAt || Date.now()],
+          });
+        }
+        for (const key of pendingInviteLeaves) {
+          const [gid, uid] = key.split(':');
+          const leftAt = inviteLeaves.get(gid)?.get(uid);
+          if (leftAt == null) continue;
+          statements.push({
+            sql: `INSERT INTO invite_leave_log (guild_id, user_id, left_at)
+                  VALUES (?, ?, ?)
+                  ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                    left_at=excluded.left_at`,
+            args: [gid, uid, leftAt],
+          });
+        }
+        for (const key of pendingDeletedInviteLeaves) {
+          const [gid, uid] = key.split(':');
+          statements.push({ sql: 'DELETE FROM invite_leave_log WHERE guild_id = ? AND user_id = ?', args: [gid, uid] });
+        }
         if (pendingMetadata) {
           statements.push({
             sql: `INSERT INTO bot_metadata (key, value) VALUES ('command_ids', ?)
@@ -550,7 +713,8 @@ function createXpStore({ logger, env } = {}) {
           logger?.info?.(
             `[xp-level-bot] Flush: ${statements.length} ops in ${Date.now()-start}ms ` +
             `(guilds:${pendingGuilds.size} users:${pendingUsers.size} ` +
-            `delG:${pendingDeletedGuilds.size} delU:${pendingDeletedUsers.size})`
+            `delG:${pendingDeletedGuilds.size} delU:${pendingDeletedUsers.size} ` +
+            `invSnap:${pendingInviteSnapshots.size} invLeave:${pendingInviteLeaves.size})`
           );
         }
         // Zusätzlich vollständige Datei-Sicherung. Währenddessen entstandene
@@ -582,12 +746,24 @@ function createXpStore({ logger, env } = {}) {
         const [gid, uid] = key.split(':');
         if (!users.get(gid)?.has(uid)) deletedUsers.add(key);
       }
+      for (const gid of pendingInviteSnapshots) {
+        if (inviteSnapshots.has(gid)) dirtyInviteSnapshots.add(gid);
+      }
+      for (const key of pendingInviteLeaves) {
+        const [gid, uid] = key.split(':');
+        if (inviteLeaves.get(gid)?.has(uid)) dirtyInviteLeaves.add(key);
+      }
+      for (const key of pendingDeletedInviteLeaves) {
+        const [gid, uid] = key.split(':');
+        if (!inviteLeaves.get(gid)?.has(uid)) deletedInviteLeaves.add(key);
+      }
       if (pendingMetadata) dirtyMetadata = true;
       logger?.error?.('[xp-level-bot] Flush fehlgeschlagen:', e.message);
     } finally {
       flushInProgress = false;
       const needsFollowUp =
-        flushRequested || dirtyGuilds.size || dirtyUsers.size || deletedUsers.size || deletedGuilds.size || dirtyMetadata;
+        flushRequested || dirtyGuilds.size || dirtyUsers.size || deletedUsers.size || deletedGuilds.size || dirtyMetadata ||
+        dirtyInviteSnapshots.size || dirtyInviteLeaves.size || deletedInviteLeaves.size;
       flushRequested = false;
       // Bei Erfolg sofort die während des Batches entstandenen Änderungen
       // nachziehen. Bei DB-Fehlern übernimmt der reguläre 5-Minuten-Retry, damit
@@ -634,12 +810,16 @@ function createXpStore({ logger, env } = {}) {
     getCommandIds, getCommandId, setCommandIds,
     getCommandIdScope, setCommandIdScope,
     getGuildCommandIds, getAllGuildCommandIds, setGuildCommandIds, deleteGuildCommandIds, clearGuildCommandIds,
+    getInviteSnapshot, setInviteSnapshot, deleteInviteSnapshot,
+    getLeaveRecord, setLeaveRecord, deleteLeaveRecord, pruneLeaveRecords,
     flush,
     startBackupInterval, stopBackupInterval,
     findLeaderboardMessage,
     parseNicknamesEnabled,
     _guilds: guilds,
     _users: users,
+    _inviteSnapshots: inviteSnapshots,
+    _inviteLeaves: inviteLeaves,
     _dirtyGuilds: dirtyGuilds,
     _dirtyUsers: dirtyUsers,
     _db: () => db,

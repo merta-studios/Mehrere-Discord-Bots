@@ -155,6 +155,18 @@ function buildLevelDownEmbed({ lang, userId, level, xp }) {
   return container;
 }
 
+// Invite-XP Nachricht (Haupt-Chat): gleiche Optik & Schriftgröße wie Level-Up,
+// d.h. die Zeile ist eine "## "-Markdown-Überschrift (Level 2).
+function buildInviteXpEmbed({ lang, inviterId, joinedId, xp }) {
+  const desc = t('inviteXp', lang, {
+    inviter: `<@${inviterId}>`,
+    joined: `<@${joinedId}>`,
+    xp,
+  });
+  const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${desc}`));
+  return container;
+}
+
 function smallContainer(title, desc) {
   const container = new ContainerBuilder();
   let text = '';
@@ -240,6 +252,7 @@ module.exports = {
   buildRankEmbed,
   buildLevelUpEmbed,
   buildLevelDownEmbed,
+  buildInviteXpEmbed,
   buildBonusDropEmbed,
   buildBonusClaimedEmbed,
   buildBonusExpiredEmbed,
