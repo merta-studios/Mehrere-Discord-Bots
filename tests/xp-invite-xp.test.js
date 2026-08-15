@@ -27,6 +27,8 @@ const {
 } = require('../bots/xp-level-bot/src/invite-xp');
 const { createXpStore } = require('../bots/xp-level-bot/src/store');
 const { t, LANGS } = require('../bots/xp-level-bot/src/languages');
+const { GatewayIntentBits } = require('discord.js');
+const xpBot = require('../bots/xp-level-bot');
 
 // ---------------------------------------------------------------------------
 // Reine Funktionen
@@ -114,6 +116,17 @@ test('inviteXp-Text existiert in allen 10 Sprachen und enthält beide Mentions +
   }
 });
 
+test('deutsche Invite-Nachricht nennt klar den XP-Empfänger und enthält kein „er/sie“', () => {
+  const text = t('inviteXp', 'de', { inviter: '<@111>', joined: '<@222>', xp: 60 });
+  assert.match(text, /^🎉 <@111> bekommt \*\*60 XP\*\*/);
+  assert.match(text, /Invite-Belohnung/);
+  assert.equal(text.includes('er\/sie'), false);
+});
+
+test('XP-Bot fordert den GuildInvites-Intent für InviteCreate/Delete-Events an', () => {
+  assert.ok(xpBot.intents.includes(GatewayIntentBits.GuildInvites));
+});
+
 // ---------------------------------------------------------------------------
 // Tracker-Harness (fakes Guild/Channels/Store, keine Discord-Verbindung)
 // ---------------------------------------------------------------------------
@@ -124,12 +137,18 @@ function makeHarness({
   inviterInGuild = true,
   mainSendFails = false,
   retryDelayMs = 0,
+  retryDelaysMs,
   lang = 'de',
   setup = true,
   rng = () => 0.5, // -> 40 + floor(0.5*41) = 60 XP
 } = {}) {
   const inviteMap = new Map(
-    invites.map((i) => [i.code, { code: i.code, uses: i.uses, inviter: i.inviterId ? { id: i.inviterId } : null }])
+    invites.map((i) => [i.code, {
+      code: i.code,
+      uses: i.uses,
+      maxUses: i.maxUses || 0,
+      inviter: i.inviterId ? { id: i.inviterId } : null,
+    }])
   );
   const sent = [];
   const mkChannel = (id, fails = false) => ({
@@ -181,6 +200,7 @@ function makeHarness({
     store,
     logger,
     retryDelayMs,
+    retryDelaysMs,
     rng,
     onLevelChange: async (guild, cfg, user, res) => levelChanges.push({ guild, cfg, user, res }),
     onXpOnly: async (guild, cfg, user, userId) => xpOnly.push(userId),
@@ -317,6 +337,100 @@ test('Discord spiegelt uses erst verzögert: Retry gegen dieselbe Baseline finde
   assert.equal(res.awarded, true);
   assert.equal(res.xp, 60);
   assert.equal(h.sent.length, 1);
+});
+
+test('zur Laufzeit neu erstellter Invite wird ab dem ersten Use zuverlässig erkannt', async () => {
+  const h = makeHarness({ snapshot: {} });
+  await h.tracker.refreshSnapshot(h.guild); // vollständige Runtime-Baseline
+
+  const invite = {
+    code: 'brand-new',
+    uses: 0,
+    maxUses: 0,
+    inviter: { id: 'inviter-1' },
+    guild: h.guild,
+  };
+  h.inviteMap.set(invite.code, invite);
+  h.tracker.handleInviteCreate(invite);
+  invite.uses = 1;
+
+  const member = { id: 'newbie-created', guild: h.guild, user: { bot: false, id: 'newbie-created' } };
+  const res = await h.tracker.handleGuildMemberAdd(member);
+  assert.equal(res.awarded, true);
+  assert.equal(res.inviterId, 'inviter-1');
+  assert.equal(h.store.getInviteSnapshot('g1').data['brand-new'], 1);
+});
+
+test('verbrauchter Einmal-Invite wird trotz sofortiger Discord-Löschung zugeordnet', async () => {
+  const h = makeHarness({
+    invites: [{ code: 'one-use', uses: 0, maxUses: 1, inviterId: 'inviter-1' }],
+    snapshot: {},
+  });
+  await h.tracker.refreshSnapshot(h.guild);
+  const deletedInvite = { ...h.inviteMap.get('one-use'), guild: h.guild };
+  h.tracker.handleInviteDelete(deletedInvite);
+  h.inviteMap.delete('one-use'); // REST-Liste enthält den verbrauchten Link nicht mehr
+
+  const member = { id: 'newbie-one-use', guild: h.guild, user: { bot: false, id: 'newbie-one-use' } };
+  const res = await h.tracker.handleGuildMemberAdd(member);
+  assert.equal(res.awarded, true);
+  assert.equal(res.inviterId, 'inviter-1');
+  assert.deepEqual(h.store.getInviteSnapshot('g1').data, {});
+});
+
+test('zwei schnelle Beitritte über denselben Link verbrauchen ein +2-Delta einzeln', async () => {
+  const h = makeHarness({
+    invites: [{ code: 'rapid', uses: 2, inviterId: 'inviter-1' }],
+    snapshot: { rapid: 0 },
+  });
+  const first = { id: 'rapid-1', guild: h.guild, user: { bot: false, id: 'rapid-1' } };
+  const second = { id: 'rapid-2', guild: h.guild, user: { bot: false, id: 'rapid-2' } };
+
+  const [a, b] = await Promise.all([
+    h.tracker.handleGuildMemberAdd(first),
+    h.tracker.handleGuildMemberAdd(second),
+  ]);
+  assert.equal(a.awarded, true);
+  assert.equal(b.awarded, true);
+  assert.equal(h.sent.length, 2);
+  assert.equal(h.store.getInviteSnapshot('g1').data.rapid, 2);
+});
+
+test('Bot-Beitritt verbraucht nur sein Delta; der folgende Mensch bekommt das zweite', async () => {
+  const h = makeHarness({
+    invites: [{ code: 'mixed', uses: 2, inviterId: 'inviter-1' }],
+    snapshot: { mixed: 0 },
+  });
+  const bot = { id: 'joined-bot', guild: h.guild, user: { bot: true, id: 'joined-bot' } };
+  const human = { id: 'joined-human', guild: h.guild, user: { bot: false, id: 'joined-human' } };
+
+  const [botResult, humanResult] = await Promise.all([
+    h.tracker.handleGuildMemberAdd(bot),
+    h.tracker.handleGuildMemberAdd(human),
+  ]);
+  assert.equal(botResult.reason, 'bot');
+  assert.equal(botResult.inviteConsumed, true);
+  assert.equal(humanResult.awarded, true);
+  assert.equal(h.sent.length, 1, 'nur der menschliche Beitritt wird belohnt');
+  assert.equal(h.store.getInviteSnapshot('g1').data.mixed, 2);
+});
+
+test('gestaffelte Retries erkennen einen erst beim dritten Fetch aktualisierten Zähler', async () => {
+  const h = makeHarness({
+    invites: [{ code: 'slow', uses: 1, inviterId: 'inviter-1' }],
+    snapshot: { slow: 1 },
+    retryDelaysMs: [1, 1, 1],
+  });
+  let fetches = 0;
+  h.guild.invites.fetch = async () => {
+    fetches++;
+    if (fetches === 3) h.inviteMap.get('slow').uses = 2;
+    return h.inviteMap;
+  };
+  const member = { id: 'slow-newbie', guild: h.guild, user: { bot: false, id: 'slow-newbie' } };
+  const res = await h.tracker.handleGuildMemberAdd(member);
+  assert.equal(fetches, 3);
+  assert.equal(res.awarded, true);
 });
 
 test('Hauptkanal nicht erreichbar -> Fallback auf Leaderboard-Kanal', async () => {

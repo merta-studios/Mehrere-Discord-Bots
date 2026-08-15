@@ -569,6 +569,9 @@ async function setupCmd(ctx, interaction) {
     nicknamesEnabled: existing?.nicknamesEnabled !== false,
   };
   ctx.store.setGuild(cfg);
+  // Invite-Baseline direkt beim /setup aufbauen. Ohne diesen Sync wäre der
+  // erste Beitritt nach einer erstmaligen Einrichtung nicht zuordenbar.
+  await ctx.inviteTracker?.syncGuild?.(interaction.guild);
   await ctx.store.flush();
 
   const desc = t('setupSuccess', lang, { leader: `<#${leader.id}>`, main: `<#${main.id}>`, lang: LANGS[lang].name });

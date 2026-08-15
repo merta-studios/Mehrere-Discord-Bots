@@ -61,6 +61,7 @@ module.exports = {
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildInvites,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.DirectMessages,
   ],
@@ -252,6 +253,12 @@ module.exports = {
     });
     ctx.inviteTracker = inviteTracker;
 
+    // Neue und gelöschte Invites sofort im Laufzeit-Cache spiegeln. Besonders
+    // Einmal-Invites verschwinden beim ersten Use aus der REST-Liste; das
+    // InviteDelete-Event ist dann die letzte zuverlässige Ersteller-Quelle.
+    client.on(Events.InviteCreate, (invite) => inviteTracker.handleInviteCreate(invite));
+    client.on(Events.InviteDelete, (invite) => inviteTracker.handleInviteDelete(invite));
+
     // ---------------- Interactions ----------------
     client.on('interactionCreate', (interaction) => {
       void handleInteraction(ctx, interaction);
@@ -432,6 +439,7 @@ module.exports = {
 
     // ---------------- Guild Delete / Create ----------------
     client.on('guildDelete', (guild) => {
+      inviteTracker.forgetGuild(guild.id);
       store.deleteGuild(guild.id);
       void store.flush();
       logger.info(`[xp-level-bot] Server ${guild.name} verlassen – Daten bereinigt`);
@@ -455,14 +463,14 @@ module.exports = {
     client.on('guildMemberAdd', async (member) => {
       try {
         if (!member.guild) return;
-        // Bots (und damit auch andere Bots) bekommen weder Rollen noch Nickname-Tags
-        if (member.user?.bot) return;
-        // Invite-XP früh anstoßen (fire-and-forget, eigene Per-Guild-Queue):
-        // Die Invite-Delta-Erkennung läuft asynchron und darf Nickname/Rollen
-        // nicht blockieren. Der Beitretende braucht keine XP-Daten.
+        // Invite-XP für JEDES Add-Event früh anstoßen. Auch Bot-Beitritte müssen
+        // ihr Invite-Delta verbrauchen, damit es nicht fälschlich dem nächsten
+        // Menschen zugerechnet wird; XP oder Rollen bekommen Bots weiterhin nie.
         void inviteTracker.handleGuildMemberAdd(member).catch((e) =>
           logger.warn('[xp-level-bot] Invite-XP guildMemberAdd fail:', e.message)
         );
+        // Bots (und damit auch andere Bots) bekommen weder Rollen noch Nickname-Tags
+        if (member.user?.bot) return;
         const cfg = store.getGuild(member.guild.id);
         if (!cfg) return;
         const existing = store.getUser(member.guild.id, member.id);
