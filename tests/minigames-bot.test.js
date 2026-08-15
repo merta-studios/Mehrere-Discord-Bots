@@ -1431,6 +1431,14 @@ test('2048: die Oberfläche zeigt Punkte, Fortschritt und ein Steuerkreuz', () =
   const pads = rows.flatMap((row) => row.components).filter((b) => /pad\d$/.test(b.custom_id));
   assert.equal(pads.length, 2);
   assert.ok(pads.every((button) => button.disabled));
+  assert.ok(
+    pads.every((button) => button.label.trim().length > 0),
+    'Discord trimmt reine Leerraum-Labels und lehnt sonst das gesamte Spielfeld ab'
+  );
+  assert.ok(
+    pads.every((button) => /\S/u.test(button.label)),
+    'der unsichtbare Füller muss ein echtes Nicht-Leerraum-Zeichen enthalten'
+  );
 
   // Undo ist ohne vorherigen Zug deaktiviert.
   const undo = rows.flatMap((row) => row.components).find((b) => b.custom_id === SOLO_CID.undo);
