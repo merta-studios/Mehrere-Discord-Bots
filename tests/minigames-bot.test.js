@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { MessageFlags, ChannelType } = require('discord.js');
+const { MessageFlags, ChannelType, Routes } = require('discord.js');
 
 const {
   GAME_TTT,
@@ -44,7 +44,52 @@ const {
   buildLanguageContainer,
   connect4Cursor,
 } = require('../bots/minigames-bot/src/embed-builder');
-const { defineCommands, setLanguageCmd } = require('../bots/minigames-bot/src/commands');
+const {
+  GAME_2048,
+  SIZE,
+  WIN_EXP,
+  SOLO_ACTIVE,
+  SOLO_WON,
+  SOLO_OVER,
+  SOLO_CID,
+  createSoloGame,
+  normalizeSoloState,
+  slideLine,
+  slideBoard,
+  canMove,
+  availableDirections,
+  spawnTile,
+  moveSolo,
+  undoSolo,
+  resumeSolo,
+  restartSolo,
+  encodeSoloPayload,
+  decodeSoloPayload,
+  parseSoloCustomId,
+  tileValue,
+  bestTile,
+} = require('../bots/minigames-bot/src/game-2048');
+const {
+  buildSoloContainer,
+  buildSoloPayload,
+  parseSoloMessage,
+  renderBoard,
+  progressBar,
+  formatNumber,
+} = require('../bots/minigames-bot/src/solo-ui');
+const {
+  defineCommands,
+  guildCommandJson,
+  registerCommands,
+  registerGuildCommands,
+  setLanguageCmd,
+  soloCmd,
+  commandMention,
+  MULTIPLAYER_COMMAND,
+  SINGLEPLAYER_COMMAND,
+  LEGACY_COMMAND_NAMES,
+} = require('../bots/minigames-bot/src/commands');
+const { handleSoloButton, soloErrorText } = require('../bots/minigames-bot/src/interactions');
 const {
   parseCountingNumber,
   evaluateCount,
@@ -389,20 +434,28 @@ function assertLocales(map, path) {
   }
 }
 
-test('nur die sechs gewünschten Slash-Commands sind registriert und API-valide', () => {
+test('nur die sieben gewünschten Slash-Commands sind registriert und API-valide', () => {
   const commands = defineCommands().map((command) => command.toJSON());
   assert.deepEqual(commands.map((command) => command.name), [
-    'play', 'set_language', 'set_counting_channel', 'admin_set_bot_profile', 'help', 'adminpanel',
+    'multiplayer', 'singleplayer', 'set_language', 'set_counting_channel',
+    'admin_set_bot_profile', 'help', 'adminpanel',
   ]);
   const play = commands[0];
   assert.deepEqual(play.options[0].choices.map((choice) => choice.value), [GAME_TTT, GAME_CONNECT4]);
   assert.equal(play.options[1].required, false, 'der Gegner ist optional');
-  assert.equal(commands[1].options[0].choices.length, 10);
-  assert.equal(commands[1].default_member_permissions, '8');
-  assert.equal(commands[2].default_member_permissions, '8', 'Counting nur für Admins');
-  assert.equal(commands[2].options[0].required, true);
-  assert.equal(commands[2].options[1].required, false);
-  assert.equal(commands[3].default_member_permissions, '8');
+
+  const solo = commands[1];
+  assert.deepEqual(solo.options.map((option) => option.name), ['game']);
+  assert.equal(solo.options[0].required, true);
+  assert.deepEqual(solo.options[0].choices.map((choice) => choice.value), [GAME_2048]);
+  assert.equal(solo.default_member_permissions, undefined, 'Solo darf jeder spielen');
+
+  assert.equal(commands[2].options[0].choices.length, 10);
+  assert.equal(commands[2].default_member_permissions, '8');
+  assert.equal(commands[3].default_member_permissions, '8', 'Counting nur für Admins');
+  assert.equal(commands[3].options[0].required, true);
+  assert.equal(commands[3].options[1].required, false);
+  assert.equal(commands[4].default_member_permissions, '8');
 
   for (const command of commands) {
     assertLocales(command.name_localizations, `${command.name}.name`);
@@ -1032,4 +1085,646 @@ test('Minigames-Owner-Panel schaltet zwischen „Call joinen“ und „Call verl
     .flatMap((row) => row.components.map((button) => button.label));
   assert.ok(leaveLabels.includes('🔇 Call verlassen'));
   assert.match(JSON.stringify(leaveJson), /voice-1/);
+});
+
+/* ------------------------------------------------------------------ *
+ * 🧩 Single Player – 2048
+ * ------------------------------------------------------------------ */
+
+/** Deterministischer Zufall für reproduzierbare Tests. */
+function seededRandom(seed = 1) {
+  let value = seed;
+  return () => {
+    value = (value * 1103515245 + 12345) % 2147483648;
+    return value / 2147483648;
+  };
+}
+
+/** Baut ein Brett aus Zweierpotenzen (0 = leer) in interne Exponenten um. */
+function boardOf(values) {
+  return values.map((value) => (value ? Math.log2(value) : 0));
+}
+
+function soloStateOf(values, extra = {}) {
+  return normalizeSoloState({
+    game: GAME_2048,
+    userId: 'u1',
+    lang: 'de',
+    board: boardOf(values),
+    ...extra,
+  });
+}
+
+test('2048: eine Reihe verschmilzt originalgetreu – jeder Stein nur einmal pro Zug', () => {
+  // [2,2,2,2] -> [4,4] und nicht [8]
+  const doubled = slideLine([1, 1, 1, 1]);
+  assert.deepEqual(doubled.values, [2, 2, 0, 0]);
+  assert.equal(doubled.gained, 8, '4 + 4 Punkte');
+
+  // [4,4,2,0] -> [8,2]
+  const mixed = slideLine([2, 2, 1, 0]);
+  assert.deepEqual(mixed.values, [3, 1, 0, 0]);
+  assert.equal(mixed.gained, 8);
+
+  // Lücken werden geschlossen, ohne zu verschmelzen.
+  const gaps = slideLine([0, 1, 0, 2]);
+  assert.deepEqual(gaps.values, [1, 2, 0, 0]);
+  assert.equal(gaps.gained, 0);
+
+  // Ein bereits verschmolzener Stein verschmilzt nicht sofort weiter.
+  const chain = slideLine([1, 1, 2, 0]);
+  assert.deepEqual(chain.values, [2, 2, 0, 0]);
+});
+
+test('2048: Züge in alle vier Richtungen schieben korrekt', () => {
+  const board = boardOf([
+    2, 2, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ]);
+
+  const left = slideBoard(board, 'left');
+  assert.equal(left.board[0], 2, 'links: die 4 landet ganz links');
+  assert.equal(left.gained, 4);
+  assert.deepEqual(left.mergedCells, [0]);
+
+  const right = slideBoard(board, 'right');
+  assert.equal(right.board[3], 2, 'rechts: die 4 landet ganz rechts');
+  assert.deepEqual(right.mergedCells, [3]);
+
+  const column = boardOf([
+    4, 0, 0, 0,
+    4, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ]);
+  assert.equal(slideBoard(column, 'up').board[0], 3, 'hoch: 8 oben');
+  assert.equal(slideBoard(column, 'down').board[12], 3, 'runter: 8 unten');
+  assert.equal(slideBoard(column, 'left').moved, false, 'links bewegt sich nichts');
+});
+
+test('2048: eine neue Runde startet mit genau zwei Steinen (2 oder 4)', () => {
+  for (let seed = 1; seed <= 25; seed += 1) {
+    const state = createSoloGame({ userId: 'u1', random: seededRandom(seed) });
+    const tiles = state.board.filter(Boolean);
+    assert.equal(tiles.length, 2, 'genau zwei Startsteine');
+    for (const exp of tiles) assert.ok(exp === 1 || exp === 2, 'nur 2 oder 4');
+    assert.equal(state.score, 0);
+    assert.equal(state.moves, 0);
+    assert.equal(state.status, SOLO_ACTIVE);
+    assert.equal(state.previous, null, 'am Anfang gibt es nichts zurückzunehmen');
+    assert.ok(state.board[state.newCell] > 0, 'der markierte neue Stein existiert');
+  }
+});
+
+test('2048: ein Zug erzeugt Punkte, einen neuen Stein und einen Undo-Punkt', () => {
+  const state = soloStateOf([
+    2, 2, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ]);
+  const result = moveSolo(state, 'u1', 'left', { random: seededRandom(7) });
+  assert.equal(result.error, undefined);
+  assert.equal(result.gained, 4);
+  assert.equal(result.state.score, 4);
+  assert.equal(result.state.moves, 1);
+  assert.equal(tileValue(result.state.board[0]), 4);
+  assert.ok(result.state.mergedCells.includes(0));
+  assert.equal(result.state.board.filter(Boolean).length, 2, 'ein Stein rückt nach');
+  assert.ok(result.state.previous, 'der Zug kann zurückgenommen werden');
+});
+
+test('2048: nur der Besitzer darf spielen, und leere Züge werden abgewiesen', () => {
+  const state = createSoloGame({ userId: 'owner', random: seededRandom(3) });
+  assert.equal(moveSolo(state, 'someone-else', 'left').error, 'not_owner');
+  assert.equal(undoSolo(state, 'someone-else').error, 'not_owner');
+  assert.equal(restartSolo(state, 'someone-else').error, 'not_owner');
+  assert.equal(moveSolo(state, 'owner', 'diagonal').error, 'invalid_move');
+
+  const blocked = soloStateOf([
+    2, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ], { userId: 'owner' });
+  assert.equal(moveSolo(blocked, 'owner', 'up').error, 'no_move', 'oben ist schon alles');
+});
+
+test('2048: Rückgängig stellt Brett, Punkte und Zugzahl exakt wieder her', () => {
+  const start = soloStateOf([
+    2, 2, 4, 8,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ], { score: 100, moves: 10 });
+
+  const moved = moveSolo(start, 'u1', 'left', { random: seededRandom(11) }).state;
+  assert.notDeepEqual(moved.board, start.board);
+
+  const undone = undoSolo(moved, 'u1').state;
+  assert.deepEqual(undone.board, start.board);
+  assert.equal(undone.score, 100);
+  assert.equal(undone.moves, 10);
+  assert.equal(undone.previous, null, 'nur ein Schritt zurück');
+  assert.equal(undoSolo(undone, 'u1').error, 'no_undo');
+});
+
+test('2048: der 2048er-Stein feiert einmal und danach geht es endlos weiter', () => {
+  const almost = soloStateOf([
+    1024, 1024, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ]);
+  const won = moveSolo(almost, 'u1', 'left', { random: seededRandom(5) });
+  assert.equal(won.state.status, SOLO_WON);
+  assert.equal(won.justWon, true);
+  assert.equal(won.state.reachedWin, true);
+  assert.equal(bestTile(won.state.board), 2048);
+  assert.equal(won.state.score, 2048, 'die Verschmelzung bringt 2048 Punkte');
+
+  // Weiterspielen beendet den Sieg-Bildschirm, ohne die Runde zu verlieren.
+  const resumed = resumeSolo(won.state, 'u1').state;
+  assert.equal(resumed.status, SOLO_ACTIVE);
+  assert.equal(resumed.reachedWin, true);
+  assert.equal(resumeSolo(resumed, 'u1').error, 'not_won');
+
+  // Der Sieg wird nicht ein zweites Mal gefeiert.
+  const next = moveSolo(resumed, 'u1', 'left', { random: seededRandom(9) });
+  assert.notEqual(next.state.status, SOLO_WON);
+  assert.equal(next.justWon, false);
+});
+
+test('2048: ein volles Brett ohne Nachbarpaare beendet die Runde', () => {
+  const full = boardOf([
+    2, 4, 2, 4,
+    4, 2, 4, 2,
+    2, 4, 2, 4,
+    4, 2, 4, 2,
+  ]);
+  assert.equal(canMove(full), false);
+  assert.deepEqual(availableDirections(full), []);
+
+  // Ein einziges Paar reicht, damit es weitergeht.
+  const withPair = [...full];
+  withPair[15] = withPair[14];
+  assert.equal(canMove(withPair), true);
+
+  // Eine echte Partie bis zum Ende: irgendwann ist kein Zug mehr möglich,
+  // und genau dann – nicht früher – kippt der Status auf „vorbei“.
+  const random = seededRandom(2024);
+  let state = createSoloGame({ userId: 'u1', lang: 'de', random });
+  let guard = 0;
+  while (state.status !== SOLO_OVER && guard < 5000) {
+    guard += 1;
+    const directions = availableDirections(state.board);
+    assert.ok(directions.length, 'solange nicht „vorbei“, muss es einen Zug geben');
+    const result = moveSolo(state, 'u1', directions[guard % directions.length], { random });
+    assert.equal(result.error, undefined);
+    state = result.state;
+  }
+  const over = { state };
+  assert.equal(state.status, SOLO_OVER, 'die Partie endet zuverlässig');
+  assert.equal(canMove(state.board), false);
+  assert.equal(state.board.filter(Boolean).length, 16, 'das Brett ist voll');
+  assert.ok(state.score > 0 && state.moves > 0);
+  assert.ok(over.state.finishedAt > 0);
+  assert.equal(moveSolo(over.state, 'u1', 'left').error, 'game_over');
+
+  // Neustart macht in derselben Nachricht ein frisches Brett auf.
+  const fresh = restartSolo(over.state, 'u1', { random: seededRandom(4) }).state;
+  assert.equal(fresh.status, SOLO_ACTIVE);
+  assert.equal(fresh.score, 0);
+  assert.equal(fresh.board.filter(Boolean).length, 2);
+  assert.equal(fresh.userId, 'u1');
+  assert.equal(fresh.lang, 'de');
+});
+
+test('2048: neue Steine sind zu ~90 % eine 2 und landen nur auf freien Feldern', () => {
+  const random = seededRandom(42);
+  let fours = 0;
+  const rounds = 600;
+  for (let i = 0; i < rounds; i += 1) {
+    const board = boardOf([
+      2, 4, 8, 16,
+      32, 64, 128, 256,
+      512, 1024, 2, 4,
+      8, 16, 32, 0,
+    ]);
+    const spawned = spawnTile(board, random);
+    assert.equal(spawned.index, 15, 'nur das eine freie Feld kommt in Frage');
+    if (spawned.board[15] === 2) fours += 1;
+  }
+  const share = fours / rounds;
+  assert.ok(share > 0.02 && share < 0.2, `4er-Anteil unplausibel: ${share}`);
+
+  // Ohne freies Feld passiert nichts.
+  const fullBoard = boardOf([
+    2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2, 4, 8, 16, 32, 64,
+  ]);
+  assert.equal(spawnTile(fullBoard, random).index, -1);
+});
+
+test('2048: der Spielstand überlebt als unsichtbarer Marker in der Nachricht', () => {
+  const random = seededRandom(21);
+  let state = createSoloGame({ userId: 'u42', lang: 'fr', random });
+  for (let i = 0; i < 30; i += 1) {
+    const directions = availableDirections(state.board);
+    if (!directions.length) break;
+    const result = moveSolo(state, 'u42', directions[0], { random });
+    if (result.error) break;
+    state = result.state;
+  }
+
+  const encoded = encodeSoloPayload(state);
+  assert.deepEqual(decodeSoloPayload(`irgendwas ${encoded} und danach`), state);
+  assert.equal(decodeSoloPayload('kein Marker'), null);
+  assert.equal(decodeSoloPayload(`${encoded.slice(0, 12)}%%%`), null);
+
+  // Der echte Weg: Marker unsichtbar in der Container-Nachricht.
+  const message = asMessage(buildSoloContainer(state));
+  const parsed = parseSoloMessage(message);
+  assert.deepEqual(parsed, state);
+  assert.equal(parseSoloMessage({ content: 'nichts', components: [], embeds: [] }), null);
+
+  // Der Battle-Parser darf einen Solo-Marker niemals als Battle lesen.
+  assert.equal(parseGameMessage(message), null);
+});
+
+test('2048: kaputte oder manipulierte Marker-Daten werden hart bereinigt', () => {
+  const broken = normalizeSoloState({
+    game: GAME_2048,
+    userId: 'u1',
+    lang: 'klingonisch',
+    board: [99, -3, 'x', null, 1, 1, 1, 1],
+    score: -50,
+    moves: 'viele',
+    status: 'schummeln',
+    newCell: 999,
+    mergedCells: [1, 77, -4],
+  });
+  assert.equal(broken.lang, 'en', 'unbekannte Sprache fällt auf Englisch zurück');
+  assert.equal(broken.board.length, SIZE * SIZE, 'das Brett hat immer 16 Felder');
+  assert.ok(broken.board.every((exp) => exp >= 0 && exp <= 31));
+  assert.equal(broken.score, 0);
+  assert.equal(broken.moves, 0);
+  assert.equal(broken.status, SOLO_ACTIVE);
+  assert.equal(broken.newCell, -1);
+  assert.deepEqual(broken.mergedCells, [1]);
+
+  assert.equal(normalizeSoloState(null), null);
+  assert.equal(normalizeSoloState({ game: 'tictactoe', userId: 'u1' }), null, 'kein Battle als Solo');
+  assert.equal(normalizeSoloState({ game: GAME_2048, userId: '' }), null);
+});
+
+test('2048: das Spielfeld ist ein bündiger ansi-Block mit farbigen Kacheln', () => {
+  const state = soloStateOf([
+    2, 4, 8, 16,
+    32, 64, 128, 256,
+    512, 1024, 2048, 4096,
+    0, 0, 0, 0,
+  ], { newCell: 12, mergedCells: [10] });
+
+  const board = renderBoard(state);
+  assert.ok(board.startsWith('```ansi'), 'Discord färbt nur ansi-Blöcke ein');
+  assert.ok(board.endsWith('```'));
+  assert.match(board, /\u001b\[[0-9;]+m/, 'es gibt echte ANSI-Sequenzen');
+  assert.match(board, /\[2048\]/, 'frisch verschmolzene Steine sind auch ohne Farbe erkennbar');
+
+  // Ohne Farbcodes müssen alle Brettzeilen exakt gleich breit sein –
+  // sonst franst das Feld auf dem Handy aus.
+  const plain = board
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .split('\n')
+    .slice(1, -1);
+  const widths = new Set(plain.map((line) => [...line].length));
+  assert.equal(widths.size, 1, `ungleiche Zeilenbreiten: ${[...widths].join(', ')}`);
+  assert.equal(plain.length, SIZE * 2 + 1, '4 Reihen + Rahmenlinien');
+});
+
+test('2048: die Oberfläche zeigt Punkte, Fortschritt und ein Steuerkreuz', () => {
+  const state = soloStateOf([
+    2, 4, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ], { score: 12345, moves: 42, lastGain: 8 });
+
+  const json = buildSoloContainer(state).toJSON();
+  const text = JSON.stringify(json);
+  assert.match(text, /12 345/, 'Punkte werden gruppiert dargestellt');
+  assert.match(text, /\+8/, 'der letzte Punktgewinn wird gezeigt');
+  assert.match(text, /<@u1>/, 'die spielende Person steht im Kopf');
+
+  const rows = json.components.filter((component) => component.type === 1);
+  assert.equal(rows.length, 3, 'zwei Steuer-Reihen und eine Aktions-Reihe');
+  const ids = rows.flatMap((row) => row.components.map((button) => button.custom_id));
+  for (const direction of ['up', 'down', 'left', 'right']) {
+    assert.ok(ids.includes(SOLO_CID.move(direction)), `${direction} fehlt`);
+  }
+  assert.ok(ids.includes(SOLO_CID.undo));
+  assert.ok(ids.includes(SOLO_CID.restart));
+
+  // Platzhalter formen das Kreuz und sind immer tot.
+  const pads = rows.flatMap((row) => row.components).filter((b) => /pad\d$/.test(b.custom_id));
+  assert.equal(pads.length, 2);
+  assert.ok(pads.every((button) => button.disabled));
+
+  // Undo ist ohne vorherigen Zug deaktiviert.
+  const undo = rows.flatMap((row) => row.components).find((b) => b.custom_id === SOLO_CID.undo);
+  assert.equal(undo.disabled, true);
+
+  assert.equal(progressBar(1), '▱▱▱▱▱▱▱▱▱▱');
+  assert.equal(progressBar(WIN_EXP), '▰▰▰▰▰▰▰▰▰▰');
+  assert.equal(formatNumber(1234567), '1 234 567');
+});
+
+test('2048: unmögliche Richtungen und beendete Runden deaktivieren die Buttons', () => {
+  // Alles liegt schon oben links – hoch und links geht nichts mehr.
+  const state = soloStateOf([
+    2, 4, 8, 16,
+    4, 8, 16, 2,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ]);
+  const buttons = buildSoloContainer(state)
+    .toJSON()
+    .components.filter((component) => component.type === 1)
+    .flatMap((row) => row.components);
+  const byId = Object.fromEntries(buttons.map((button) => [button.custom_id, button]));
+  assert.equal(byId[SOLO_CID.move('up')].disabled, true, 'oben ist dicht');
+  assert.equal(byId[SOLO_CID.move('down')].disabled, false);
+
+  const over = soloStateOf([
+    2, 4, 2, 4,
+    4, 2, 4, 2,
+    2, 4, 2, 4,
+    4, 2, 4, 2,
+  ], { status: SOLO_OVER });
+  const overButtons = buildSoloContainer(over)
+    .toJSON()
+    .components.filter((component) => component.type === 1)
+    .flatMap((row) => row.components);
+  for (const button of overButtons) {
+    if (button.custom_id === SOLO_CID.restart) {
+      assert.equal(button.disabled, undefined, 'Neustart bleibt klickbar');
+    } else if (button.custom_id.includes('_2048_')) {
+      assert.equal(button.disabled, true, `${button.custom_id} sollte tot sein`);
+    }
+  }
+});
+
+test('2048: das Payload nutzt Components V2 und pingt niemanden ungefragt', () => {
+  const state = createSoloGame({ userId: 'u1', random: seededRandom(6) });
+  const payload = buildSoloPayload(state);
+  assert.equal(payload.flags, MessageFlags.IsComponentsV2);
+  assert.deepEqual(payload.allowedMentions.users, ['u1']);
+  assert.deepEqual(payload.allowedMentions.parse, []);
+  assert.deepEqual(payload.allowedMentions.roles, []);
+});
+
+test('2048: Custom-IDs werden strikt geparst und kollidieren nicht mit Battles', () => {
+  assert.deepEqual(parseSoloCustomId(SOLO_CID.move('up')), {
+    kind: 'move', game: GAME_2048, direction: 'up',
+  });
+  assert.deepEqual(parseSoloCustomId(SOLO_CID.undo), { kind: 'undo', game: GAME_2048 });
+  assert.deepEqual(parseSoloCustomId(SOLO_CID.restart), { kind: 'restart', game: GAME_2048 });
+  assert.deepEqual(parseSoloCustomId(SOLO_CID.resume), { kind: 'resume', game: GAME_2048 });
+  assert.deepEqual(parseSoloCustomId(SOLO_CID.pad(1)), { kind: 'noop', game: GAME_2048 });
+  assert.equal(parseSoloCustomId('mg_s_2048_diagonal'), null);
+  assert.equal(parseSoloCustomId('mg_accept'), null, 'Battle-Buttons gehören nicht hierher');
+  assert.equal(parseCustomId(SOLO_CID.move('left')), null, 'und umgekehrt genauso');
+});
+
+/* ------------------------------------------------------------------ *
+ * /singleplayer & Button-Fluss
+ * ------------------------------------------------------------------ */
+
+function soloInteraction({ userId = 'u1', guildId = 'g1', game = GAME_2048 } = {}) {
+  const sent = {};
+  return {
+    sent,
+    interaction: {
+      guildId,
+      channelId: 'c1',
+      locale: 'de',
+      user: { id: userId },
+      inGuild: () => Boolean(guildId),
+      options: { getString: () => game },
+      reply: async (payload) => {
+        sent.payload = payload;
+        return payload;
+      },
+      fetchReply: async () => ({
+        id: 'm1',
+        guildId,
+        channelId: 'c1',
+        content: '',
+        embeds: [],
+        components: (sent.payload?.components || []).map((c) => (c.toJSON ? c.toJSON() : c)),
+      }),
+    },
+  };
+}
+
+test('/singleplayer startet 2048 im Channel und merkt sich die Runde in der Nachricht', async () => {
+  const { createStore } = require('../bots/minigames-bot/src/store');
+  const { interaction, sent } = soloInteraction({ userId: 'player-1' });
+  const ctx = { store: createStore(), logger: { warn() {} } };
+
+  const message = await soloCmd(ctx, interaction);
+  assert.equal(sent.payload.flags, MessageFlags.IsComponentsV2);
+
+  const state = parseSoloMessage(message);
+  assert.ok(state, 'der Spielstand steckt unsichtbar in der Antwort');
+  assert.equal(state.userId, 'player-1');
+  assert.equal(state.game, GAME_2048);
+  assert.equal(state.board.filter(Boolean).length, 2);
+});
+
+test('/singleplayer läuft nur auf Servern und lehnt unbekannte Spiele ab', async () => {
+  const { createStore } = require('../bots/minigames-bot/src/store');
+  const ctx = { store: createStore(), logger: { warn() {} } };
+
+  const dm = soloInteraction({ guildId: null });
+  await soloCmd(ctx, dm.interaction);
+  assert.match(JSON.stringify(dm.sent.payload), /nur auf einem Server/);
+  assert.equal(dm.sent.payload.flags & MessageFlags.Ephemeral, MessageFlags.Ephemeral);
+
+  const bogus = soloInteraction({ game: 'minesweeper' });
+  await soloCmd(ctx, bogus.interaction);
+  assert.ok(bogus.sent.payload.flags & MessageFlags.Ephemeral, 'privat abgelehnt');
+});
+
+test('2048-Buttons: der Zug landet in derselben Nachricht, Fremde werden abgewiesen', async () => {
+  const { createStore } = require('../bots/minigames-bot/src/store');
+  const start = soloStateOf([
+    2, 2, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ], { userId: 'owner' });
+
+  let current = buildSoloPayload(start);
+  const message = {
+    id: 'm1',
+    guildId: 'g1',
+    channelId: 'c1',
+    content: '',
+    embeds: [],
+    get components() {
+      return current.components.map((c) => (c.toJSON ? c.toJSON() : c));
+    },
+    edit: async (payload) => {
+      current = payload;
+      return message;
+    },
+  };
+
+  const ctx = { store: createStore(), logger: { warn() {}, error() {} } };
+  const replies = [];
+  let deferred = 0;
+  const clickAs = (userId, customId) =>
+    handleSoloButton(ctx, {
+      guildId: 'g1',
+      channelId: 'c1',
+      locale: 'de',
+      user: { id: userId },
+      message,
+      customId,
+      channel: { messages: { fetch: async () => message } },
+      deferUpdate: async () => { deferred += 1; },
+      reply: async (payload) => { replies.push(payload); },
+    }, parseSoloCustomId(customId));
+
+  await clickAs('owner', SOLO_CID.move('left'));
+  const afterMove = parseSoloMessage(message);
+  assert.equal(afterMove.score, 4, 'die Verschmelzung wurde gespeichert');
+  assert.equal(afterMove.moves, 1);
+  assert.equal(deferred, 1);
+
+  // Ein Fremder bekommt nur eine private Absage – die Nachricht bleibt gleich.
+  await clickAs('stranger', SOLO_CID.move('right'));
+  assert.equal(replies.length, 1);
+  assert.match(JSON.stringify(replies[0]), /jemand anderem/);
+  assert.deepEqual(parseSoloMessage(message).board, afterMove.board);
+
+  // Undo bringt exakt den Startzustand zurück.
+  await clickAs('owner', SOLO_CID.undo);
+  const afterUndo = parseSoloMessage(message);
+  assert.deepEqual(afterUndo.board, start.board);
+  assert.equal(afterUndo.score, 0);
+
+  // Die Platzhalter des Steuerkreuzes tun nichts.
+  await clickAs('owner', SOLO_CID.pad(1));
+  assert.equal(replies.length, 1, 'kein zusätzlicher Hinweis');
+
+  // Neustart erzeugt ein frisches Brett in derselben Nachricht.
+  await clickAs('owner', SOLO_CID.restart);
+  const restarted = parseSoloMessage(message);
+  assert.equal(restarted.score, 0);
+  assert.equal(restarted.moves, 0);
+  assert.equal(restarted.userId, 'owner');
+});
+
+test('2048-Fehlertexte sind sprechend und in der Serversprache', () => {
+  assert.match(soloErrorText('not_owner', 'de'), /jemand anderem/);
+  assert.match(soloErrorText('no_move', 'de'), /bewegt sich nichts/);
+  assert.match(soloErrorText('no_undo', 'en'), /no move to undo/i);
+  assert.match(soloErrorText('game_over', 'de'), /vorbei/);
+  assert.match(soloErrorText('was-auch-immer', 'de'), /nicht mehr lesbar/);
+});
+
+/* ------------------------------------------------------------------ *
+ * Command-Registrierung auf ALLEN bestehenden Servern
+ * ------------------------------------------------------------------ */
+
+function registrationCtx(guildIds = []) {
+  const calls = [];
+  return {
+    calls,
+    ctx: {
+      token: 'token',
+      client: {
+        user: { id: 'bot-1' },
+        guilds: { cache: new Map(guildIds.map((id) => [id, { id, name: `Guild ${id}` }])) },
+      },
+      logger: { info() {}, warn() {}, error() {} },
+      commandIds: {},
+      guildCommandIds: new Map(),
+      rest: {
+        put: async (route, { body }) => {
+          calls.push({ route, names: body.map((command) => command.name) });
+          return body.map((command, index) => ({ name: command.name, id: `${route}-${index}` }));
+        },
+      },
+    },
+  };
+}
+
+test('Die Commands werden global UND sofort auf jeden bestehenden Server geschrieben', async () => {
+  const { ctx, calls } = registrationCtx(['g1', 'g2', 'g3']);
+  const ok = await registerCommands(ctx);
+  assert.equal(ok, true);
+
+  const globalCall = calls.find((call) => call.route === Routes.applicationCommands('bot-1'));
+  assert.ok(globalCall, 'der globale Satz wird geschrieben');
+  assert.ok(globalCall.names.includes(SINGLEPLAYER_COMMAND));
+  assert.ok(globalCall.names.includes(MULTIPLAYER_COMMAND));
+  for (const legacy of LEGACY_COMMAND_NAMES) {
+    assert.ok(!globalCall.names.includes(legacy), `/${legacy} muss verschwinden`);
+  }
+
+  // Jeder bereits bespielte Server bekommt die Commands sofort.
+  for (const guildId of ['g1', 'g2', 'g3']) {
+    const call = calls.find((c) => c.route === Routes.applicationGuildCommands('bot-1', guildId));
+    assert.ok(call, `Guild ${guildId} wurde übersprungen`);
+    assert.ok(call.names.includes(MULTIPLAYER_COMMAND));
+    assert.ok(call.names.includes(SINGLEPLAYER_COMMAND));
+    assert.ok(!call.names.includes('play'), 'das alte /play wird ersetzt');
+    assert.ok(!call.names.includes('adminpanel'), '/adminpanel bleibt ein DM-Command');
+    assert.ok(ctx.guildCommandIds.get(guildId)[SINGLEPLAYER_COMMAND], 'IDs werden gemerkt');
+  }
+
+  // /help verlinkt auf einem Server die dort gültigen Guild-IDs.
+  const mention = commandMention(ctx, SINGLEPLAYER_COMMAND, 'g2');
+  assert.match(mention, new RegExp(`^</${SINGLEPLAYER_COMMAND}:`));
+  assert.equal(commandMention(ctx, 'gibt-es-nicht', 'g2'), '/gibt-es-nicht');
+});
+
+test('Ein einzelner Server-Ausfall stoppt die Registrierung nicht', async () => {
+  const { ctx, calls } = registrationCtx(['ok-1', 'kaputt', 'ok-2']);
+  const put = ctx.rest.put;
+  ctx.rest.put = async (route, options) => {
+    if (route.includes('kaputt')) throw new Error('Missing Access');
+    return put(route, options);
+  };
+
+  assert.equal(await registerCommands(ctx), true);
+  assert.ok(calls.some((call) => call.route.includes('ok-1')));
+  assert.ok(calls.some((call) => call.route.includes('ok-2')));
+  assert.equal(ctx.guildCommandIds.has('kaputt'), false);
+});
+
+test('Mit Dev-Gilde bleiben die Commands lokal und der globale Satz wird geleert', async () => {
+  const { ctx, calls } = registrationCtx(['g1']);
+  ctx.devGuildId = 'dev-guild';
+  assert.equal(await registerCommands(ctx), true);
+
+  const devCall = calls.find((call) => call.route === Routes.applicationGuildCommands('bot-1', 'dev-guild'));
+  assert.ok(devCall);
+  assert.ok(devCall.names.includes('adminpanel'), 'in der Dev-Gilde liegt alles zusammen');
+  const globalCall = calls.find((call) => call.route === Routes.applicationCommands('bot-1'));
+  assert.deepEqual(globalCall.names, [], 'global wird geleert');
+});
+
+test('registerGuildCommands schreibt genau die Server-Commands einer Gilde', async () => {
+  const { ctx, calls } = registrationCtx([]);
+  const ids = await registerGuildCommands(ctx, 'neu-dazugekommen');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].names, guildCommandJson().map((command) => command.name));
+  assert.ok(ids[MULTIPLAYER_COMMAND] && ids[SINGLEPLAYER_COMMAND]);
+  assert.equal(await registerGuildCommands(ctx, ''), null, 'ohne Guild-ID passiert nichts');
 });

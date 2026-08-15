@@ -14,13 +14,29 @@ const {
 
 const { LANGS, DISCORD_LOCALE, t, langFromDiscord } = require('./languages');
 const { GAME_TTT, GAME_CONNECT4, createChallenge } = require('./games');
+const { GAME_2048, createSoloGame } = require('./game-2048');
 const {
   buildGamePayload,
   buildLanguageContainer,
   smallContainer,
 } = require('./embed-builder');
+const { buildSoloPayload } = require('./solo-ui');
 const { componentsV2Payload } = require('./message-payload');
 const { openPanel } = require('./admin-panel');
+
+/**
+ * Der frühere `/play` heißt jetzt `/multiplayer` – dazu kommt `/singleplayer`
+ * für die Solo-Spiele. `LEGACY_COMMAND_NAMES` beschreibt Commands, die es
+ * früher gab und die überall gelöscht werden müssen, damit im Discord-Menü
+ * keine Karteileiche zurückbleibt.
+ */
+const MULTIPLAYER_COMMAND = 'multiplayer';
+const SINGLEPLAYER_COMMAND = 'singleplayer';
+const LEGACY_COMMAND_NAMES = ['play'];
+
+// /adminpanel lebt nur im Bot-DM und kann deshalb nicht als Guild-Command
+// registriert werden – alle anderen Commands sind Server-Commands.
+const DM_ONLY_COMMAND_NAMES = ['adminpanel'];
 
 function pick(key) {
   return Object.fromEntries(
@@ -54,7 +70,7 @@ function defineCommands() {
 
   return [
     new SlashCommandBuilder()
-      .setName('play')
+      .setName(MULTIPLAYER_COMMAND)
       .setDescription(t('cmdPlayDesc', 'de'))
       .setDescriptionLocalizations(pick('cmdPlayDesc'))
       .setContexts(InteractionContextType.Guild)
@@ -79,6 +95,22 @@ function defineCommands() {
           .setDescription(t('playOpponentDesc', 'de'))
           .setDescriptionLocalizations(pick('playOpponentDesc'))
           .setRequired(false)
+      ),
+
+    // Solo-Modus: aktuell genau ein Spiel (2048), aber bewusst schon als
+    // Auswahlliste angelegt, damit weitere Spiele nur eine Choice mehr sind.
+    new SlashCommandBuilder()
+      .setName(SINGLEPLAYER_COMMAND)
+      .setDescription(t('cmdSoloDesc', 'de'))
+      .setDescriptionLocalizations(pick('cmdSoloDesc'))
+      .setContexts(InteractionContextType.Guild)
+      .addStringOption((option) =>
+        option
+          .setName('game')
+          .setDescription(t('soloGameDesc', 'de'))
+          .setDescriptionLocalizations(pick('soloGameDesc'))
+          .setRequired(true)
+          .addChoices(localizedGameChoice(GAME_2048, 'gameSolo2048'))
       ),
 
     new SlashCommandBuilder()
@@ -158,29 +190,113 @@ function defineCommands() {
   ];
 }
 
+/** Alle Commands als fertiges JSON (globaler Satz inkl. /adminpanel). */
+function allCommandJson() {
+  return defineCommands().map((command) => command.toJSON());
+}
+
+/** Nur die Server-Commands – /adminpanel ist ein reiner DM-Command. */
+function guildCommandJson() {
+  return allCommandJson().filter((command) => !DM_ONLY_COMMAND_NAMES.includes(command.name));
+}
+
+function idsFromDiscord(response) {
+  return Object.fromEntries((Array.isArray(response) ? response : []).map((c) => [c.name, c.id]));
+}
+
+function getRest(ctx) {
+  return ctx.rest || new REST({ version: '10' }).setToken(ctx.token);
+}
+
+function rememberGuildIds(ctx, guildId, ids) {
+  if (!(ctx.guildCommandIds instanceof Map)) ctx.guildCommandIds = new Map();
+  ctx.guildCommandIds.set(String(guildId), ids);
+  return ids;
+}
+
+/**
+ * Schreibt die Server-Commands in EINE Gilde.
+ *
+ * Guild-Commands sind sofort sichtbar (kein 1-Stunden-Propagationsfenster)
+ * und ein PUT ersetzt den kompletten Guild-Satz. Genau deshalb verschwindet
+ * damit auch das alte `/play` sofort von jedem Server, auf dem der Bot
+ * bereits ist, und `/multiplayer` + `/singleplayer` sind sofort da.
+ */
+async function registerGuildCommands(ctx, guildId, { rest } = {}) {
+  const clientId = ctx.client?.user?.id;
+  const id = String(guildId || '').trim();
+  if (!clientId || !id) return null;
+  const api = rest || getRest(ctx);
+  const registered = await api.put(Routes.applicationGuildCommands(clientId, id), {
+    body: guildCommandJson(),
+  });
+  return rememberGuildIds(ctx, id, idsFromDiscord(registered));
+}
+
+/**
+ * Registriert die Slash-Commands bei Discord.
+ *
+ * 1. Global wird der komplette Satz geschrieben. Der PUT ersetzt den alten
+ *    globalen Satz vollständig – das entfernt automatisch das umbenannte
+ *    `/play`. Global heißt: auch Server, die der Bot gerade nicht im Cache
+ *    hat, bekommen die Commands (nur eben mit Propagationsverzögerung).
+ * 2. Zusätzlich werden die Server-Commands als Guild-Commands auf JEDEN
+ *    Server geschrieben, auf dem der Bot bereits ist. Dadurch sind
+ *    `/multiplayer` und `/singleplayer` dort SOFORT im Menü und `/play`
+ *    sofort weg – ohne auf Discords globale Verteilung zu warten.
+ * 3. Mit `MINIGAMES_BOT_GUILD_ID` bleibt es beim Dev-Verhalten: Commands nur
+ *    in der Dev-Gilde, global geleert.
+ */
 async function registerCommands(ctx) {
-  const commands = defineCommands().map((command) => command.toJSON());
-  const rest = new REST({ version: '10' }).setToken(ctx.token);
-  const clientId = ctx.client.user.id;
+  const rest = getRest(ctx);
+  const clientId = ctx.client?.user?.id;
+  if (!clientId) {
+    ctx.logger?.error?.('[minigames-bot] Command-Registrierung abgebrochen: keine Client-ID.');
+    return false;
+  }
 
   try {
     if (ctx.devGuildId) {
-      const registered = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), { body: commands });
-      ctx.commandIds = Object.fromEntries((registered || []).map((command) => [command.name, command.id]));
-      // Im Dev-Modus sollen alte globale Verify-Commands nicht parallel
-      // sichtbar bleiben. Die gewünschten Commands leben hier nur in der Dev-Gilde.
+      const registered = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), {
+        body: allCommandJson(),
+      });
+      ctx.commandIds = idsFromDiscord(registered);
+      rememberGuildIds(ctx, ctx.devGuildId, ctx.commandIds);
+      // Im Dev-Modus sollen alte globale Commands (inkl. /play) nicht
+      // parallel sichtbar bleiben.
       await rest.put(Routes.applicationCommands(clientId), { body: [] });
       ctx.logger.info(`[minigames-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert.`);
-    } else {
-      const registered = await rest.put(Routes.applicationCommands(clientId), { body: commands });
-      ctx.commandIds = Object.fromEntries((registered || []).map((command) => [command.name, command.id]));
-      for (const guild of ctx.client.guilds.cache.values()) {
-        await rest.put(Routes.applicationGuildCommands(clientId, guild.id), { body: [] }).catch(() => {});
-      }
-      ctx.logger.info('[minigames-bot] Commands global registriert (bis zu 1h bis überall sichtbar).');
+      return true;
     }
+
+    const registered = await rest.put(Routes.applicationCommands(clientId), { body: allCommandJson() });
+    ctx.commandIds = idsFromDiscord(registered);
+    ctx.logger.info(
+      `[minigames-bot] ${Object.keys(ctx.commandIds).length} Commands global registriert ` +
+        `(altes /${LEGACY_COMMAND_NAMES.join(', /')} dabei entfernt).`
+    );
+
+    // Sofort-Sichtbarkeit auf allen bestehenden Servern.
+    const guildIds = [...ctx.client.guilds.cache.keys()];
+    let ok = 0;
+    for (const guildId of guildIds) {
+      try {
+        await registerGuildCommands(ctx, guildId, { rest });
+        ok += 1;
+      } catch (err) {
+        ctx.logger.warn(`[minigames-bot] Guild-Commands für ${guildId} fehlgeschlagen: ${err.message}`);
+      }
+    }
+    if (guildIds.length) {
+      ctx.logger.info(
+        `[minigames-bot] Server-Commands sofort auf ${ok}/${guildIds.length} bestehenden Server(n) aktualisiert ` +
+          '– /multiplayer & /singleplayer sind dort ohne Wartezeit nutzbar.'
+      );
+    }
+    return true;
   } catch (err) {
     ctx.logger.error('[minigames-bot] Command-Registrierung fehlgeschlagen:', err.message);
+    return false;
   }
 }
 
@@ -203,7 +319,12 @@ function privateReply(interaction, text, lang) {
 
 async function handleChatInput(ctx, interaction) {
   switch (interaction.commandName) {
-    case 'play': return playCmd(ctx, interaction);
+    // `play` bleibt als Fallback verdrahtet: solange Discord den alten
+    // globalen Command noch nicht überall gelöscht hat, funktioniert ein
+    // Klick darauf weiterhin, statt in einer Fehlermeldung zu enden.
+    case 'play':
+    case MULTIPLAYER_COMMAND: return playCmd(ctx, interaction);
+    case SINGLEPLAYER_COMMAND: return soloCmd(ctx, interaction);
     case 'set_language': return setLanguageCmd(ctx, interaction);
     case 'set_counting_channel': return setCountingChannelCmd(ctx, interaction);
     case 'admin_set_bot_profile': return profileCmd(ctx, interaction);
@@ -242,6 +363,25 @@ async function playCmd(ctx, interaction) {
   const message = await interaction.fetchReply().catch(() => null);
   if (message) ctx.gameManager.track(message, state);
   return message;
+}
+
+/**
+ * `/singleplayer` – startet eine Solo-Runde im aktuellen Channel.
+ *
+ * Der Spielstand steckt wie bei den Battles unsichtbar in der Nachricht,
+ * die Runde überlebt also Neustarts. Nur die startende Person darf die
+ * Buttons bedienen; alle anderen sehen nur zu.
+ */
+async function soloCmd(ctx, interaction) {
+  const lang = configuredLang(ctx, interaction);
+  if (!interaction.inGuild()) return privateReply(interaction, t('errGuildOnly', lang), lang);
+
+  const game = interaction.options.getString('game') || GAME_2048;
+  if (game !== GAME_2048) return privateReply(interaction, t('errGeneric', lang), lang);
+
+  const state = createSoloGame({ game, userId: interaction.user.id, lang });
+  await interaction.reply(buildSoloPayload(state));
+  return interaction.fetchReply().catch(() => null);
 }
 
 async function setLanguageCmd(ctx, interaction) {
@@ -365,30 +505,46 @@ async function profileCmd(ctx, interaction) {
   }
 }
 
-function commandMention(ctx, name) {
-  return ctx.commandIds?.[name] ? `</${name}:${ctx.commandIds[name]}>` : `/${name}`;
+/**
+ * Klickbare Command-Mention `</name:id>`.
+ *
+ * Auf einem Server gelten die Guild-Commands (sie überschatten die globalen),
+ * deshalb werden deren IDs bevorzugt – sonst würde /help auf eine ID zeigen,
+ * die in dieser Gilde gar nicht gilt.
+ */
+function commandMention(ctx, name, guildId = null) {
+  let id = null;
+  if (guildId && ctx.guildCommandIds instanceof Map) {
+    id = ctx.guildCommandIds.get(String(guildId))?.[name] || null;
+  }
+  if (!id) id = ctx.commandIds?.[name] || null;
+  return id ? `</${name}:${id}>` : `/${name}`;
 }
 
 async function helpCmd(ctx, interaction) {
   const lang = configuredLang(ctx, interaction);
+  const guildId = interaction.guildId || null;
   const lines = [
     `# ${t('helpTitle', lang)}`,
     '',
     t('helpDesc', lang),
     '',
-    `## ⚔️ ${commandMention(ctx, 'play')}`,
+    `## ⚔️ ${commandMention(ctx, MULTIPLAYER_COMMAND, guildId)}`,
     t('helpPlay', lang),
     '',
-    `## 🌍 ${commandMention(ctx, 'set_language')}`,
+    `## 🧩 ${commandMention(ctx, SINGLEPLAYER_COMMAND, guildId)}`,
+    t('helpSolo', lang),
+    '',
+    `## 🌍 ${commandMention(ctx, 'set_language', guildId)}`,
     t('helpSetLanguage', lang),
     '',
-    `## 🔢 ${commandMention(ctx, 'set_counting_channel')}`,
+    `## 🔢 ${commandMention(ctx, 'set_counting_channel', guildId)}`,
     t('helpCounting', lang),
     '',
-    `## 🖼️ ${commandMention(ctx, 'admin_set_bot_profile')}`,
+    `## 🖼️ ${commandMention(ctx, 'admin_set_bot_profile', guildId)}`,
     t('helpProfile', lang),
     '',
-    `## ❓ ${commandMention(ctx, 'help')}`,
+    `## ❓ ${commandMention(ctx, 'help', guildId)}`,
     t('helpHelp', lang),
     '',
     t('helpFooter', lang),
@@ -401,14 +557,23 @@ async function helpCmd(ctx, interaction) {
 
 module.exports = {
   defineCommands,
+  allCommandJson,
+  guildCommandJson,
   registerCommands,
+  registerGuildCommands,
   handleChatInput,
   playCmd,
+  soloCmd,
   setLanguageCmd,
   setCountingChannelCmd,
   profileCmd,
   helpCmd,
+  commandMention,
   configuredLang,
   isAdmin,
   pick,
+  MULTIPLAYER_COMMAND,
+  SINGLEPLAYER_COMMAND,
+  LEGACY_COMMAND_NAMES,
+  DM_ONLY_COMMAND_NAMES,
 };
