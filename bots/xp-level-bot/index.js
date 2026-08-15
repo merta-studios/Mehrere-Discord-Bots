@@ -19,6 +19,11 @@
  *    bekommt +3 Prozentpunkte pro weiterem inaktivem Tag (5→8→11→14%…),
  *    Restbetrag wird bei Level-Down korrekt ins vorige Level übernommen
  *  - Voice 10XP/min: einfach nur im Voice-Channel sein (egal ob Mute/Deaf/allein)
+ *  - Invite-XP: Bei Serverbeitritt wird über das Invite-Delta (uses-Zähler)
+ *    ermittelt, wer den benutzten Invite erstellt hat. Der Ersteller wird im
+ *    Haupt-Chat gepingt (##-Zeile wie Level-Up) und bekommt 40–80 XP.
+ *    Rejoin-Schutz: Wer innerhalb von 7 Tagen nach dem Verlassen zurückkehrt,
+ *    bringt NIEMANDEM XP und löst keine Nachricht aus.
  *  - Leaderboard stündlich + bei Level-Up/Down (max alle 10 Min), Container V2,
  *    Top15, kurzer Decay-Hinweis, Zeit+TZ, Self-Healing über Marker
  *  - /rank für alle, /help, /admin_set_bot_profile, /adminpanel (Owner DM)
@@ -45,6 +50,7 @@ const { createVoiceTracker } = require('./src/voice');
 const { syncLevelRolesForUser } = require('./src/level-roles');
 const { ensureNickname, refreshRankNicknames, maybeRefreshRankNicknames } = require('./src/nicknames');
 const { sendLevelAnnouncement } = require('./src/level-announcements');
+const { createInviteXpTracker } = require('./src/invite-xp');
 
 module.exports = {
   id: 'xp-level-bot',
@@ -148,6 +154,12 @@ module.exports = {
           `${visibleVoiceUsers} Voice-Nutzer sichtbar`
       );
 
+      // Invite-Snapshots so früh wie möglich nachladen (fire-and-forget), damit
+      // der erste Beitritt nach einem Restart sofort auswertbar ist.
+      void inviteTracker.syncAllSnapshots().catch((e) =>
+        logger.warn('[xp-level-bot] Invite-Snapshot-Sync fehlgeschlagen:', e.message)
+      );
+
       if (ctx.devGuildId) {
         logger.info(
           `[xp-level-bot] XP_BOT_GUILD_ID=${ctx.devGuildId} – diese Gilde wird zusätzlich sofort beschrieben. ` +
@@ -209,6 +221,36 @@ module.exports = {
       },
     });
     ctx.bonusDropper = bonusDropper;
+
+    // ---------------- Invite-XP (Belohnung für Invite-Ersteller) ----------------
+    // Gleiche Nachbereitung wie Bonus-XP: Levelwechsel über die normale
+    // Level-Up-Route (Ankündigung im Haupt-Chat), XP-only in die Top 3.
+    const inviteTracker = createInviteXpTracker({
+      ctx,
+      store,
+      logger,
+      onLevelChange: async (guild, cfg, user, res, sourceMsg) => {
+        try {
+          await handleLevelChange(
+            ctx,
+            sourceMsg && sourceMsg.guild ? sourceMsg : { guild, channel: null },
+            user,
+            res,
+            cfg,
+            { source: 'invite' }
+          );
+        } catch {}
+      },
+      onXpOnly: async (guild, cfg, user, userId) => {
+        try {
+          const rankInfo = store.getRank(guild.id, userId);
+          if (rankInfo && rankInfo.rank <= 3) {
+            await maybeRefreshRankNicknames(ctx, guild, userId, cfg.lang || 'de');
+          }
+        } catch {}
+      },
+    });
+    ctx.inviteTracker = inviteTracker;
 
     // ---------------- Interactions ----------------
     client.on('interactionCreate', (interaction) => {
@@ -368,6 +410,10 @@ module.exports = {
     // ---------------- Guild Member Remove: Daten löschen ----------------
     client.on('guildMemberRemove', async (member) => {
       try {
+        // Invite-XP Rejoin-Schutz: Leave-Zeitpunkt merken (7-Tage-Fenster).
+        // Muss VOR dem User-Delete passieren – das Leave-Log lebt bewusst
+        // getrennt von den gelöschten XP-Daten.
+        inviteTracker.handleGuildMemberRemove(member);
         const guildId = member.guild?.id;
         if (!guildId) return;
         const u = store.getUser(guildId, member.id);
@@ -393,6 +439,8 @@ module.exports = {
     });
     client.on('guildCreate', (guild) => {
       void sendJoinNotice(ctx, guild);
+      // Invite-Snapshot für den neuen Server direkt nachholen
+      void inviteTracker.syncGuild(guild).catch(() => {});
       updatePresence();
       // Server-Commands SOFORT auf den neuen Server schreiben (ohne Dev-Gilde).
       // Früher wurde hier `body: []` (leeren Guild-Satz) geputzt – das hat auf
@@ -409,6 +457,12 @@ module.exports = {
         if (!member.guild) return;
         // Bots (und damit auch andere Bots) bekommen weder Rollen noch Nickname-Tags
         if (member.user?.bot) return;
+        // Invite-XP früh anstoßen (fire-and-forget, eigene Per-Guild-Queue):
+        // Die Invite-Delta-Erkennung läuft asynchron und darf Nickname/Rollen
+        // nicht blockieren. Der Beitretende braucht keine XP-Daten.
+        void inviteTracker.handleGuildMemberAdd(member).catch((e) =>
+          logger.warn('[xp-level-bot] Invite-XP guildMemberAdd fail:', e.message)
+        );
         const cfg = store.getGuild(member.guild.id);
         if (!cfg) return;
         const existing = store.getUser(member.guild.id, member.id);

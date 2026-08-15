@@ -404,6 +404,18 @@ const T = {
     zh: '😢 哎呀！{user} 掉到了 **{level} 级**… {xp}/{needed} XP——多聊聊吧！💬😬',
     it: '😢 Oh no! {user} è sceso al **livello {level}**… {xp}/{needed} XP – chatta di più! 💬😬',
   },
+  inviteXp: {
+    de: '🎉 {inviter} hat {joined} zum Server eingeladen – und er/sie ist sogar schon beigetreten! Dafür gibt es **{xp} XP**! Weiter so! 🚀',
+    en: '🎉 {inviter} invited {joined} to the server – and they actually joined! That earns **{xp} XP**! Keep it up! 🚀',
+    fr: '🎉 {inviter} a invité {joined} sur le serveur – et il/elle a même rejoint ! Ça rapporte **{xp} XP** ! Continue comme ça ! 🚀',
+    es: '🎉 ¡{inviter} invitó a {joined} al servidor – y de verdad se unió! ¡Eso da **{xp} XP**! ¡Sigue así! 🚀',
+    pt: '🎉 {inviter} convidou {joined} para o servidor – e ele/ela até entrou! Isso rende **{xp} XP**! Continua assim! 🚀',
+    ru: '🎉 {inviter} пригласил(а) {joined} на сервер – и тот/та даже вступил(а)! За это **{xp} XP**! Так держать! 🚀',
+    ja: '🎉 {inviter} が {joined} をサーバーに招待して、実際に参加したよ！**{xp} XP** ゲット！その調子！🚀',
+    ko: '🎉 {inviter}님이 {joined}님을 서버에 초대했고 실제로 참가했어요! **{xp} XP** 획득! 계속 가즈아! 🚀',
+    zh: '🎉 {inviter} 邀请了 {joined} 加入服务器——而且对方真的加入了！获得 **{xp} XP**！继续加油！🚀',
+    it: '🎉 {inviter} ha invitato {joined} sul server – ed è pure entrato/a! Per questo ci sono **{xp} XP**! Continua così! 🚀',
+  },
 
   // ------------------------------------------------------------
   // Nickname
