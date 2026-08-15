@@ -14,7 +14,7 @@ const { createGameManager } = require('./src/game-manager');
 const { createCountingManager } = require('./src/counting');
 const { createVoicePresenceManager } = require('./src/voice-presence');
 const { startScheduler } = require('./src/scheduler');
-const { registerCommands } = require('./src/commands');
+const { registerCommands, registerGuildCommands } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
 const { sendJoinNotice } = require('./src/admin-panel');
 
@@ -56,6 +56,9 @@ module.exports = {
       store: createStore(),
       panelSessions: new Map(),
       commandIds: {},
+      // Guild-Commands überschatten die globalen: /help braucht deshalb pro
+      // Server die dort gültigen IDs für klickbare Command-Mentions.
+      guildCommandIds: new Map(),
     };
     ctx.gameManager = createGameManager(ctx);
     ctx.countingManager = createCountingManager(ctx);
@@ -67,8 +70,8 @@ module.exports = {
         ?.setPresence({
           activities: [{
             name: activeGames
-              ? `${activeGames} laufende Battles | /play`
-              : 'Tic-Tac-Toe & Vier Gewinnt | /play',
+              ? `${activeGames} laufende Battles | /multiplayer`
+              : '2048 solo oder Battles | /singleplayer',
             type: ActivityType.Playing,
           }],
           status: 'online',
@@ -126,6 +129,11 @@ module.exports = {
     client.on(Events.GuildCreate, (guild) => {
       void sendJoinNotice(ctx, guild);
       void ctx.gameManager.scanGuild(guild);
+      // Neue Server bekommen die Commands sofort – ohne auf Discords
+      // globale Verteilung zu warten.
+      void registerGuildCommands(ctx, guild.id).catch((err) => {
+        logger.warn(`[minigames-bot] Commands für neuen Server ${guild.id} fehlgeschlagen: ${err.message}`);
+      });
     });
 
     client.on(Events.GuildDelete, (guild) => {

@@ -13,7 +13,17 @@ const {
   moveCursor,
   parseCustomId,
 } = require('./games');
+const {
+  SOLO_PREFIX,
+  SOLO_OVER,
+  parseSoloCustomId,
+  moveSolo,
+  undoSolo,
+  resumeSolo,
+  restartSolo,
+} = require('./game-2048');
 const { parseGameMessage, buildGamePayload, smallContainer } = require('./embed-builder');
+const { parseSoloMessage, buildSoloPayload } = require('./solo-ui');
 const { componentsV2Payload } = require('./message-payload');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
 
@@ -42,6 +52,11 @@ async function handleInteraction(ctx, interaction) {
 
     if (interaction.isButton()) {
       if (interaction.customId.startsWith(PANEL_PREFIX)) return await handlePanelButton(ctx, interaction);
+      if (interaction.customId.startsWith(SOLO_PREFIX)) {
+        const solo = parseSoloCustomId(interaction.customId);
+        if (!solo) return null;
+        return await handleSoloButton(ctx, interaction, solo);
+      }
       const parsed = parseCustomId(interaction.customId);
       if (!parsed) return null;
       return await handleGameButton(ctx, interaction, parsed);
@@ -145,9 +160,63 @@ async function handleGameButton(ctx, interaction, parsed) {
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * Single-Player (2048)
+ * ------------------------------------------------------------------ */
+
+function soloErrorText(error, lang) {
+  const key = {
+    not_owner: 'soloNotOwner',
+    no_move: 'soloNoMove',
+    no_undo: 'soloNoUndo',
+    game_over: 'soloOverHint',
+    not_won: 'soloOverHint',
+    invalid_move: 'soloState',
+    invalid_state: 'soloState',
+  }[error] || 'soloState';
+  return t(key, lang);
+}
+
+/**
+ * Alle Solo-Buttons laufen – wie die Battles – über das Nachrichten-Lock und
+ * lesen den Spielstand IMMER frisch aus der Nachricht. Zwei schnelle Klicks
+ * hintereinander können sich deshalb nicht überholen, und die Runde
+ * funktioniert auch nach einem Bot-Neustart weiter.
+ */
+async function handleSoloButton(ctx, interaction, parsed) {
+  if (parsed.kind === 'noop') return interaction.deferUpdate().catch(() => null);
+  if (!interaction.guildId || !interaction.message?.id) {
+    return privateReply(interaction, t('errGuildOnly', langFromDiscord(interaction.locale)));
+  }
+
+  const lockKey = `solo:${interaction.guildId}:${interaction.channelId}:${interaction.message.id}`;
+  return ctx.store.withLock(lockKey, async () => {
+    const message = await latestMessage(interaction);
+    const state = parseSoloMessage(message);
+    const lang =
+      state?.lang || ctx.store.getServerLang(interaction.guildId) || langFromDiscord(interaction.locale);
+    if (!state) return privateReply(interaction, t('soloState', lang));
+
+    let result;
+    if (parsed.kind === 'move') result = moveSolo(state, interaction.user.id, parsed.direction);
+    else if (parsed.kind === 'undo') result = undoSolo(state, interaction.user.id);
+    else if (parsed.kind === 'resume') result = resumeSolo(state, interaction.user.id);
+    else if (parsed.kind === 'restart') result = restartSolo(state, interaction.user.id);
+    else return null;
+
+    if (result.error) return privateReply(interaction, soloErrorText(result.error, lang));
+
+    await interaction.deferUpdate();
+    await message.edit(buildSoloPayload(result.state));
+    return result.state;
+  });
+}
+
 module.exports = {
   handleInteraction,
   handleGameButton,
+  handleSoloButton,
   privatePayload,
   errorText,
+  soloErrorText,
 };

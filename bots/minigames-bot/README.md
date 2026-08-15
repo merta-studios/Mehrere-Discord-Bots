@@ -2,14 +2,16 @@
 
 Der frühere Verify-Bot wurde vollständig durch diesen Minigames-Bot ersetzt.
 Alle Regeln-, Rollen- und Verifizierungsfunktionen wurden entfernt. Enthalten
-sind zwei Battle-Spiele – **Tic-Tac-Toe** und **Vier Gewinnt** – sowie das
-Dauer-Spiel **Counting** für einen eigenen Channel.
+sind zwei Battle-Spiele – **Tic-Tac-Toe** und **Vier Gewinnt** –, der
+Single-Player-Modus mit **2048** sowie das Dauer-Spiel **Counting** für einen
+eigenen Channel.
 
 ## Befehle
 
 | Befehl | Funktion |
 |---|---|
-| `/play [game] (gegner)` | Startet im aktuellen Channel eine öffentliche Herausforderung. `game` bietet **Tic-Tac-Toe** und **Vier Gewinnt** zur Auswahl. `gegner` ist **optional**: ohne Angabe darf jeder beitreten. |
+| `/multiplayer [game] (gegner)` | **Früher `/play`.** Startet im aktuellen Channel eine öffentliche Herausforderung. `game` bietet **Tic-Tac-Toe** und **Vier Gewinnt** zur Auswahl. `gegner` ist **optional**: ohne Angabe darf jeder beitreten. |
+| `/singleplayer [game]` | Startet eine Solo-Runde – ohne Gegner, sofort spielbar. `game` bietet derzeit **2048**. |
 | `/set_language [sprache]` | Nur Admins: wählt die Sprache für zukünftige Battles. Es stehen 10 Sprachen zur Wahl. |
 | `/set_counting_channel [channel] (aktiv)` | Nur Admins: erklärt einen Textkanal zum Counting-Channel. `aktiv: False` schaltet ihn wieder ab. |
 | `/admin_set_bot_profile [image]` | Nur Admins: setzt das serverspezifische Bot-Bild auf Standard, Server-Icon oder Owner-Profilbild. |
@@ -18,7 +20,7 @@ Dauer-Spiel **Counting** für einen eigenen Channel.
 
 ## Ablauf einer Herausforderung
 
-1. Ein Spieler nutzt `/play` und wählt ein Spiel. Ein Gegner **kann** angegeben
+1. Ein Spieler nutzt `/multiplayer` und wählt ein Spiel. Ein Gegner **kann** angegeben
    werden, muss aber nicht.
 2. Im selben Channel erscheint eine auffällige Battle-Anfrage:
    - **Mit Gegner:** die genannte Person wird gepingt und kann **annehmen**
@@ -81,6 +83,54 @@ weiter; eine Datenbank ist nicht erforderlich.
   deaktiviert.
 - Horizontale, vertikale und diagonale Viererreihen werden erkannt und als
   🟥/🟨 hervorgehoben.
+
+### 🧩 2048 – der Single-Player-Modus
+
+`/singleplayer game:2048` legt sofort ein eigenes Brett im Channel an. Kein
+Gegner, keine Annahme, kein Warten – die Runde läuft direkt los.
+
+- **Originalgetreue Mechanik.** 4×4, Start mit zwei Steinen, neue Steine sind
+  zu 90 % eine 2 und zu 10 % eine 4. Gleiche Zahlen verschmelzen, aber jeder
+  Stein **nur einmal pro Zug** – aus `2 2 2 2` wird `4 4`, nicht `8`.
+- **Farbiges Brett statt Zahlenwüste.** Das Feld steckt in einem
+  `ansi`-Codeblock: Auf Desktop und Web bekommt jeder Stein seine eigene Farbe
+  im Stil des Originals, auf dem Handy rendert Discord denselben Block sauber
+  monospaced. Weil alle Zellen exakt gleich breit sind, bleibt das Raster
+  überall bündig.
+
+  ```
+  ┏━━━━━━┳━━━━━━┳━━━━━━┳━━━━━━┓
+  ┃  2   ┃  4   ┃  8   ┃  16  ┃
+  ┣━━━━━━╋━━━━━━╋━━━━━━╋━━━━━━┫
+  ┃  32  ┃  64  ┃ 128  ┃ 256  ┃
+  ┣━━━━━━╋━━━━━━╋━━━━━━╋━━━━━━┫
+  ┃ 512  ┃ 1024 ┃[2048]┃ 4096 ┃
+  ┣━━━━━━╋━━━━━━╋━━━━━━╋━━━━━━┫
+  ┃  ·   ┃  2   ┃  ·   ┃  8   ┃
+  ┗━━━━━━┻━━━━━━┻━━━━━━┻━━━━━━┛
+  ```
+
+- **Man sieht, was der Zug bewirkt hat.** Der neu erschienene Stein ist
+  unterstrichen, frisch verschmolzene Steine stehen in `[Klammern]` – das
+  funktioniert auch dort, wo Discord keine Farben zeigt.
+- **Kopfzeile mit allem Wichtigen:** Punktestand, der Gewinn des letzten Zuges
+  (`+48`), bester Stein, Zugzähler und ein Fortschrittsbalken bis 2048. Dazu
+  ein Rang, der mit dem besten Stein mitwächst – von *Frisch gestartet* bis
+  *Unaufhaltsam*.
+- **Echtes Steuerkreuz** statt Button-Salat: `⬆️` oben, darunter
+  `⬅️ ⬇️ ➡️`. Unsichtbare, deaktivierte Platzhalter formen das Kreuz, weil
+  Discord nur Reihen à fünf Buttons kennt. Richtungen, in die sich nichts
+  bewegt, werden **automatisch deaktiviert**.
+- **↩️ Zurück** nimmt genau einen Zug zurück (Brett, Punkte und Zugzahl),
+  **🔄 Neue Runde** startet in derselben Nachricht neu.
+- **2048 ist nicht das Ende.** Der Siegstein wird einmal gefeiert, danach geht
+  es per **▶️ Weiterspielen** im Endlos-Modus Richtung 4096, 8192 …
+- **Nur die startende Person spielt.** Alle anderen bekommen eine private
+  Notiz mit dem Hinweis, ihre eigene Runde zu starten.
+- **Datenbanklos wie alles andere:** Der komplette Spielstand – inklusive des
+  Undo-Schritts – steckt unsichtbar in der Nachricht. Eine Runde überlebt
+  Bot-Neustarts und Render-Deployments.
+
 
 ### 🔢 Counting
 
@@ -155,6 +205,29 @@ Bestätigungsnachricht. Beim Start sucht der Bot diese Markierung wieder und
 stellt die Sprache ohne externe Datenbank wieder her. Die Counting-Kanal-Themen
 werden nach der schnellen Command-Bestätigung best-effort im Hintergrund
 synchronisiert; ein langsamer Discord-Request hält die Antwort nicht mehr fest.
+
+## Command-Registrierung auf bestehenden Servern
+
+`/play` heißt jetzt `/multiplayer`, dazu kommt `/singleplayer`. Damit diese
+Änderung auf **allen Servern sichtbar wird, auf denen der Bot schon ist** –
+und das alte `/play` dort nicht als Karteileiche hängen bleibt – registriert
+der Bot beim Start zweigleisig:
+
+1. **Global** wird der komplette Befehlssatz per `PUT` geschrieben. Ein
+   globales `PUT` ersetzt den alten Satz vollständig, wodurch `/play`
+   automatisch verschwindet. Das erreicht auch Server, die gerade nicht im
+   Cache liegen – allerdings mit Discords Propagationsverzögerung.
+2. **Zusätzlich als Guild-Commands** auf jeden Server im Cache. Guild-Commands
+   sind **sofort** im `/`-Menü sichtbar, überschatten die globalen und werden
+   ebenfalls komplett ersetzt. Dadurch sind `/multiplayer` und
+   `/singleplayer` ohne Wartezeit da und `/play` sofort weg.
+
+Ein Server, auf dem der Schreibversuch scheitert (z. B. fehlender
+`applications.commands`-Scope), wird geloggt und übersprungen – die übrigen
+Server werden trotzdem aktualisiert. Neue Server bekommen ihre Commands direkt
+beim Join. Solange Discord den alten globalen `/play` noch ausliefert, bleibt
+er intern auf den Multiplayer-Command verdrahtet und funktioniert weiter,
+statt eine Fehlermeldung zu zeigen.
 
 ## Umgebungsvariablen
 

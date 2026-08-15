@@ -22,8 +22,14 @@ const T = {
   cmdPlayDesc: {
     de: 'Fordere einen Spieler zu einem Minigame heraus', en: 'Challenge a player to a minigame', fr: 'Défie un joueur dans un mini-jeu', es: 'Desafía a un jugador a un minijuego', pt: 'Desafie alguém para um minigame', ru: 'Вызвать игрока на мини-игру', ja: 'プレイヤーにミニゲームを挑む', ko: '플레이어에게 미니게임 대결을 신청해요', zh: '向玩家发起小游戏挑战', it: 'Sfida un giocatore a un minigioco',
   },
+  cmdSoloDesc: {
+    de: 'Spiele ein Minigame allein – ganz ohne Gegner', en: 'Play a minigame on your own—no opponent needed', fr: 'Joue à un mini-jeu en solo, sans adversaire', es: 'Juega a un minijuego en solitario, sin rival', pt: 'Jogue um minigame sozinho, sem adversário', ru: 'Сыграй в мини-игру в одиночку — без соперника', ja: 'ひとりでミニゲームを遊ぶ（対戦相手なし）', ko: '혼자서 미니게임을 즐겨요 – 상대 없이', zh: '独自游玩小游戏——无需对手', it: 'Gioca a un minigioco da solo, senza avversario',
+  },
   playGameDesc: {
     de: 'Welches Spiel möchtet ihr spielen?', en: 'Which game do you want to play?', fr: 'À quel jeu voulez-vous jouer ?', es: '¿A qué juego queréis jugar?', pt: 'Qual jogo vocês querem jogar?', ru: 'В какую игру вы хотите сыграть?', ja: 'どのゲームで遊びますか？', ko: '어떤 게임을 할까요?', zh: '你们想玩哪个游戏？', it: 'A quale gioco volete giocare?',
+  },
+  soloGameDesc: {
+    de: 'Welches Solo-Spiel möchtest du spielen?', en: 'Which solo game do you want to play?', fr: 'À quel jeu solo veux-tu jouer ?', es: '¿A qué juego en solitario quieres jugar?', pt: 'Qual jogo solo você quer jogar?', ru: 'В какую одиночную игру сыграть?', ja: 'どのソロゲームで遊びますか？', ko: '어떤 솔로 게임을 할까요?', zh: '你想玩哪个单人游戏？', it: 'A quale gioco in solitaria vuoi giocare?',
   },
   playOpponentDesc: {
     de: 'Optional: Wen möchtest du herausfordern? Ohne Angabe darf jeder antreten', en: 'Optional: who do you want to challenge? If empty, anyone can join', fr: 'Facultatif : qui veux-tu défier ? Sans réponse, tout le monde peut jouer', es: 'Opcional: ¿a quién desafías? Si lo dejas vacío, puede unirse cualquiera', pt: 'Opcional: quem você quer desafiar? Sem indicar, qualquer um pode entrar', ru: 'Необязательно: кого вызвать? Без выбора сыграть может любой', ja: '任意: 誰に挑戦しますか？未指定なら誰でも参加できます', ko: '선택: 누구에게 도전할까요? 비워두면 누구나 참여할 수 있어요', zh: '可选：你想挑战谁？留空则任何人都能加入', it: 'Facoltativo: chi vuoi sfidare? Se vuoto, può unirsi chiunque',
@@ -58,6 +64,97 @@ const T = {
 
   gameTtt: { de: 'Tic-Tac-Toe', en: 'Tic-Tac-Toe', fr: 'Morpion', es: 'Tres en raya', pt: 'Jogo da velha', ru: 'Крестики-нолики', ja: '三目並べ', ko: '틱택토', zh: '井字棋', it: 'Tris' },
   gameConnect4: { de: 'Vier Gewinnt', en: 'Connect Four', fr: 'Puissance 4', es: 'Conecta 4', pt: 'Ligue 4', ru: 'Четыре в ряд', ja: '四目並べ', ko: '사목', zh: '四子棋', it: 'Forza 4' },
+  gameSolo2048: { de: '2048', en: '2048', fr: '2048', es: '2048', pt: '2048', ru: '2048', ja: '2048', ko: '2048', zh: '2048', it: '2048' },
+
+  // --- Single Player / 2048 --------------------------------------------
+  soloPlayerLine: {
+    de: '{player} · {rank}', en: '{player} · {rank}', fr: '{player} · {rank}', es: '{player} · {rank}', pt: '{player} · {rank}', ru: '{player} · {rank}', ja: '{player} · {rank}', ko: '{player} · {rank}', zh: '{player} · {rank}', it: '{player} · {rank}',
+  },
+  soloHint: {
+    de: '-# Wische mit den Pfeilen – gleiche Zahlen verschmelzen. Ziel: **2048**.',
+    en: '-# Swipe with the arrows—matching numbers merge. Goal: **2048**.',
+    fr: '-# Utilise les flèches : les nombres identiques fusionnent. Objectif : **2048**.',
+    es: '-# Usa las flechas: los números iguales se fusionan. Objetivo: **2048**.',
+    pt: '-# Use as setas: números iguais se fundem. Objetivo: **2048**.',
+    ru: '-# Двигай стрелками — одинаковые числа сливаются. Цель: **2048**.',
+    ja: '-# 矢印で動かすと同じ数字が合体します。目標は **2048**。',
+    ko: '-# 화살표로 밀면 같은 숫자가 합쳐져요. 목표는 **2048**.',
+    zh: '-# 用方向键滑动，相同数字会合并。目标：**2048**。',
+    it: '-# Usa le frecce: i numeri uguali si fondono. Obiettivo: **2048**.',
+  },
+  soloWinTitle: {
+    de: '🎉 2048 GESCHAFFT!', en: '🎉 YOU MADE 2048!', fr: '🎉 2048 ATTEINT !', es: '🎉 ¡LLEGASTE A 2048!', pt: '🎉 VOCÊ CHEGOU A 2048!', ru: '🎉 2048 ДОСТИГНУТО!', ja: '🎉 2048 達成！', ko: '🎉 2048 달성!', zh: '🎉 达成 2048！', it: '🎉 2048 RAGGIUNTO!',
+  },
+  soloWinBody: {
+    de: '**{score}** Punkte. Weiterspielen für 4096 oder neu starten?',
+    en: '**{score}** points. Keep going for 4096 or start fresh?',
+    fr: '**{score}** points. Continuer vers 4096 ou recommencer ?',
+    es: '**{score}** puntos. ¿Seguir hasta 4096 o empezar de nuevo?',
+    pt: '**{score}** pontos. Continuar até 4096 ou recomeçar?',
+    ru: '**{score}** очков. Продолжить до 4096 или начать заново?',
+    ja: '**{score}** ポイント。4096 を目指す？それとも最初から？',
+    ko: '**{score}**점. 4096까지 계속할까요, 새로 시작할까요?',
+    zh: '**{score}** 分。继续冲击 4096 还是重新开始？',
+    it: '**{score}** punti. Continui verso 4096 o ricominci?',
+  },
+  soloOverTitle: {
+    de: '💀 KEIN ZUG MEHR MÖGLICH', en: '💀 NO MOVES LEFT', fr: '💀 PLUS AUCUN COUP POSSIBLE', es: '💀 NO QUEDAN MOVIMIENTOS', pt: '💀 SEM JOGADAS RESTANTES', ru: '💀 ХОДОВ БОЛЬШЕ НЕТ', ja: '💀 動かせる手がありません', ko: '💀 더 이상 움직일 수 없어요', zh: '💀 已无可用移动', it: '💀 NESSUNA MOSSA DISPONIBILE',
+  },
+  soloOverBody: {
+    de: '**{score}** Punkte · bester Stein **{best}** · **{moves}** Züge. Nochmal?',
+    en: '**{score}** points · best tile **{best}** · **{moves}** moves. Again?',
+    fr: '**{score}** points · meilleure tuile **{best}** · **{moves}** coups. On rejoue ?',
+    es: '**{score}** puntos · mejor ficha **{best}** · **{moves}** movimientos. ¿Otra vez?',
+    pt: '**{score}** pontos · melhor peça **{best}** · **{moves}** jogadas. De novo?',
+    ru: '**{score}** очков · лучшая плитка **{best}** · ходов: **{moves}**. Ещё раз?',
+    ja: '**{score}** ポイント · 最大タイル **{best}** · **{moves}** 手。もう一度？',
+    ko: '**{score}**점 · 최고 타일 **{best}** · **{moves}**수. 다시 할까요?',
+    zh: '**{score}** 分 · 最大方块 **{best}** · **{moves}** 步。再来一局？',
+    it: '**{score}** punti · tessera migliore **{best}** · **{moves}** mosse. Ancora?',
+  },
+  soloBtnUndo: { de: '↩️ Zurück', en: '↩️ Undo', fr: '↩️ Annuler', es: '↩️ Deshacer', pt: '↩️ Desfazer', ru: '↩️ Отменить', ja: '↩️ 戻す', ko: '↩️ 되돌리기', zh: '↩️ 撤销', it: '↩️ Annulla' },
+  soloBtnRestart: { de: '🔄 Neue Runde', en: '🔄 New game', fr: '🔄 Nouvelle partie', es: '🔄 Nueva partida', pt: '🔄 Nova partida', ru: '🔄 Новая игра', ja: '🔄 新しいゲーム', ko: '🔄 새 게임', zh: '🔄 新的一局', it: '🔄 Nuova partita' },
+  soloBtnContinue: { de: '▶️ Weiterspielen', en: '▶️ Keep playing', fr: '▶️ Continuer', es: '▶️ Seguir jugando', pt: '▶️ Continuar', ru: '▶️ Продолжить', ja: '▶️ 続ける', ko: '▶️ 계속하기', zh: '▶️ 继续游戏', it: '▶️ Continua' },
+  soloNotOwner: {
+    de: '🙅 Das ist die Runde von jemand anderem. Starte deine eigene mit **/singleplayer**.',
+    en: '🙅 This is someone else’s run. Start your own with **/singleplayer**.',
+    fr: '🙅 C’est la partie de quelqu’un d’autre. Lance la tienne avec **/singleplayer**.',
+    es: '🙅 Esta partida es de otra persona. Empieza la tuya con **/singleplayer**.',
+    pt: '🙅 Esta partida é de outra pessoa. Comece a sua com **/singleplayer**.',
+    ru: '🙅 Это чужая игра. Начни свою через **/singleplayer**.',
+    ja: '🙅 これは他の人のプレイです。**/singleplayer** で自分の番を始めてね。',
+    ko: '🙅 다른 사람의 게임이에요. **/singleplayer**로 직접 시작하세요.',
+    zh: '🙅 这是别人的对局。用 **/singleplayer** 开始你自己的。',
+    it: '🙅 Questa è la partita di un altro. Inizia la tua con **/singleplayer**.',
+  },
+  soloNoMove: {
+    de: '↔️ In diese Richtung bewegt sich nichts.', en: '↔️ Nothing moves in that direction.', fr: '↔️ Rien ne bouge dans cette direction.', es: '↔️ Nada se mueve en esa dirección.', pt: '↔️ Nada se move nessa direção.', ru: '↔️ В эту сторону ничего не двигается.', ja: '↔️ その方向には動きません。', ko: '↔️ 그 방향으로는 움직이지 않아요.', zh: '↔️ 该方向无法移动。', it: '↔️ In quella direzione non si muove nulla.',
+  },
+  soloNoUndo: {
+    de: '↩️ Es gibt keinen Zug zum Zurücknehmen.', en: '↩️ There is no move to undo.', fr: '↩️ Aucun coup à annuler.', es: '↩️ No hay ningún movimiento que deshacer.', pt: '↩️ Não há jogada para desfazer.', ru: '↩️ Отменять нечего.', ja: '↩️ 戻せる手がありません。', ko: '↩️ 되돌릴 수가 없어요.', zh: '↩️ 没有可撤销的移动。', it: '↩️ Non c’è nessuna mossa da annullare.',
+  },
+  soloOverHint: {
+    de: '🏁 Diese Runde ist vorbei – starte mit 🔄 eine neue.', en: '🏁 This run is over—start a new one with 🔄.', fr: '🏁 Cette partie est finie — relance avec 🔄.', es: '🏁 Esta partida terminó; empieza otra con 🔄.', pt: '🏁 Esta partida acabou — comece outra com 🔄.', ru: '🏁 Игра окончена — начни новую через 🔄.', ja: '🏁 このラウンドは終了です。🔄 で新しく始めてね。', ko: '🏁 이번 판은 끝났어요. 🔄로 새로 시작하세요.', zh: '🏁 本局已结束——用 🔄 开始新的一局。', it: '🏁 Questa partita è finita: ricomincia con 🔄.',
+  },
+  soloState: {
+    de: '🧩 Dieser Spielstand ist nicht mehr lesbar. Starte mit **/singleplayer** neu.',
+    en: '🧩 This game state can no longer be read. Start again with **/singleplayer**.',
+    fr: '🧩 Cette partie est illisible. Recommence avec **/singleplayer**.',
+    es: '🧩 Esta partida ya no se puede leer. Reinicia con **/singleplayer**.',
+    pt: '🧩 Esta partida não pode mais ser lida. Reinicie com **/singleplayer**.',
+    ru: '🧩 Состояние игры повреждено. Начни заново через **/singleplayer**.',
+    ja: '🧩 ゲーム状態を読み取れません。**/singleplayer** でやり直してください。',
+    ko: '🧩 게임 상태를 읽을 수 없어요. **/singleplayer**로 다시 시작하세요.',
+    zh: '🧩 无法读取此对局，请用 **/singleplayer** 重新开始。',
+    it: '🧩 La partita non è più leggibile. Ricomincia con **/singleplayer**.',
+  },
+  soloRank1: { de: 'Frisch gestartet', en: 'Just started', fr: 'Tout juste lancé', es: 'Recién empezado', pt: 'Recém-começado', ru: 'Только начал', ja: '始めたばかり', ko: '이제 시작', zh: '刚刚起步', it: 'Appena iniziato' },
+  soloRank2: { de: 'Warmgelaufen', en: 'Warmed up', fr: 'Échauffé', es: 'En calor', pt: 'Aquecido', ru: 'Разогрелся', ja: 'ウォームアップ済み', ko: '몸 푸는 중', zh: '渐入佳境', it: 'Riscaldato' },
+  soloRank3: { de: 'Kachel-Schieber', en: 'Tile shifter', fr: 'Pousseur de tuiles', es: 'Movedor de fichas', pt: 'Empurrador de peças', ru: 'Двигатель плиток', ja: 'タイル使い', ko: '타일 조련사', zh: '方块推手', it: 'Spingi-tessere' },
+  soloRank4: { de: 'Fusions-Profi', en: 'Merge pro', fr: 'Pro de la fusion', es: 'Pro de las fusiones', pt: 'Profissional das fusões', ru: 'Мастер слияний', ja: '合体の達人', ko: '합체 고수', zh: '合并高手', it: 'Pro delle fusioni' },
+  soloRank5: { de: '2048-Legende', en: '2048 legend', fr: 'Légende du 2048', es: 'Leyenda del 2048', pt: 'Lenda do 2048', ru: 'Легенда 2048', ja: '2048 の伝説', ko: '2048 전설', zh: '2048 传奇', it: 'Leggenda del 2048' },
+  soloRank6: { de: '4096-Bezwinger', en: '4096 conqueror', fr: 'Conquérant du 4096', es: 'Conquistador del 4096', pt: 'Conquistador do 4096', ru: 'Покоритель 4096', ja: '4096 の征服者', ko: '4096 정복자', zh: '4096 征服者', it: 'Conquistatore del 4096' },
+  soloRank7: { de: 'Unaufhaltsam', en: 'Unstoppable', fr: 'Inarrêtable', es: 'Imparable', pt: 'Imparável', ru: 'Неудержимый', ja: '止まらない', ko: '멈출 수 없음', zh: '势不可挡', it: 'Inarrestabile' },
 
   errGuildOnly: {
     de: '🚫 Minigames können nur auf einem Server gespielt werden.', en: '🚫 Minigames can only be played in a server.', fr: '🚫 Les mini-jeux ne sont disponibles que sur un serveur.', es: '🚫 Los minijuegos solo se pueden jugar en un servidor.', pt: '🚫 Minigames só podem ser jogados em um servidor.', ru: '🚫 Мини-игры доступны только на сервере.', ja: '🚫 ミニゲームはサーバー内でのみ遊べます。', ko: '🚫 미니게임은 서버에서만 플레이할 수 있어요.', zh: '🚫 小游戏只能在服务器中进行。', it: '🚫 I minigiochi si possono giocare solo in un server.',
@@ -78,7 +175,7 @@ const T = {
     de: '💥 Das Spielfeld ist kurz explodiert. Versuch es nochmal!', en: '💥 The game board briefly exploded. Try again!', fr: '💥 Le plateau a explosé. Réessaie !', es: '💥 El tablero explotó un momento. ¡Inténtalo de nuevo!', pt: '💥 O tabuleiro explodiu. Tente de novo!', ru: '💥 Игровое поле взорвалось. Попробуй ещё раз!', ja: '💥 ゲーム盤が爆発しました。もう一度試してね！', ko: '💥 게임판이 잠깐 폭발했어요. 다시 해보세요!', zh: '💥 棋盘刚刚炸了一下，请重试！', it: '💥 Il tabellone è esploso. Riprova!',
   },
   errState: {
-    de: '🧩 Dieser Spielstand ist nicht mehr lesbar. Starte mit **/play** neu.', en: '🧩 This game state can no longer be read. Start again with **/play**.', fr: '🧩 Cette partie est illisible. Recommence avec **/play**.', es: '🧩 Esta partida ya no se puede leer. Reinicia con **/play**.', pt: '🧩 Esta partida não pode mais ser lida. Reinicie com **/play**.', ru: '🧩 Состояние игры повреждено. Начни заново через **/play**.', ja: '🧩 ゲーム状態を読み取れません。**/play** でやり直してください。', ko: '🧩 게임 상태를 읽을 수 없어요. **/play**로 다시 시작하세요.', zh: '🧩 无法读取此对局，请用 **/play** 重新开始。', it: '🧩 La partita non è più leggibile. Ricomincia con **/play**.',
+    de: '🧩 Dieser Spielstand ist nicht mehr lesbar. Starte mit **/multiplayer** neu.', en: '🧩 This game state can no longer be read. Start again with **/multiplayer**.', fr: '🧩 Cette partie est illisible. Recommence avec **/multiplayer**.', es: '🧩 Esta partida ya no se puede leer. Reinicia con **/multiplayer**.', pt: '🧩 Esta partida não pode mais ser lida. Reinicie com **/multiplayer**.', ru: '🧩 Состояние игры повреждено. Начни заново через **/multiplayer**.', ja: '🧩 ゲーム状態を読み取れません。**/multiplayer** でやり直してください。', ko: '🧩 게임 상태를 읽을 수 없어요. **/multiplayer**로 다시 시작하세요.', zh: '🧩 无法读取此对局，请用 **/multiplayer** 重新开始。', it: '🧩 La partita non è più leggibile. Ricomincia con **/multiplayer**.',
   },
 
   challengeLine: {
@@ -98,15 +195,15 @@ const T = {
   notChallenger: { de: '🛡️ Nur wer die Runde gestartet hat, kann die Suche abbrechen.', en: '🛡️ Only the player who started can cancel the search.', fr: '🛡️ Seul l’auteur du défi peut annuler la recherche.', es: '🛡️ Solo quien inició puede cancelar la búsqueda.', pt: '🛡️ Só quem começou pode cancelar a busca.', ru: '🛡️ Отменить поиск может только автор.', ja: '🛡️ 募集を取り消せるのは開始した人だけです。', ko: '🛡️ 시작한 사람만 모집을 취소할 수 있어요.', zh: '🛡️ 只有发起者可以取消寻找。', it: '🛡️ Solo chi ha aperto la sfida può annullare la ricerca.' },
   selfJoin: { de: '🪞 Gegen dich selbst geht nicht – warte auf jemand anderen.', en: '🪞 You cannot play yourself—wait for someone else.', fr: '🪞 Tu ne peux pas jouer contre toi-même — attends quelqu’un.', es: '🪞 No puedes jugar contra ti; espera a alguien.', pt: '🪞 Você não pode jogar contra si mesmo — espere alguém.', ru: '🪞 С собой играть нельзя — подожди кого-нибудь.', ja: '🪞 自分とは対戦できません。誰かを待ちましょう。', ko: '🪞 자기 자신과는 못 해요. 다른 사람을 기다리세요.', zh: '🪞 不能和自己对战——再等等别人吧。', it: '🪞 Non puoi giocare contro te stesso: aspetta qualcuno.' },
   cancelledTitle: { de: '🚪 SUCHE ABGEBROCHEN', en: '🚪 SEARCH CANCELLED', fr: '🚪 RECHERCHE ANNULÉE', es: '🚪 BÚSQUEDA CANCELADA', pt: '🚪 BUSCA CANCELADA', ru: '🚪 ПОИСК ОТМЕНЁН', ja: '🚪 募集を取り消しました', ko: '🚪 모집 취소됨', zh: '🚪 已取消寻找', it: '🚪 RICERCA ANNULLATA' },
-  cancelledBody: { de: '{challenger} sucht doch keinen Gegner mehr. Neue Runde mit **/play**.', en: '{challenger} is no longer looking for an opponent. New round with **/play**.', fr: '{challenger} ne cherche plus d’adversaire. Nouvelle partie avec **/play**.', es: '{challenger} ya no busca rival. Nueva ronda con **/play**.', pt: '{challenger} não procura mais adversário. Nova rodada com **/play**.', ru: '{challenger} больше не ищет соперника. Новая игра — **/play**.', ja: '{challenger} は募集をやめました。**/play** で再挑戦できます。', ko: '{challenger}님이 모집을 그만뒀어요. **/play**로 새로 시작하세요.', zh: '{challenger} 不再寻找对手了。可用 **/play** 重新开始。', it: '{challenger} non cerca più un avversario. Nuova partita con **/play**.' },
-  expiredOpenBody: { de: 'Niemand wollte gegen {challenger} antreten. Neue Runde mit **/play**.', en: 'Nobody wanted to face {challenger}. Start a new round with **/play**.', fr: 'Personne n’a voulu affronter {challenger}. Relance avec **/play**.', es: 'Nadie quiso enfrentarse a {challenger}. Inicia otra ronda con **/play**.', pt: 'Ninguém quis enfrentar {challenger}. Inicie outra rodada com **/play**.', ru: 'Никто не захотел играть против {challenger}. Начните заново через **/play**.', ja: '{challenger} の相手は現れませんでした。**/play** で再挑戦できます。', ko: '{challenger}님과 겨룰 사람이 없었어요. **/play**로 다시 시작하세요.', zh: '没有人愿意挑战 {challenger}。可用 **/play** 重新发起。', it: 'Nessuno ha voluto sfidare {challenger}. Ricomincia con **/play**.' },
+  cancelledBody: { de: '{challenger} sucht doch keinen Gegner mehr. Neue Runde mit **/multiplayer**.', en: '{challenger} is no longer looking for an opponent. New round with **/multiplayer**.', fr: '{challenger} ne cherche plus d’adversaire. Nouvelle partie avec **/multiplayer**.', es: '{challenger} ya no busca rival. Nueva ronda con **/multiplayer**.', pt: '{challenger} não procura mais adversário. Nova rodada com **/multiplayer**.', ru: '{challenger} больше не ищет соперника. Новая игра — **/multiplayer**.', ja: '{challenger} は募集をやめました。**/multiplayer** で再挑戦できます。', ko: '{challenger}님이 모집을 그만뒀어요. **/multiplayer**로 새로 시작하세요.', zh: '{challenger} 不再寻找对手了。可用 **/multiplayer** 重新开始。', it: '{challenger} non cerca più un avversario. Nuova partita con **/multiplayer**.' },
+  expiredOpenBody: { de: 'Niemand wollte gegen {challenger} antreten. Neue Runde mit **/multiplayer**.', en: 'Nobody wanted to face {challenger}. Start a new round with **/multiplayer**.', fr: 'Personne n’a voulu affronter {challenger}. Relance avec **/multiplayer**.', es: 'Nadie quiso enfrentarse a {challenger}. Inicia otra ronda con **/multiplayer**.', pt: 'Ninguém quis enfrentar {challenger}. Inicie outra rodada com **/multiplayer**.', ru: 'Никто не захотел играть против {challenger}. Начните заново через **/multiplayer**.', ja: '{challenger} の相手は現れませんでした。**/multiplayer** で再挑戦できます。', ko: '{challenger}님과 겨룰 사람이 없었어요. **/multiplayer**로 다시 시작하세요.', zh: '没有人愿意挑战 {challenger}。可用 **/multiplayer** 重新发起。', it: 'Nessuno ha voluto sfidare {challenger}. Ricomincia con **/multiplayer**.' },
   btnAccept: { de: '⚔️ Annehmen', en: '⚔️ Accept challenge', fr: '⚔️ Accepter le défi', es: '⚔️ Aceptar desafío', pt: '⚔️ Aceitar desafio', ru: '⚔️ Принять вызов', ja: '⚔️ 挑戦を受ける', ko: '⚔️ 도전 수락', zh: '⚔️ 接受挑战', it: '⚔️ Accetta la sfida' },
   btnDecline: { de: 'Ablehnen', en: 'Decline', fr: 'Refuser', es: 'Rechazar', pt: 'Recusar', ru: 'Отклонить', ja: '辞退する', ko: '거절', zh: '拒绝', it: 'Rifiuta' },
   notOpponent: { de: '🛡️ Nur der herausgeforderte Gegner darf darauf antworten.', en: '🛡️ Only the challenged opponent can respond.', fr: '🛡️ Seul l’adversaire défié peut répondre.', es: '🛡️ Solo el rival desafiado puede responder.', pt: '🛡️ Só o adversário desafiado pode responder.', ru: '🛡️ Ответить может только вызванный игрок.', ja: '🛡️ 挑戦された相手だけが返答できます。', ko: '🛡️ 도전받은 상대만 응답할 수 있어요.', zh: '🛡️ 只有被挑战的对手可以回应。', it: '🛡️ Solo l’avversario sfidato può rispondere.' },
   declinedTitle: { de: '🛡️ HERAUSFORDERUNG ABGELEHNT', en: '🛡️ CHALLENGE DECLINED', fr: '🛡️ DÉFI REFUSÉ', es: '🛡️ DESAFÍO RECHAZADO', pt: '🛡️ DESAFIO RECUSADO', ru: '🛡️ ВЫЗОВ ОТКЛОНЁН', ja: '🛡️ 挑戦は辞退されました', ko: '🛡️ 도전 거절됨', zh: '🛡️ 挑战已拒绝', it: '🛡️ SFIDA RIFIUTATA' },
   declinedBody: { de: '{opponent} möchte diesmal nicht gegen {challenger} antreten.', en: '{opponent} does not want to face {challenger} this time.', fr: '{opponent} ne souhaite pas affronter {challenger} cette fois.', es: '{opponent} no quiere enfrentarse a {challenger} esta vez.', pt: '{opponent} não quer enfrentar {challenger} desta vez.', ru: '{opponent} не хочет играть против {challenger} в этот раз.', ja: '{opponent} は今回は {challenger} との対戦を辞退しました。', ko: '{opponent}님이 이번에는 {challenger}님과 대결하지 않아요.', zh: '{opponent} 这次不想与 {challenger} 对战。', it: '{opponent} non vuole affrontare {challenger} questa volta.' },
   expiredTitle: { de: '⌛ BATTLE-ANFRAGE ABGELAUFEN', en: '⌛ BATTLE REQUEST EXPIRED', fr: '⌛ DÉFI EXPIRÉ', es: '⌛ DESAFÍO CADUCADO', pt: '⌛ DESAFIO EXPIRADO', ru: '⌛ ВЫЗОВ ИСТЁК', ja: '⌛ 対戦リクエスト期限切れ', ko: '⌛ 대결 신청 만료', zh: '⌛ 对战邀请已过期', it: '⌛ SFIDA SCADUTA' },
-  expiredBody: { de: '{opponent} hat nicht rechtzeitig geantwortet. Startet bei Bedarf eine neue Runde mit **/play**.', en: '{opponent} did not respond in time. Start a new round with **/play**.', fr: '{opponent} n’a pas répondu à temps. Relance avec **/play**.', es: '{opponent} no respondió a tiempo. Inicia otra ronda con **/play**.', pt: '{opponent} não respondeu a tempo. Inicie outra rodada com **/play**.', ru: '{opponent} не ответил вовремя. Начните заново через **/play**.', ja: '{opponent} は時間内に返答しませんでした。**/play** で再挑戦できます。', ko: '{opponent}님이 제시간에 응답하지 않았어요. **/play**로 새로 시작하세요.', zh: '{opponent} 未及时回应。可使用 **/play** 重新发起。', it: '{opponent} non ha risposto in tempo. Ricomincia con **/play**.' },
+  expiredBody: { de: '{opponent} hat nicht rechtzeitig geantwortet. Startet bei Bedarf eine neue Runde mit **/multiplayer**.', en: '{opponent} did not respond in time. Start a new round with **/multiplayer**.', fr: '{opponent} n’a pas répondu à temps. Relance avec **/multiplayer**.', es: '{opponent} no respondió a tiempo. Inicia otra ronda con **/multiplayer**.', pt: '{opponent} não respondeu a tempo. Inicie outra rodada com **/multiplayer**.', ru: '{opponent} не ответил вовремя. Начните заново через **/multiplayer**.', ja: '{opponent} は時間内に返答しませんでした。**/multiplayer** で再挑戦できます。', ko: '{opponent}님이 제시간에 응답하지 않았어요. **/multiplayer**로 새로 시작하세요.', zh: '{opponent} 未及时回应。可使用 **/multiplayer** 重新发起。', it: '{opponent} non ha risposto in tempo. Ricomincia con **/multiplayer**.' },
 
   turn: { de: '⚡ **Am Zug:** {player}', en: '⚡ **Your move:** {player}', fr: '⚡ **Au tour de :** {player}', es: '⚡ **Turno de:** {player}', pt: '⚡ **Vez de:** {player}', ru: '⚡ **Ходит:** {player}', ja: '⚡ **手番:** {player}', ko: '⚡ **차례:** {player}', zh: '⚡ **轮到：** {player}', it: '⚡ **Tocca a:** {player}' },
   notPlayer: { de: '🍿 Du bist nur Zuschauer bei diesem Battle.', en: '🍿 You are only a spectator in this battle.', fr: '🍿 Tu es seulement spectateur de ce duel.', es: '🍿 Solo eres espectador en esta batalla.', pt: '🍿 Você é apenas espectador nesta batalha.', ru: '🍿 Ты только зритель в этой игре.', ja: '🍿 あなたはこの対戦の観戦者です。', ko: '🍿 이 대결에서는 관전자예요.', zh: '🍿 你只是本场对战的观众。', it: '🍿 Sei solo spettatore in questa sfida.' },
@@ -117,7 +214,7 @@ const T = {
 
   winnerShort: { de: '🏆 {winner} gewinnt!', en: '🏆 {winner} wins!', fr: '🏆 {winner} gagne !', es: '🏆 ¡{winner} gana!', pt: '🏆 {winner} venceu!', ru: '🏆 {winner} побеждает!', ja: '🏆 {winner} の勝ち！', ko: '🏆 {winner}님 승리!', zh: '🏆 {winner} 获胜！', it: '🏆 Vince {winner}!' },
   drawShort: { de: '🤝 Unentschieden!', en: '🤝 Draw!', fr: '🤝 Égalité !', es: '🤝 ¡Empate!', pt: '🤝 Empate!', ru: '🤝 Ничья!', ja: '🤝 引き分け！', ko: '🤝 무승부!', zh: '🤝 平局！', it: '🤝 Pareggio!' },
-  rematchShort: { de: 'Revanche mit **/play**.', en: 'Rematch with **/play**.', fr: 'Revanche avec **/play**.', es: 'Revancha con **/play**.', pt: 'Revanche com **/play**.', ru: 'Реванш через **/play**.', ja: '再戦は **/play**。', ko: '재대결은 **/play**.', zh: '再来一局：**/play**。', it: 'Rivincita con **/play**.' },
+  rematchShort: { de: 'Revanche mit **/multiplayer**.', en: 'Rematch with **/multiplayer**.', fr: 'Revanche avec **/multiplayer**.', es: 'Revancha con **/multiplayer**.', pt: 'Revanche com **/multiplayer**.', ru: 'Реванш через **/multiplayer**.', ja: '再戦は **/multiplayer**。', ko: '재대결은 **/multiplayer**.', zh: '再来一局：**/multiplayer**。', it: 'Rivincita con **/multiplayer**.' },
 
   // --- Counting-Spiel ---------------------------------------------------
   countFailureSafe: {
@@ -343,8 +440,9 @@ const T = {
   countRageBody4: { de: 'Ich fasse es nicht. **{expected}** war dran, und du servierst uns **{got}**. Alle auf Anfang – **1**!', en: 'I can’t believe it. **{expected}** was next, and you serve us **{got}**. Everyone back to **1**!', fr: 'Je n’y crois pas. **{expected}** était le suivant, et tu nous sers **{got}**. Tout le monde repart à **1** !', es: 'No me lo creo. Tocaba **{expected}** y nos sirves **{got}**. ¡Todos de vuelta al **1**!', pt: 'Não acredito. Era a vez do **{expected}** e você nos serve **{got}**. Todo mundo de volta ao **1**!', ru: 'Не верю. Следующим было **{expected}**, а ты подаёшь нам **{got}**. Все снова на **1**!', ja: '信じられない。次は **{expected}** だったのに、君が出したのは **{got}**。みんな、**1** から！', ko: '믿을 수가 없네요. 다음은 **{expected}**이었는데 **{got}**을 주시다니. 모두 다시 **1**부터!', zh: '我简直不敢相信。接下来应该是 **{expected}**，你却给我们端上 **{got}**。大家都回到 **1**！', it: 'Non ci credo. Toccava **{expected}** e tu ci servi **{got}**. Tutti di nuovo a **1**!' },
 
   helpTitle: { de: '🎮 MINIGAMES BOT – BATTLE HUB', en: '🎮 MINIGAMES BOT – BATTLE HUB', fr: '🎮 BOT MINI-JEUX – ARÈNE', es: '🎮 BOT DE MINIJUEGOS – ARENA', pt: '🎮 BOT DE MINIGAMES – ARENA', ru: '🎮 БОТ МИНИ-ИГР – АРЕНА', ja: '🎮 ミニゲームBOT – バトルハブ', ko: '🎮 미니게임 봇 – 배틀 허브', zh: '🎮 小游戏机器人 – 对战中心', it: '🎮 BOT MINIGIOCHI – ARENA' },
-  helpDesc: { de: 'Fordere Freunde heraus, nimm Battles an und kläre direkt im Channel, wer gewinnt.', en: 'Challenge friends, accept battles, and settle who wins right in the channel.', fr: 'Défie tes amis et découvre directement dans le salon qui gagne.', es: 'Desafía a tus amigos y decidid en el canal quién gana.', pt: 'Desafie amigos e descubra no canal quem vence.', ru: 'Вызывай друзей и выясняй победителя прямо в канале.', ja: '友達に挑戦し、チャンネルで勝者を決めよう。', ko: '친구에게 도전하고 채널에서 바로 승자를 가려보세요.', zh: '挑战好友，直接在频道中决出胜负。', it: 'Sfida gli amici e decidete nel canale chi vince.' },
-  helpPlay: { de: 'Wähle **Tic-Tac-Toe** oder **Vier Gewinnt**. Der Gegner ist optional – ohne Angabe darf jeder antreten. Wer beginnt, entscheidet der Zufall.', en: 'Choose **Tic-Tac-Toe** or **Connect Four**. The opponent is optional—if empty, anyone can join. The starting player is random.', fr: 'Choisis le **Morpion** ou **Puissance 4**. L’adversaire est facultatif : sans lui, tout le monde peut jouer. Le premier joueur est tiré au sort.', es: 'Elige **Tres en raya** o **Conecta 4**. El rival es opcional: si lo dejas vacío, puede unirse cualquiera. Quién empieza es al azar.', pt: 'Escolha **Jogo da velha** ou **Ligue 4**. O adversário é opcional — sem ele, qualquer um entra. Quem começa é sorteado.', ru: 'Выбери **Крестики-нолики** или **Четыре в ряд**. Соперник необязателен — тогда сыграть может любой. Первый ход определяется случайно.', ja: '**三目並べ**か**四目並べ**を選択。相手の指定は任意で、未指定なら誰でも参加できます。先手はランダムです。', ko: '**틱택토** 또는 **사목**을 고르세요. 상대는 선택 사항이라 비워두면 누구나 참여할 수 있고, 선공은 무작위예요.', zh: '选择**井字棋**或**四子棋**。对手为可选项，留空则任何人都能加入，先手随机决定。', it: 'Scegli **Tris** o **Forza 4**. L’avversario è facoltativo: se vuoto può unirsi chiunque. Chi inizia è casuale.' },
+  helpDesc: { de: 'Fordere Freunde heraus oder spiele allein – direkt im Channel.', en: 'Challenge friends or play solo—right in the channel.', fr: 'Défie tes amis ou joue en solo, directement dans le salon.', es: 'Desafía a tus amigos o juega en solitario, en el canal.', pt: 'Desafie amigos ou jogue sozinho, direto no canal.', ru: 'Вызывай друзей или играй в одиночку — прямо в канале.', ja: '友達に挑戦、あるいはひとりで。チャンネルでそのまま遊べます。', ko: '친구에게 도전하거나 혼자서 – 채널에서 바로 즐기세요.', zh: '挑战好友或独自游玩——就在频道里。', it: 'Sfida gli amici o gioca da solo, direttamente nel canale.' },
+  helpPlay: { de: 'Wähle **Tic-Tac-Toe** oder **Vier Gewinnt**. Der Gegner ist optional – ohne Angabe darf jeder antreten. Wer beginnt, entscheidet der Zufall.', en: 'Choose **Tic-Tac-Toe** or **Connect Four**. The opponent is optional—if empty, anyone can join. The starting player is random.', fr: 'Choisis le **Morpion** ou **Puissance 4**. L’adversaire est facultatif : sans lui, tout le monde peut jouer. Le premier joueur est tiré au sort.', es: 'Elige **Tres en raya** o **Conecta 4**. El rival es opcional: si lo dejas vacío, puede unirse cualquiera. Quién empieza es al azar.', pt: 'Escolha **Jogo da velha** ou **Ligue 4**. O adversário é opcional — sem ele, qualquer um entra. Quem começa é sorteado.', ru: 'Выбери **Крестики-нолики** или **Четыре в ряд**. Соперник необязателен — тогда сыграть может любой. Первый ход определяется случайно.', ja: '**三目並べ**か**四目並べ**を選択。相手の指定は任意で、未指定なら誰でも参加できます。先手はランダムです。', ko: '**팀택토** 또는 **사목**을 고르세요. 상대는 선택 사항이라 비워두면 누구나 참여할 수 있고, 선공은 무작위예요.', zh: '选择**井字棋**或**四子棋**。对手为可选项，留空则任何人都能加入，先手随机决定。', it: 'Scegli **Tris** o **Forza 4**. L’avversario è facoltativo: se vuoto può unirsi chiunque. Chi inizia è casuale.' },
+  helpSolo: { de: 'Spiele allein gegen dich selbst. Aktuell im Angebot: **2048** – schiebe mit den Pfeilen, verschmelze gleiche Zahlen und knacke die 2048. Mit Undo, Punktestand und Bestenstein.', en: 'Play on your own. Currently available: **2048**—slide with the arrows, merge matching numbers and reach 2048. With undo, score and best tile.', fr: 'Joue en solo. Actuellement disponible : **2048** — déplace avec les flèches, fusionne les nombres identiques et atteins 2048. Avec annulation, score et meilleure tuile.', es: 'Juega en solitario. Disponible ahora: **2048**: desliza con las flechas, fusiona números iguales y llega a 2048. Con deshacer, puntuación y mejor ficha.', pt: 'Jogue sozinho. Disponível agora: **2048** — deslize com as setas, funda números iguais e chegue a 2048. Com desfazer, pontuação e melhor peça.', ru: 'Играй в одиночку. Сейчас доступно: **2048** — двигай стрелками, объединяй одинаковые числа и доберись до 2048. С отменой хода, очками и лучшей плиткой.', ja: 'ひとりで遊べます。現在は **2048**：矢印で動かし、同じ数字を合体させて 2048 を目指しましょう。アンドゥ・スコア・最大タイル付き。', ko: '혼자 즐기세요. 현재 제공: **2048** – 화살표로 밀어 같은 숫자를 합쳐 2048을 만들어요. 되돌리기·점수·최고 타일 포함.', zh: '一个人玩。目前提供：**2048** — 用方向键滑动，合并相同数字，冲击 2048。支持撤销、得分与最大方块。', it: 'Gioca da solo. Ora disponibile: **2048** — muovi con le frecce, fondi i numeri uguali e arriva a 2048. Con annulla, punteggio e tessera migliore.' },
   helpCounting: { de: 'Legt einen Counting-Channel fest: Zählen ab **1**, niemand zweimal hintereinander, bei Fehlern geht es von vorne los. Nur für Admins.', en: 'Sets a counting channel: count from **1**, never twice in a row, mistakes reset everything. Admins only.', fr: 'Définit un salon de comptage : on compte depuis **1**, jamais deux fois de suite, une erreur remet à zéro. Admins uniquement.', es: 'Define un canal de conteo: se cuenta desde **1**, nunca dos veces seguidas, un fallo lo reinicia. Solo admins.', pt: 'Define um canal de contagem: conte a partir de **1**, nunca duas vezes seguidas, erros reiniciam tudo. Apenas admins.', ru: 'Назначает канал для счёта: считаем с **1**, не дважды подряд, ошибка сбрасывает всё. Только для админов.', ja: 'カウントチャンネルを設定します：**1** から数え、連続投稿は禁止、間違いで最初から。管理者専用。', ko: '카운팅 채널을 지정해요: **1**부터 세고, 연속 금지, 틀리면 처음부터. 관리자 전용.', zh: '设置计数频道：从 **1** 开始，不能连续数两次，出错则重来。仅限管理员。', it: 'Imposta un canale di conteggio: si conta da **1**, mai due volte di fila, un errore azzera tutto. Solo admin.' },
   helpSetLanguage: { de: 'Ändert die Sprache aller zukünftigen Battles. Nur für Admins.', en: 'Changes the language of future battles. Admins only.', fr: 'Change la langue des prochains duels. Admins uniquement.', es: 'Cambia el idioma de futuras batallas. Solo admins.', pt: 'Altera o idioma das próximas batalhas. Só admins.', ru: 'Меняет язык будущих игр. Только для администраторов.', ja: '今後の対戦言語を変更します。管理者のみ。', ko: '앞으로의 대결 언어를 변경해요. 관리자 전용.', zh: '更改后续对战语言。仅限管理员。', it: 'Cambia la lingua delle prossime sfide. Solo admin.' },
   helpProfile: { de: 'Ändert das serverspezifische Profilbild des Bots. Nur für Admins.', en: 'Changes the server-specific bot picture. Admins only.', fr: 'Change la photo du bot sur ce serveur. Admins uniquement.', es: 'Cambia la imagen del bot en este servidor. Solo admins.', pt: 'Altera a foto do bot neste servidor. Só admins.', ru: 'Меняет аватар бота на сервере. Только для администраторов.', ja: 'サーバー固有のBotアイコンを変更。管理者のみ。', ko: '서버별 봇 프로필 사진을 변경해요. 관리자 전용.', zh: '更改机器人在本服务器的头像。仅限管理员。', it: 'Cambia la foto del bot nel server. Solo admin.' },
