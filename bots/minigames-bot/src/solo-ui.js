@@ -201,14 +201,21 @@ function footerText(state) {
  * ------------------------------------------------------------------ */
 
 const PAD = '\u3000';
+// U+3000 allein sieht zwar leer aus, wird von Discord aber als reiner
+// Leerraum getrimmt. Damit war das Button-Label anschließend leer und die
+// komplette /singleplayer-Antwort wurde als „Invalid Form Body“ abgewiesen.
+// U+2800 ist ein unsichtbares Braille-Zeichen, aber ausdrücklich KEIN
+// Unicode-Leerraum. Der Platzhalter bleibt damit unsichtbar und API-gültig.
+const BUTTON_BLANK = '\u2800';
 
 function padButton(slot) {
   // Unsichtbarer, dauerhaft deaktivierter Platzhalter: nur so entsteht aus
-  // Discords 5er-Reihen ein optisch sauberes Steuerkreuz.
+  // Discords 5er-Reihen ein optisch sauberes Steuerkreuz. Die breiten Räume
+  // halten die Button-Größe, BUTTON_BLANK verhindert ein leeres Label.
   return new ButtonBuilder()
     .setCustomId(SOLO_CID.pad(slot))
     .setStyle(ButtonStyle.Secondary)
-    .setLabel(PAD)
+    .setLabel(`${PAD}${BUTTON_BLANK}${PAD}`)
     .setDisabled(true);
 }
 
