@@ -140,7 +140,7 @@ async function renderDetailPayload(ctx, userId, guildId) {
   }
 
   const entry = ctx.store.getGuild(guildId);
-  const hasApiKey = Boolean(entry?.openaiApiKey);
+  const hasApiKey = Boolean(entry?.mistralApiKey);
   const violationsCount = ctx.store.getAllViolationsForGuild(guildId).length;
 
   const lines = [

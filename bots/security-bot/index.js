@@ -1,20 +1,20 @@
 /**
  * ============================================================================
- *  🛡️ Security Bot – Automatischer KI-Sicherheitsbot mit OpenAI Moderation
+ *  🛡️ Security Bot – Automatischer KI-Sicherheitsbot mit Mistral Moderation
  *
  *  Funktionen:
- *  - /set_api_key – OpenAI API Key für den Server hinterlegen (Modal-Formular, nur Admins)
+ *  - /set_api_key – Mistral API Key für den Server hinterlegen (Modal-Formular, nur Admins)
  *  - /set_language – 10 Sprachen zur Auswahl, dauerhaft für den Server (nur Admins)
  *  - /set_sensitivity – Schutzlevel anpassen (Strikt: 30%, Ausgewogen: 50%, Tolerant: 75%)
  *  - /configure_rules – Interaktives Menü für Kategorien, Schwellenwerte & Auto-Delete
  *  - /set_warnings – Verwarnungsstufen, Timeouts, Verfallszeit & Auto-Delete konfigurieren
  *  - /status – Eigene aktive Verwarnungen und Sicherheitsstatus einsehen (für alle!)
  *  - /manage_user [user] – Status beliebiger Nutzer einsehen und Verwarnungen löschen (nur Admins)
- *  - /test_text [text] – Text mit OpenAI Moderation auf Regelverstöße analysieren (nur Admins)
+ *  - /test_text [text] – Text mit Mistral Moderation auf Regelverstöße analysieren (nur Admins)
  *  - /admin_set_bot_profile – Server-Profilbild des Bots anpassen (nur Admins)
  *  - /help – Befehlsübersicht mit klickbaren Mentions
  *  - /adminpanel – Owner-Admin-Panel im Bot-DM
- *  - Automatische Überwachung aller Text- und Bildnachrichten von Nicht-Admins
+ *  - Automatische Überwachung aller Textnachrichten von Nicht-Admins
  * ============================================================================
  */
 

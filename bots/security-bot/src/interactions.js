@@ -21,7 +21,7 @@ const {
 } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { t, langFromDiscord } = require('./languages');
-const { callOpenAIModeration } = require('./moderation');
+const { callMistralModeration } = require('./moderation');
 const {
   DEFAULT_WARNING_ESCALATION,
   PRESET_THRESHOLDS,
@@ -76,7 +76,7 @@ async function handleModalSubmit(ctx, interaction) {
 
     const rawKey = interaction.fields.getTextInputValue('sec_input_api_key')?.trim();
     if (!rawKey || rawKey.toLowerCase() === 'remove' || rawKey.toLowerCase() === 'delete') {
-      cfg.openaiApiKey = null;
+      cfg.mistralApiKey = null;
       ctx.store.setGuild(cfg);
       await ctx.store.flush();
       return interaction.reply(
@@ -85,7 +85,7 @@ async function handleModalSubmit(ctx, interaction) {
     }
 
     // Wenn maskierter Key unverändert eingereicht wurde -> nichts tun
-    if (rawKey.includes('...') && rawKey.startsWith('sk-') && cfg.openaiApiKey) {
+    if (cfg.mistralApiKey && rawKey === maskApiKey(cfg.mistralApiKey)) {
       return interaction.reply(
         componentsV2Payload([smallContainer(null, 'ℹ️ Der bestehende API Key wurde beibehalten.')], { ephemeral: true })
       );
@@ -94,22 +94,26 @@ async function handleModalSubmit(ctx, interaction) {
     await interaction.deferReply({ ephemeral: true });
 
     // Test-Call mit dem neuen Key durchführen
-    const testRes = await callOpenAIModeration({
+    const testRes = await callMistralModeration({
       apiKey: rawKey,
       text: 'Test connection',
     });
 
-    if (!testRes.ok && testRes.status === 401) {
-      cfg.openaiApiKey = rawKey;
-      ctx.store.setGuild(cfg);
-      await ctx.store.flush();
-      const msg = t('apiKeySavedWarning', lang, { error: 'Ungültiger API-Schlüssel (401 Unauthorized)' });
+    if (!testRes.ok && (testRes.status === 401 || testRes.status === 403)) {
+      const msg = t('apiKeyRejected', lang, { error: `HTTP ${testRes.status}` });
       return interaction.editReply(componentsV2Payload([smallContainer(null, msg)]));
     }
 
-    cfg.openaiApiKey = rawKey;
+    cfg.mistralApiKey = rawKey;
     ctx.store.setGuild(cfg);
     await ctx.store.flush();
+
+    if (!testRes.ok) {
+      const msg = t('apiKeySavedWarning', lang, {
+        error: testRes.status ? `HTTP ${testRes.status}` : (testRes.error || 'Verbindungsfehler'),
+      });
+      return interaction.editReply(componentsV2Payload([smallContainer(null, msg)]));
+    }
 
     const masked = maskApiKey(rawKey);
     const msg = t('apiKeySavedSuccess', lang, { key: masked });

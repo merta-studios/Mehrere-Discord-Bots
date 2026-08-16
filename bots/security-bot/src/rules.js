@@ -2,36 +2,24 @@
  * Regelwerk, Schwellenwerte & Eskalationsstufen für den Sicherheitsbot.
  */
 
+// Native Sicherheitskategorien der Mistral Moderation API. Die Beratungs-
+// Kategorien health/financial/law und reine PII-Erkennung sind bewusst keine
+// automatischen Discord-Verstöße: Der Bot soll Nutzer nicht für normale
+// Gesundheits-, Finanz- oder Rechtsgespräche bestrafen.
 const CATEGORIES = [
-  'hate',
-  'hate/threatening',
-  'harassment',
-  'harassment/threatening',
-  'self-harm',
-  'self-harm/intent',
-  'self-harm/instructions',
   'sexual',
-  'sexual/minors',
-  'violence',
-  'violence/graphic',
-  'illicit',
-  'illicit/violent',
+  'hate_and_discrimination',
+  'violence_and_threats',
+  'dangerous_and_criminal_content',
+  'selfharm',
 ];
 
 const CATEGORY_ICONS = {
-  hate: '🤬',
-  'hate/threatening': '🛑',
-  harassment: '🥊',
-  'harassment/threatening': '🔪',
-  'self-harm': '🩹',
-  'self-harm/intent': '⚠️',
-  'self-harm/instructions': '🚫',
   sexual: '🔞',
-  'sexual/minors': '🚨',
-  violence: '⚔️',
-  'violence/graphic': '🩸',
-  illicit: '💊',
-  'illicit/violent': '💣',
+  hate_and_discrimination: '🤬',
+  violence_and_threats: '⚔️',
+  dangerous_and_criminal_content: '💣',
+  selfharm: '🩹',
 };
 
 const PRESET_THRESHOLDS = {
@@ -101,10 +89,29 @@ function getDefaultThresholdMap(preset = 'balanced') {
   return map;
 }
 
+function pickCategoryValues(raw, defaults) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return Object.fromEntries(CATEGORIES.map((cat) => [
+    cat,
+    Object.hasOwn(source, cat) ? source[cat] : defaults[cat],
+  ]));
+}
+
+function normalizeModerationCategory(category) {
+  const cat = String(category || '');
+  if (CATEGORIES.includes(cat)) return cat;
+  if (cat.startsWith('sexual')) return 'sexual';
+  if (cat.startsWith('self-harm') || cat === 'self_harm') return 'selfharm';
+  if (cat.startsWith('violence') || cat.endsWith('/threatening')) return 'violence_and_threats';
+  if (cat.startsWith('illicit')) return 'dangerous_and_criminal_content';
+  if (cat.startsWith('hate') || cat.startsWith('harassment')) return 'hate_and_discrimination';
+  return 'dangerous_and_criminal_content';
+}
+
 function getDefaultGuildConfig(guildId) {
   return {
     guildId: String(guildId),
-    openaiApiKey: null,
+    mistralApiKey: null,
     lang: 'de',
     sensitivity: 'balanced',
     categoryThresholds: getDefaultThresholdMap('balanced'),
@@ -123,17 +130,18 @@ function normalizeGuildConfig(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const cfg = { ...raw };
   cfg.guildId = String(cfg.guildId);
+  cfg.mistralApiKey = cfg.mistralApiKey ? String(cfg.mistralApiKey).trim() : null;
+  // Alte OpenAI-Schlüssel sind bei Mistral ungültig und werden weder übernommen
+  // noch erneut in Datei-Backups geschrieben.
+  delete cfg.openaiApiKey;
   cfg.lang = cfg.lang || 'de';
   cfg.sensitivity = cfg.sensitivity || 'balanced';
-  cfg.categoryThresholds = cfg.categoryThresholds && typeof cfg.categoryThresholds === 'object'
-    ? { ...getDefaultThresholdMap(cfg.sensitivity), ...cfg.categoryThresholds }
-    : getDefaultThresholdMap(cfg.sensitivity);
-  cfg.categoryEnabled = cfg.categoryEnabled && typeof cfg.categoryEnabled === 'object'
-    ? { ...getDefaultCategoryMap(true), ...cfg.categoryEnabled }
-    : getDefaultCategoryMap(true);
-  cfg.categoryAutoDelete = cfg.categoryAutoDelete && typeof cfg.categoryAutoDelete === 'object'
-    ? { ...getDefaultCategoryMap(true), ...cfg.categoryAutoDelete }
-    : getDefaultCategoryMap(true);
+  cfg.categoryThresholds = pickCategoryValues(
+    cfg.categoryThresholds,
+    getDefaultThresholdMap(cfg.sensitivity)
+  );
+  cfg.categoryEnabled = pickCategoryValues(cfg.categoryEnabled, getDefaultCategoryMap(true));
+  cfg.categoryAutoDelete = pickCategoryValues(cfg.categoryAutoDelete, getDefaultCategoryMap(true));
   cfg.warningActions = Array.isArray(cfg.warningActions) && cfg.warningActions.length > 0
     ? cfg.warningActions
     : [...DEFAULT_WARNING_ESCALATION];
@@ -170,6 +178,7 @@ module.exports = {
   getActionForWarningCount,
   getDefaultCategoryMap,
   getDefaultThresholdMap,
+  normalizeModerationCategory,
   getDefaultGuildConfig,
   normalizeGuildConfig,
   progressBar,

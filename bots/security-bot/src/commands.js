@@ -30,7 +30,7 @@ const {
 } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { openPanel } = require('./admin-panel');
-const { callOpenAIModeration, evaluateModerationResult } = require('./moderation');
+const { callMistralModeration, evaluateModerationResult } = require('./moderation');
 const {
   PRESET_THRESHOLDS,
   getDefaultThresholdMap,
@@ -100,7 +100,7 @@ function defineCommands() {
   return [
     new SlashCommandBuilder()
       .setName('set_api_key')
-      .setDescription('OpenAI Moderation API Key für diesen Server hinterlegen (nur Admins)')
+      .setDescription('Mistral Moderation API Key für diesen Server hinterlegen (nur Admins)')
       .setDescriptionLocalizations(pick('helpSetApiKey'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
@@ -204,7 +204,7 @@ function defineCommands() {
 
     new SlashCommandBuilder()
       .setName('test_text')
-      .setDescription('Überprüft Text mit OpenAI Moderation auf Regelverstöße (nur Admins)')
+      .setDescription('Überprüft Text mit Mistral Moderation auf Regelverstöße (nur Admins)')
       .setDescriptionLocalizations(pick('helpTestText'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addStringOption((o) =>
@@ -668,7 +668,7 @@ async function handleSetApiKey(ctx, interaction) {
           .setLabel(t('apiKeyInputLabel', lang).slice(0, 45))
           .setStyle(TextInputStyle.Short)
           .setPlaceholder(t('apiKeyInputPlaceholder', lang).slice(0, 95))
-          .setValue(cfg.openaiApiKey ? maskApiKey(cfg.openaiApiKey) : '')
+          .setValue(cfg.mistralApiKey ? maskApiKey(cfg.mistralApiKey) : '')
           .setRequired(true)
       )
     );
@@ -915,12 +915,12 @@ async function handleTestText(ctx, interaction) {
     );
   }
 
-  if (!cfg.openaiApiKey) {
+  if (!cfg.mistralApiKey) {
     await ensureCommandIds(ctx, interaction.guildId);
     const setKeyMention = commandMention(ctx, 'set_api_key', interaction.guildId);
     return interaction.reply(
       componentsV2Payload(
-        [smallContainer(null, `⚠️ Kein OpenAI API Key hinterlegt. Bitte nutze ${setKeyMention}.`)],
+        [smallContainer(null, `⚠️ Kein Mistral API Key hinterlegt. Bitte nutze ${setKeyMention}.`)],
         { ephemeral: false }
       )
     );
@@ -929,15 +929,15 @@ async function handleTestText(ctx, interaction) {
   const textToTest = interaction.options.getString('text');
   await interaction.deferReply();
 
-  const modRes = await callOpenAIModeration({
-    apiKey: cfg.openaiApiKey,
+  const modRes = await callMistralModeration({
+    apiKey: cfg.mistralApiKey,
     text: textToTest,
   });
 
   if (!modRes.ok) {
     return interaction.editReply(
       componentsV2Payload([
-        smallContainer('❌ Test fehlgeschlagen', `OpenAI API Fehler: \`${modRes.error || modRes.message}\``),
+        smallContainer('❌ Test fehlgeschlagen', `Mistral API Fehler: \`${modRes.error || modRes.message}\``),
       ])
     );
   }
