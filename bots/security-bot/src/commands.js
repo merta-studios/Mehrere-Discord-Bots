@@ -246,9 +246,20 @@ function defineCommands() {
 function guildCommandJson() {
   return defineCommands()
     .filter((c) => !GLOBAL_COMMAND_NAMES.includes(c.name))
-    .map((c) => c.toJSON());
+    .map((c) => {
+      const json = c.toJSON();
+      // `contexts` und `integration_types` sind Felder globaler Commands. Ein
+      // Guild-Command ist durch seine REST-Route bereits eindeutig auf Guild
+      // Install + Guild Context begrenzt. Ohne diese global-only Felder bleibt
+      // der Bulk-Guild-Payload mit Discord-Versionen strikt kompatibel.
+      delete json.contexts;
+      delete json.integration_types;
+      delete json.dm_permission;
+      return json;
+    });
 }
 
+/** Global wird ausschließlich der DM-Command /adminpanel geführt. */
 function allCommandJson() {
   return defineCommands()
     .filter((c) => GLOBAL_COMMAND_NAMES.includes(c.name))
@@ -257,6 +268,16 @@ function allCommandJson() {
 
 function idsFromDiscord(list) {
   return Object.fromEntries((Array.isArray(list) ? list : []).map((c) => [c.name, c.id]));
+}
+
+function hasCommandNames(ids, names) {
+  return Boolean(ids) && names.every((name) => Boolean(ids[name]));
+}
+
+function normalizeGuildId(value) {
+  if (value == null) return null;
+  const id = String(value).trim().replace(/^<@!?(\d+)>$/, '$1');
+  return id || null;
 }
 
 function getRest(ctx, restFactory) {
@@ -269,81 +290,274 @@ function cachedGuildIds(ctx) {
   const cache = ctx.client?.guilds?.cache;
   if (cache?.values) {
     for (const guild of cache.values()) {
-      if (guild?.id) ids.add(String(guild.id));
+      const id = normalizeGuildId(guild?.id);
+      if (id) ids.add(id);
+    }
+  } else if (cache instanceof Map) {
+    for (const [cacheId, guild] of cache.entries()) {
+      const id = normalizeGuildId(guild?.id || cacheId);
+      if (id) ids.add(id);
     }
   }
-  if (ctx.devGuildId) ids.add(String(ctx.devGuildId));
+  const devGuildId = normalizeGuildId(ctx.devGuildId);
+  if (devGuildId) ids.add(devGuildId);
   return [...ids];
+}
+
+function rememberGlobalIds(ctx, ids) {
+  ctx.commandIds = ids;
+  ctx.store?.setCommandIds?.(ids);
+}
+
+function rememberGuildIds(ctx, guildId, ids) {
+  const id = normalizeGuildId(guildId);
+  if (!id) return;
+  ctx.guildCommandIds = ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds : new Map();
+  ctx.guildCommandIds.set(id, ids);
+  ctx.store?.setGuildCommandIds?.(id, ids);
+}
+
+function errorDetail(err) {
+  if (!err) return 'Unbekannter Fehler';
+  let detail = err.message || String(err);
+  if (err.rawError) {
+    try {
+      detail += ` | Discord: ${JSON.stringify(err.rawError).slice(0, 1000)}`;
+    } catch {}
+  }
+  return detail;
+}
+
+function logRegistration(ctx, scope, response) {
+  const commands = Array.isArray(response) ? response : [];
+  ctx.logger?.info?.(
+    `[security-bot] Command-Registrierung erfolgreich (${scope}): ` +
+      commands.map((command) => `/${command.name} (${command.id})`).join(', ')
+  );
 }
 
 async function registerGuildCommands(ctx, guildId, { rest } = {}) {
   const clientId = ctx.client?.user?.id;
-  const id = typeof guildId === 'string' ? guildId.trim().replace(/^<@!?(\d+)>$/, '$1') : null;
+  const id = normalizeGuildId(guildId);
   if (!clientId || !id) return null;
+
   const api = rest || getRest(ctx);
   const route = Routes.applicationGuildCommands(clientId, id);
   const res = await api.put(route, { body: guildCommandJson() });
   const ids = idsFromDiscord(res);
-  ctx.guildCommandIds = ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds : new Map();
-  ctx.guildCommandIds.set(id, ids);
-  ctx.store?.setGuildCommandIds?.(id, ids);
+  if (!hasCommandNames(ids, GUILD_COMMAND_NAMES)) {
+    const missing = GUILD_COMMAND_NAMES.filter((name) => !ids[name]);
+    throw new Error(
+      `Discord hat für Guild ${id} einen unvollständigen Command-Satz zurückgegeben ` +
+        `(fehlt: ${missing.map((name) => `/${name}`).join(', ')})`
+    );
+  }
+
+  rememberGuildIds(ctx, id, ids);
+  logRegistration(ctx, `Guild ${id}`, res);
   return ids;
 }
 
-async function registerCommands(ctx, { restFactory } = {}) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Registriert den Sicherheits-Bot ausfallsicher.
+ *
+ * Server-Commands werden zuerst auf jede bekannte Guild geschrieben. Erst
+ * wenn das geklappt hat, wird der globale Satz auf den reinen DM-Command
+ * /adminpanel bereinigt. Damit kann ein fehlgeschlagener Guild-PUT nicht mehr
+ * gleichzeitig die alten globalen Server-Commands entfernen. Transiente
+ * Discord-REST-Fehler werden außerdem mehrfach versucht und ein Fehlschlag
+ * wird nicht länger fälschlich als Erfolg zurückgegeben.
+ */
+async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
   const rest = getRest(ctx, restFactory);
   const clientId = ctx.client?.user?.id;
   if (!clientId) {
+    ctx.commandsRegistered = false;
     ctx.logger?.error?.('[security-bot] Registrierung abgebrochen: Keine Client-ID.');
     return false;
   }
 
-  try {
-    const route = Routes.applicationCommands(clientId);
-    const res = await rest.put(route, { body: allCommandJson() });
-    const ids = idsFromDiscord(res);
-    ctx.commandIds = ids;
-    ctx.store?.setCommandIds?.(ids);
-  } catch (err) {
-    ctx.logger?.error?.('[security-bot] Globale Registrierung fehlgeschlagen:', err.message);
-  }
+  const delays = Array.isArray(retryDelays) && retryDelays.length
+    ? retryDelays
+    : [0, 5_000, 15_000, 30_000];
+  const guildIds = cachedGuildIds(ctx);
+  const registeredGuilds = new Set();
+  let globalRegistered = false;
 
-  for (const guildId of cachedGuildIds(ctx)) {
-    try {
-      await registerGuildCommands(ctx, guildId, { rest });
-    } catch (err) {
-      ctx.logger?.warn?.(`[security-bot] Guild-Commands für ${guildId} fehlgeschlagen:`, err.message);
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt] > 0) await sleep(delays[attempt]);
+
+    // Fehlgeschlagene Guilds erneut versuchen; bereits erfolgreiche Guilds
+    // werden im selben Registrierungsdurchlauf nicht unnötig überschrieben.
+    for (const guildId of guildIds) {
+      if (registeredGuilds.has(guildId)) continue;
+      try {
+        await registerGuildCommands(ctx, guildId, { rest });
+        registeredGuilds.add(guildId);
+      } catch (err) {
+        ctx.logger?.warn?.(
+          `[security-bot] Guild-Commands für ${guildId} fehlgeschlagen ` +
+            `(Versuch ${attempt + 1}/${delays.length}): ${errorDetail(err)}`
+        );
+      }
+    }
+
+    // Global erst auf /adminpanel reduzieren, wenn alle Server ihren sofort
+    // sichtbaren Guild-Satz besitzen. So bleiben ältere globale Commands bei
+    // einem Discord-Ausfall als Sicherheitsnetz erhalten.
+    if (!globalRegistered && registeredGuilds.size === guildIds.length) {
+      try {
+        const route = Routes.applicationCommands(clientId);
+        const res = await rest.put(route, { body: allCommandJson() });
+        const ids = idsFromDiscord(res);
+        if (!hasCommandNames(ids, GLOBAL_COMMAND_NAMES)) {
+          throw new Error('Discord hat /adminpanel nicht im globalen Command-Satz zurückgegeben.');
+        }
+        rememberGlobalIds(ctx, ids);
+        logRegistration(ctx, 'global', res);
+        globalRegistered = true;
+      } catch (err) {
+        ctx.logger?.error?.(
+          `[security-bot] Globale Registrierung fehlgeschlagen ` +
+            `(Versuch ${attempt + 1}/${delays.length}): ${errorDetail(err)}`
+        );
+      }
+    }
+
+    if (globalRegistered && registeredGuilds.size === guildIds.length) {
+      ctx.commandsRegistered = true;
+      ctx.logger?.info?.(
+        `[security-bot] Alle Commands registriert: ${GUILD_COMMAND_NAMES.length} Server-Commands ` +
+          `auf ${guildIds.length} Server(n) und /adminpanel global.`
+      );
+      return true;
     }
   }
-  return true;
+
+  ctx.commandsRegistered = false;
+  const missingGuilds = guildIds.filter((id) => !registeredGuilds.has(id));
+  ctx.logger?.error?.(
+    '[security-bot] Command-Registrierung nicht vollständig. ' +
+      (missingGuilds.length ? `Fehlende Guilds: ${missingGuilds.join(', ')}. ` : '') +
+      (!globalRegistered ? 'Globales /adminpanel fehlt.' : '')
+  );
+  return false;
+}
+
+/**
+ * Liest nach der Registrierung bei Discord zurück und repariert fehlende
+ * Sätze sofort. Das deckt auch den Fall ab, dass Discord einen früheren PUT
+ * angenommen, aber einen leeren/veralteten Satz ausgeliefert hat.
+ */
+async function verifyCommandsLive(ctx) {
+  const clientId = ctx.client?.user?.id;
+  if (!clientId || !ctx.token) {
+    ctx.commandsRegistered = false;
+    return false;
+  }
+
+  const rest = getRest(ctx);
+  const guildIds = cachedGuildIds(ctx);
+  let guildsOk = true;
+
+  for (const guildId of guildIds) {
+    const route = Routes.applicationGuildCommands(clientId, guildId);
+    try {
+      const live = await rest.get(route);
+      let ids = idsFromDiscord(live);
+      if (!hasCommandNames(ids, GUILD_COMMAND_NAMES)) {
+        const missing = GUILD_COMMAND_NAMES.filter((name) => !ids[name]);
+        ctx.logger?.warn?.(
+          `[security-bot] Command-Verifikation Guild ${guildId}: ` +
+            `${missing.map((name) => `/${name}`).join(', ')} fehlen – registriere nach.`
+        );
+        ids = await registerGuildCommands(ctx, guildId, { rest });
+      } else {
+        rememberGuildIds(ctx, guildId, ids);
+      }
+      if (!hasCommandNames(ids, GUILD_COMMAND_NAMES)) guildsOk = false;
+    } catch (err) {
+      guildsOk = false;
+      ctx.logger?.warn?.(
+        `[security-bot] Command-Verifikation Guild ${guildId} fehlgeschlagen: ${errorDetail(err)}`
+      );
+    }
+  }
+
+  let globalOk = false;
+  const globalRoute = Routes.applicationCommands(clientId);
+  try {
+    let live = await rest.get(globalRoute);
+    let ids = idsFromDiscord(live);
+    if (!hasCommandNames(ids, GLOBAL_COMMAND_NAMES) && guildsOk) {
+      ctx.logger?.warn?.(
+        '[security-bot] Command-Verifikation global: /adminpanel fehlt – registriere nach.'
+      );
+      live = await rest.put(globalRoute, { body: allCommandJson() });
+      ids = idsFromDiscord(live);
+    }
+    globalOk = hasCommandNames(ids, GLOBAL_COMMAND_NAMES);
+    if (globalOk) rememberGlobalIds(ctx, ids);
+  } catch (err) {
+    ctx.logger?.warn?.(
+      `[security-bot] Globale Command-Verifikation fehlgeschlagen: ${errorDetail(err)}`
+    );
+  }
+
+  const ok = guildsOk && globalOk;
+  ctx.commandsRegistered = ok;
+  if (ok) {
+    ctx.logger?.info?.(
+      `[security-bot] Command-Verifikation OK: alle ${GUILD_COMMAND_NAMES.length} Server-Commands ` +
+        `auf ${guildIds.length} Server(n) und /adminpanel global sind live.`
+    );
+  } else {
+    ctx.logger?.error?.(
+      '[security-bot] Command-Verifikation fehlgeschlagen; die automatische Reparatur versucht es erneut.'
+    );
+  }
+  return ok;
 }
 
 async function ensureCommandIds(ctx, guildId = null) {
-  const gid = guildId ? String(guildId) : null;
-  const mem = gid
+  const gid = normalizeGuildId(guildId);
+  const expected = gid ? GUILD_COMMAND_NAMES : GLOBAL_COMMAND_NAMES;
+  const memoryIds = gid
     ? (ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds.get(gid) : null)
     : ctx.commandIds;
-  if (mem && Object.keys(mem).length > 0) return mem;
+  if (hasCommandNames(memoryIds, expected)) return memoryIds;
 
   const clientId = ctx.client?.user?.id;
-  if (clientId && ctx.token) {
-    try {
-      const rest = ctx.rest || getRest(ctx);
+  if (!clientId || !ctx.token) return memoryIds || {};
+
+  try {
+    const rest = getRest(ctx);
+    const route = gid
+      ? Routes.applicationGuildCommands(clientId, gid)
+      : Routes.applicationCommands(clientId);
+    let fetched = await rest.get(route);
+    let ids = idsFromDiscord(fetched);
+
+    if (!hasCommandNames(ids, expected)) {
       if (gid) {
-        const fetched = await rest.get(Routes.applicationGuildCommands(clientId, gid));
-        const ids = idsFromDiscord(fetched);
-        if (ctx.guildCommandIds instanceof Map) ctx.guildCommandIds.set(gid, ids);
-        ctx.store?.setGuildCommandIds?.(gid, ids);
-        return ids;
+        ids = await registerGuildCommands(ctx, gid, { rest });
+      } else {
+        fetched = await rest.put(route, { body: allCommandJson() });
+        ids = idsFromDiscord(fetched);
+        if (hasCommandNames(ids, expected)) rememberGlobalIds(ctx, ids);
       }
-      const fetched = await rest.get(Routes.applicationCommands(clientId));
-      const ids = idsFromDiscord(fetched);
-      ctx.commandIds = ids;
-      ctx.store?.setCommandIds?.(ids);
-      return ids;
-    } catch {}
+    } else if (gid) {
+      rememberGuildIds(ctx, gid, ids);
+    } else {
+      rememberGlobalIds(ctx, ids);
+    }
+    return ids || {};
+  } catch (err) {
+    ctx.logger?.warn?.(`[security-bot] Command-IDs konnten nicht geladen/repariert werden: ${errorDetail(err)}`);
+    return memoryIds || {};
   }
-  return {};
 }
 
 function commandMention(ctx, name, guildId = null) {
@@ -801,8 +1015,11 @@ async function handleHelp(ctx, interaction) {
 
 module.exports = {
   defineCommands,
+  guildCommandJson,
+  allCommandJson,
   registerCommands,
   registerGuildCommands,
+  verifyCommandsLive,
   ensureCommandIds,
   handleChatInput,
   pick,
