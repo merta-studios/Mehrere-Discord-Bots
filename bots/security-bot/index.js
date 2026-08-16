@@ -25,6 +25,7 @@ const {
   registerCommands,
   registerGuildCommands,
   verifyCommandsLive,
+  formatDiscordError,
 } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
 const { handleMessageModeration } = require('./src/moderation');
@@ -77,6 +78,10 @@ module.exports = {
         .trim()
         .replace(/^<@!?(\d+)>$/, '$1'),
       devGuildId,
+      // Render exposes this automatically. Logging it makes stale deployments
+      // distinguishable without ever exposing a token or another secret.
+      deployCommit:
+        String(env('RENDER_GIT_COMMIT', '') || env('SOURCE_COMMIT', '') || '').trim() || null,
       rest: new REST({ version: '10' }).setToken(token),
       store,
       commandIds: {},
@@ -93,13 +98,19 @@ module.exports = {
       if (commandSyncRunning) return ctx.commandsRegistered;
       commandSyncRunning = true;
       try {
-        await registerCommands(ctx, options);
+        const registered = await registerCommands(ctx, options);
+        // Never let a verification repair bypass the ordered registration
+        // transaction (global PUT first, Guild cleanup only afterwards).
+        if (!registered) return false;
         // Der Rücklese-Check ist maßgeblich: Er erkennt leere/veraltete Sätze
         // und schreibt fehlende Commands sofort noch einmal zu Discord.
         return await verifyCommandsLive(ctx);
       } catch (err) {
         ctx.commandsRegistered = false;
-        logger.error('[security-bot] Command-Synchronisierung fehlgeschlagen:', err.message);
+        logger.error(
+          '[security-bot] Command-Synchronisierung fehlgeschlagen:',
+          formatDiscordError(err)
+        );
         return false;
       } finally {
         commandSyncRunning = false;
@@ -158,10 +169,16 @@ module.exports = {
     client.on('guildCreate', (guild) => {
       void sendJoinNotice(ctx, guild);
       updatePresence();
-      void registerGuildCommands(ctx, guild.id).catch((e) => {
-        ctx.commandsRegistered = false;
-        logger.warn('[security-bot] guildCreate Command-Registrierung fehlgeschlagen:', e.message);
-      });
+      // Global commands are authoritative. Only the explicitly configured
+      // Guild gets an additional immediate set while global propagation runs.
+      if (ctx.devGuildId && String(guild.id) === String(ctx.devGuildId)) {
+        void registerGuildCommands(ctx, guild.id).catch((e) => {
+          logger.warn(
+            '[security-bot] Optionale guildCreate-Sofortregistrierung fehlgeschlagen; ' +
+              `globale Commands bleiben aktiv: ${formatDiscordError(e)}`
+          );
+        });
+      }
     });
 
     client.on('guildDelete', (guild) => {

@@ -47,10 +47,34 @@ SECURITY_BOT_TOKEN=
 # Owner Discord-ID für das /adminpanel und Beitritts-Benachrichtigungen
 SECURITY_BOT_OWNER_ID=
 
-# Optionale Dev-Gilde für sofortige Command-Registrierung
+# Optional: genau eine Gilde erhält zusätzlich sofort verfügbare Guild-Commands.
+# Leer lassen, wenn ausschließlich der zuverlässige globale Satz gewünscht ist.
 SECURITY_BOT_GUILD_ID=
 
 # Turso-Datenbank (wird mit dem XP-Bot geteilt)
 TURSO_DATABASE_URL=
 TURSO_AUTH_TOKEN=
 ```
+
+### Slash-Command-Registrierung
+
+Der vollständige Satz wird zuerst global über
+`PUT /applications/{application.id}/commands` registriert. Die zehn
+Server-Commands tragen ausschließlich den Guild-Context; `/adminpanel` trägt
+ausschließlich den Bot-DM-Context. Erst nachdem Discord alle elf globalen
+Command-Namen und IDs zurückgegeben hat, werden alte Guild-Overrides entfernt.
+Eine gültige `SECURITY_BOT_GUILD_ID`, in der der Bot Mitglied ist, behält
+optional einen sofort sichtbaren Guild-Satz (ohne `/adminpanel`). Ein Fehler bei
+diesem optionalen PUT beeinträchtigt den globalen Satz nicht.
+
+Der Bot muss mit den OAuth2-Scopes **`bot` und `applications.commands`**
+installiert sein. Ob eine bereits bestehende Guild-Installation den Scope
+enthält, stellt Discord dem Bot nicht über den Command-Endpunkt zur Verfügung.
+Falls der globale PUT laut Log erfolgreich ist, Commands aber nach der
+Propagation weiterhin nicht erscheinen, den Bot über eine OAuth2-URL mit
+beiden Scopes erneut autorisieren (kein Token erforderlich).
+
+Die Startlogs nennen die Application-ID, konfigurierte Guild-ID, tatsächlichen
+REST-Routen, den Render-Commit sowie jeden von Discord bestätigten
+Command-Namen und dessen ID. Fehler enthalten HTTP-Status, Discord-Code und
+`rawError`; Tokens und Request-Header werden bewusst nie geloggt.
