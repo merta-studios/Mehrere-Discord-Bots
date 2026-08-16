@@ -20,6 +20,7 @@
 
 const { GatewayIntentBits, ActivityType, Events, REST } = require('discord.js');
 
+const { createPresenceUpdater } = require('../../src/safe-presence');
 const { createSecurityStore } = require('./src/store');
 const {
   registerCommands,
@@ -117,22 +118,27 @@ module.exports = {
       }
     };
 
-    const updatePresence = () => {
-      const count = client.guilds.cache.size;
-      client.user
-        ?.setPresence({
-          activities: [
-            {
-              name: `Protecting ${count} server(s) 🛡️ | /help`,
-              type: ActivityType.Watching,
-            },
-          ],
-          status: 'online',
-        })
-        .catch(() => {});
-    };
+    // setPresence() liefert in discord.js v14 synchron ein ClientPresence-Objekt
+    // (kein Promise). Ein `.catch()` darauf warf in Produktion einen TypeError und
+    // brach den ClientReady-Handler ab, BEVOR registerCommands() lief.
+    // Der Helper isoliert jeden Presence-Fehler vollständig.
+    const updatePresence = createPresenceUpdater({
+      client,
+      logger,
+      label: 'security-bot',
+      build: () => ({
+        activities: [
+          {
+            name: `Protecting ${client.guilds.cache.size} server(s) 🛡️ | /help`,
+            type: ActivityType.Watching,
+          },
+        ],
+        status: 'online',
+      }),
+    });
 
     client.once(Events.ClientReady, async () => {
+      // Presence darf niemals die nachfolgenden Schritte verhindern.
       updatePresence();
       schedulerStop = startScheduler({ ctx });
       logger.info(

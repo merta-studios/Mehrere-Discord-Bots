@@ -41,6 +41,7 @@
 
 const { GatewayIntentBits, ActivityType, Events, MessageFlags } = require('discord.js');
 
+const { createPresenceUpdater } = require('../../src/safe-presence');
 const { createXpStore } = require('./src/store');
 const { registerCommands, registerGuildCommands } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
@@ -128,15 +129,19 @@ module.exports = {
     voiceTracker.start();
 
     // Status: zeigt Anzahl der verwalteten Server
-    const updatePresence = () => {
-      const count = client.guilds.cache.size;
-      client.user
-        .setPresence({
-          activities: [{ name: `Managing ${count} servers 🏆 | /help`, type: ActivityType.Playing }],
-          status: 'online',
-        })
-        .catch(() => {});
-    };
+    // setPresence() ist in discord.js v14 synchron (kein Promise) – ein `.catch()`
+    // darauf warf in Produktion einen TypeError und brach den Ready-Handler ab.
+    const updatePresence = createPresenceUpdater({
+      client,
+      logger,
+      label: 'xp-level-bot',
+      build: () => ({
+        activities: [
+          { name: `Managing ${client.guilds.cache.size} servers 🏆 | /help`, type: ActivityType.Playing },
+        ],
+        status: 'online',
+      }),
+    });
 
     client.once(Events.ClientReady, async () => {
       updatePresence();
