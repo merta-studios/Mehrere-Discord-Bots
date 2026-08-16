@@ -32,6 +32,7 @@
 
 const { GatewayIntentBits, ActivityType, Events } = require('discord.js');
 
+const { createPresenceUpdater } = require('../../src/safe-presence');
 const { createStore } = require('./src/store');
 const { startScheduler } = require('./src/scheduler');
 const { registerCommands } = require('./src/commands');
@@ -75,16 +76,23 @@ module.exports = {
 
     // ---------------- Ready ----------------
     // Status: zeigt die Gesamtzahl aller notierten Geburtstage über alle Server
-    const updatePresence = () => {
-      let total = 0;
-      for (const [, entry] of ctx.store.entries()) {
-        if (entry && Array.isArray(entry.birthdays)) total += entry.birthdays.length;
-      }
-      client.user.setPresence({
-        activities: [{ name: `${total} birthdays collected 🎂 | /help`, type: ActivityType.Watching }],
-        status: 'online',
-      }).catch(() => {});
-    };
+    // setPresence() ist in discord.js v14 synchron (kein Promise) – ein `.catch()`
+    // darauf warf in Produktion einen TypeError. Der Helper kapselt das sicher ab.
+    const updatePresence = createPresenceUpdater({
+      client,
+      logger,
+      label: 'birthday-bot',
+      build: () => {
+        let total = 0;
+        for (const [, entry] of ctx.store.entries()) {
+          if (entry && Array.isArray(entry.birthdays)) total += entry.birthdays.length;
+        }
+        return {
+          activities: [{ name: `${total} birthdays collected 🎂 | /help`, type: ActivityType.Watching }],
+          status: 'online',
+        };
+      },
+    });
 
     client.once(Events.ClientReady, async () => {
       await registerCommands(ctx);
