@@ -29,6 +29,15 @@ test('Bot-Module haben die erwartete Form', () => {
   assert.equal(typeof selfRoles.create, 'function');
   assert.ok(Array.isArray(selfRoles.intents));
 
+  const security = require('../bots/security-bot/index.js');
+  assert.equal(security.id, 'security-bot');
+  assert.equal(security.name, 'Security Bot');
+  assert.equal(security.tokenEnv, 'SECURITY_BOT_TOKEN');
+  assert.equal(typeof security.create, 'function');
+  assert.ok(Array.isArray(security.intents));
+  assert.ok(security.intents.includes(GatewayIntentBits.MessageContent));
+  assert.ok(security.intents.includes(GatewayIntentBits.GuildMessages));
+  assert.ok(security.intents.includes(GatewayIntentBits.GuildMembers));
 
   const minigames = require('../bots/minigames-bot/index.js');
   assert.equal(minigames.id, 'minigames-bot');
