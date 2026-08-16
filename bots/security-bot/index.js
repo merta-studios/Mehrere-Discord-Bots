@@ -21,7 +21,11 @@
 const { GatewayIntentBits, ActivityType, Events, REST } = require('discord.js');
 
 const { createSecurityStore } = require('./src/store');
-const { registerCommands, registerGuildCommands } = require('./src/commands');
+const {
+  registerCommands,
+  registerGuildCommands,
+  verifyCommandsLive,
+} = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
 const { handleMessageModeration } = require('./src/moderation');
 const { sendJoinNotice } = require('./src/admin-panel');
@@ -77,10 +81,30 @@ module.exports = {
       store,
       commandIds: {},
       guildCommandIds: new Map(),
+      commandsRegistered: false,
       panelSessions: new Map(),
     };
 
     let schedulerStop = null;
+    let commandRepairTimer = null;
+    let commandSyncRunning = false;
+
+    const syncCommands = async (options = {}) => {
+      if (commandSyncRunning) return ctx.commandsRegistered;
+      commandSyncRunning = true;
+      try {
+        await registerCommands(ctx, options);
+        // Der Rücklese-Check ist maßgeblich: Er erkennt leere/veraltete Sätze
+        // und schreibt fehlende Commands sofort noch einmal zu Discord.
+        return await verifyCommandsLive(ctx);
+      } catch (err) {
+        ctx.commandsRegistered = false;
+        logger.error('[security-bot] Command-Synchronisierung fehlgeschlagen:', err.message);
+        return false;
+      } finally {
+        commandSyncRunning = false;
+      }
+    };
 
     const updatePresence = () => {
       const count = client.guilds.cache.size;
@@ -104,11 +128,20 @@ module.exports = {
         `[security-bot] Bereit auf ${client.guilds.cache.size} Servern, ${store.getAllGuilds().length} Gilden in RAM`
       );
 
-      try {
-        await registerCommands(ctx);
-      } catch (err) {
-        logger.error('[security-bot] Initial-Command-Registrierung fehlgeschlagen:', err.message);
+      const commandsLive = await syncCommands();
+      if (!commandsLive) {
+        logger.error(
+          '[security-bot] Commands sind noch nicht vollständig live – automatische Reparatur läuft alle 5 Minuten.'
+        );
       }
+
+      // Falls Discord beim Deployment vorübergehend nicht erreichbar war, darf
+      // der Bot nicht bis zum nächsten Render-Restart ohne Commands bleiben.
+      commandRepairTimer = setInterval(() => {
+        if (ctx.commandsRegistered || commandSyncRunning) return;
+        void syncCommands({ retryDelays: [0] });
+      }, 5 * 60 * 1000);
+      commandRepairTimer.unref?.();
     });
 
     // ---------------- Interactions ----------------
@@ -125,9 +158,10 @@ module.exports = {
     client.on('guildCreate', (guild) => {
       void sendJoinNotice(ctx, guild);
       updatePresence();
-      void registerGuildCommands(ctx, guild.id).catch((e) =>
-        logger.warn('[security-bot] guildCreate Command-Registrierung fehlgeschlagen:', e.message)
-      );
+      void registerGuildCommands(ctx, guild.id).catch((e) => {
+        ctx.commandsRegistered = false;
+        logger.warn('[security-bot] guildCreate Command-Registrierung fehlgeschlagen:', e.message);
+      });
     });
 
     client.on('guildDelete', (guild) => {
@@ -142,6 +176,7 @@ module.exports = {
     client.destroy = () => {
       try {
         if (schedulerStop) schedulerStop();
+        if (commandRepairTimer) clearInterval(commandRepairTimer);
       } catch {}
       void store.flush({ force: true }).catch(() => {});
       store.stopBackupInterval();
