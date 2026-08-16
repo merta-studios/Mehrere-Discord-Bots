@@ -1,15 +1,15 @@
 # 🛡️ Security Bot
 
-Ein moderner, leistungsstarker Sicherheits- und Moderations-Bot für Discord mit direkter Anbindung an die **OpenAI Moderation API** (`omni-moderation-latest`).
+Ein moderner, leistungsstarker Sicherheits- und Moderations-Bot für Discord mit direkter Anbindung an die **Mistral Moderation API** (`mistral-moderation-latest`).
 
-Der Bot überwacht vollautomatisch alle Text- und Bildnachrichten von Nicht-Administratoren in Echtzeit, straft Regelverstöße gemäß anpassbaren Eskalationsstufen ab und schützt deinen Server vor toxischen Inhalten, Hassrede, Belästigung, Gewalt, NSFW und Selbstverletzung.
+Der Bot überwacht vollautomatisch alle Textnachrichten von Nicht-Administratoren in Echtzeit, straft Regelverstöße gemäß anpassbaren Eskalationsstufen ab und schützt deinen Server vor Hass und Diskriminierung, Gewalt und Bedrohungen, gefährlichen bzw. kriminellen Inhalten, NSFW und Selbstverletzung.
 
 ---
 
 ## 🌟 Highlights
 
-- **OpenAI Moderation API**: Modernste KI-Erkennung für Text und Bilder (`omni-moderation-latest`).
-- **Resilienz & Silent Fallback**: Bei fehlendem API-Key oder OpenAI-Fehlern/Rate-Limits arbeitet der Bot geräuschlos weiter ohne den Chat zu stören.
+- **Mistral Moderation API**: Modernste mehrsprachige KI-Erkennung für Text (`mistral-moderation-latest`).
+- **Resilienz & Silent Fallback**: Bei fehlendem API-Key oder Mistral-Fehlern/Rate-Limits arbeitet der Bot geräuschlos weiter ohne den Chat zu stören.
 - **Admin-Bypass**: Mitglieder mit Administrator-Berechtigungen werden automatisch ignoriert.
 - **10 Sprachen**: Vollständig lokalisiert auf Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch, Japanisch, Koreanisch, Chinesisch und Italienisch.
 - **Turso DB & RAM-First**: Nutzt dieselbe Turso-Datenbank wie der XP-Bot mit Dirty-Tracking, periodischem Backup und lokalem Datei-Fallback.
@@ -22,14 +22,14 @@ Der Bot überwacht vollautomatisch alle Text- und Bildnachrichten von Nicht-Admi
 
 | Befehl | Berechtigung | Beschreibung |
 |---|---|---|
-| `/set_api_key` | **Admins** | Öffnet ein Modal-Formular zur sicheren Eingabe des OpenAI API-Keys für diesen Server. |
+| `/set_api_key` | **Admins** | Öffnet ein Modal-Formular zur sicheren Eingabe des Mistral API-Keys für diesen Server. |
 | `/set_language` | **Admins** | Wählt eine von 10 Sprachen aus, die dauerhaft für den Server gilt. |
 | `/set_sensitivity` | **Admins** | Ändert das Schutzlevel (`Strikt` 30%, `Ausgewogen` 50%, `Tolerant` 75%). |
 | `/configure_rules` | **Admins** | Interaktive Übersicht aller Moderationskategorien, Schwellenwerte und Auto-Delete-Optionen. |
 | `/set_warnings` | **Admins** | Konfiguriert die maximale Anzahl an Verwarnungen, Verfallsdauer (in Tagen) und Aktionen pro Verwarnungsstufe. |
 | `/status` | **Alle** | Zeigt dem Nutzer seine eigenen aktiven Verwarnungen, Timeout-Status und Historie an. |
 | `/manage_user [user]` | **Admins** | Überprüft den Status beliebiger Nutzer, hebt Timeouts auf oder löscht einzelne Verwarnungen (z. B. bei Fehlalarmen). |
-| `/test_text [text]` | **Admins** | Testet einen Text gegen die OpenAI Moderation API und liefert einen detaillierten Analysebericht mit Score-Balken. |
+| `/test_text [text]` | **Admins** | Testet einen Text gegen die Mistral Moderation API und liefert einen detaillierten Analysebericht mit Score-Balken. |
 | `/admin_set_bot_profile` | **Admins** | Ändert das Server-Profilbild des Bots (`Standard`, `Server-Icon` oder `Server-Owner`). |
 | `/help` | **Alle** | Listet alle Befehle mit klickbaren Mentions und Erklärungen in der Serversprache auf. |
 | `/adminpanel` | **Bot-Owner** | Owner-Verwaltungsübersicht aller Server im Privatchat (DM) des Bots. |
@@ -66,6 +66,21 @@ Command-Namen und IDs zurückgegeben hat, werden alte Guild-Overrides entfernt.
 Eine gültige `SECURITY_BOT_GUILD_ID`, in der der Bot Mitglied ist, behält
 optional einen sofort sichtbaren Guild-Satz (ohne `/adminpanel`). Ein Fehler bei
 diesem optionalen PUT beeinträchtigt den globalen Satz nicht.
+
+### Mistral API-Key einrichten
+
+1. Auf [console.mistral.ai](https://console.mistral.ai/) ein kostenloses Konto anlegen.
+2. Im Bereich für Abrechnung/Pläne den kostenlosen **Experiment**-Plan aktivieren.
+   Dafür werden keine Zahlungsdaten benötigt.
+3. Unter **API Keys** einen Schlüssel erzeugen.
+4. Auf jedem Discord-Server einmal `/set_api_key` ausführen und den Schlüssel
+   eintragen. Der Bot prüft ihn direkt mit `mistral-moderation-latest`.
+
+> **Hinweis zur Migration:** Bereits gespeicherte OpenAI-Schlüssel werden bewusst
+> nicht übernommen, weil sie bei Mistral ungültig sind. Nach dem Deployment muss
+> daher pro Server ein Mistral-Schlüssel eingerichtet werden. Mistrals dedizierter
+> Moderations-Endpunkt analysiert Text. Reine Bildnachrichten werden ignoriert;
+> bei Nachrichten mit Text und Bild wird ausschließlich der Text geprüft.
 
 Der Bot muss mit den OAuth2-Scopes **`bot` und `applications.commands`**
 installiert sein. Ob eine bereits bestehende Guild-Installation den Scope

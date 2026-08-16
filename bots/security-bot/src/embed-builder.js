@@ -385,7 +385,7 @@ function buildSensitivityContainer({ lang = 'de', guildConfig }) {
     `- **Ausgewogen (Standard):** ${t('preset_balanced', lang)}`,
     `- **Tolerant:** ${t('preset_relaxed', lang)}`,
     '',
-    `API Key: \`${maskApiKey(guildConfig.openaiApiKey)}\``,
+    `API Key: \`${maskApiKey(guildConfig.mistralApiKey)}\``,
   ];
 
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));

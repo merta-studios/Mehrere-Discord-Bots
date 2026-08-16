@@ -1,11 +1,15 @@
 /**
  * Security Store – RAM-first mit Turso Persistenz und Datei-Fallback.
- * Speichert Serverkonfigurationen, OpenAI API-Keys, Verwarnungen und Verstöße.
+ * Speichert Serverkonfigurationen, Mistral API-Keys, Verwarnungen und Verstöße.
  */
 
 const fs = require('fs');
 const path = require('path');
-const { getDefaultGuildConfig, normalizeGuildConfig } = require('./rules');
+const {
+  getDefaultGuildConfig,
+  normalizeGuildConfig,
+  normalizeModerationCategory,
+} = require('./rules');
 
 function parseJsonCol(val, fallback = null) {
   if (val == null || val === '') return fallback;
@@ -72,7 +76,7 @@ function createSecurityStore({ logger, env } = {}) {
     if (!db) return;
     await db.execute(`CREATE TABLE IF NOT EXISTS security_guild_configs (
       guild_id TEXT PRIMARY KEY,
-      openai_api_key TEXT,
+      mistral_api_key TEXT,
       lang TEXT NOT NULL,
       sensitivity TEXT,
       category_thresholds TEXT,
@@ -85,6 +89,15 @@ function createSecurityStore({ logger, env } = {}) {
       created_at INTEGER,
       updated_at INTEGER
     );`);
+
+    // Bestehende Installationen besitzen noch die frühere openai_api_key-
+    // Spalte. Der neue Mistral-Schlüssel bekommt eine eigene Spalte; der alte
+    // Schlüssel wird absichtlich nicht migriert, da er bei Mistral ungültig ist.
+    try {
+      await db.execute('ALTER TABLE security_guild_configs ADD COLUMN mistral_api_key TEXT');
+    } catch (e) {
+      if (!/duplicate column|already exists/i.test(String(e?.message || e))) throw e;
+    }
 
     await db.execute(`CREATE TABLE IF NOT EXISTS security_violations (
       id TEXT PRIMARY KEY,
@@ -119,7 +132,7 @@ function createSecurityStore({ logger, env } = {}) {
     for (const row of gRes.rows) {
       const cfg = normalizeGuildConfig({
         guildId: row.guild_id,
-        openaiApiKey: row.openai_api_key || null,
+        mistralApiKey: row.mistral_api_key || null,
         lang: row.lang || 'de',
         sensitivity: row.sensitivity || 'balanced',
         categoryThresholds: parseJsonCol(row.category_thresholds, null),
@@ -141,8 +154,10 @@ function createSecurityStore({ logger, env } = {}) {
         id: row.id,
         guildId: row.guild_id,
         userId: row.user_id,
-        categories: parseJsonCol(row.categories, [row.highest_category]),
-        highestCategory: row.highest_category,
+        categories: [...new Set(
+          parseJsonCol(row.categories, [row.highest_category]).map(normalizeModerationCategory)
+        )],
+        highestCategory: normalizeModerationCategory(row.highest_category),
         highestScore: Number(row.highest_score) || 0,
         contentSnippet: row.content_snippet || '',
         hasImage: Boolean(row.has_image),
@@ -197,7 +212,13 @@ function createSecurityStore({ logger, env } = {}) {
       }
       if (data.violations && typeof data.violations === 'object') {
         for (const [id, v] of Object.entries(data.violations)) {
-          if (v && typeof v === 'object') violations.set(String(id), { ...v });
+          if (v && typeof v === 'object') {
+            const highestCategory = normalizeModerationCategory(v.highestCategory);
+            const categories = Array.isArray(v.categories)
+              ? [...new Set(v.categories.map(normalizeModerationCategory))]
+              : [highestCategory];
+            violations.set(String(id), { ...v, categories, highestCategory });
+          }
         }
       }
       if (data.commandIds && typeof data.commandIds === 'object') {
@@ -277,12 +298,12 @@ function createSecurityStore({ logger, env } = {}) {
   }
 
   function getApiKey(guildId) {
-    return guilds.get(String(guildId))?.openaiApiKey || null;
+    return guilds.get(String(guildId))?.mistralApiKey || null;
   }
 
   function setApiKey(guildId, apiKey) {
     const cfg = ensureGuild(guildId);
-    cfg.openaiApiKey = apiKey ? String(apiKey).trim() : null;
+    cfg.mistralApiKey = apiKey ? String(apiKey).trim() : null;
     cfg.updatedAt = Date.now();
     dirtyGuilds.add(cfg.guildId);
   }
@@ -305,8 +326,11 @@ function createSecurityStore({ logger, env } = {}) {
       id: String(v.id),
       guildId: String(v.guildId),
       userId: String(v.userId),
-      categories: Array.isArray(v.categories) ? v.categories : [v.highestCategory || 'hate'],
-      highestCategory: String(v.highestCategory || 'hate'),
+      categories: [...new Set(
+        (Array.isArray(v.categories) ? v.categories : [v.highestCategory])
+          .map(normalizeModerationCategory)
+      )],
+      highestCategory: normalizeModerationCategory(v.highestCategory),
       highestScore: Number(v.highestScore) || 0,
       contentSnippet: String(v.contentSnippet || '').slice(0, 500),
       hasImage: Boolean(v.hasImage),
@@ -470,12 +494,12 @@ function createSecurityStore({ logger, env } = {}) {
           if (!g) continue;
           statements.push({
             sql: `INSERT INTO security_guild_configs (
-                    guild_id, openai_api_key, lang, sensitivity, category_thresholds,
+                    guild_id, mistral_api_key, lang, sensitivity, category_thresholds,
                     category_enabled, category_autodelete, warning_actions, max_warnings,
                     violation_expiry_days, default_autodelete, created_at, updated_at
                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id) DO UPDATE SET
-                    openai_api_key=excluded.openai_api_key,
+                    mistral_api_key=excluded.mistral_api_key,
                     lang=excluded.lang,
                     sensitivity=excluded.sensitivity,
                     category_thresholds=excluded.category_thresholds,
@@ -488,7 +512,7 @@ function createSecurityStore({ logger, env } = {}) {
                     updated_at=excluded.updated_at`,
             args: [
               g.guildId,
-              g.openaiApiKey || null,
+              g.mistralApiKey || null,
               g.lang || 'de',
               g.sensitivity || 'balanced',
               JSON.stringify(g.categoryThresholds || {}),

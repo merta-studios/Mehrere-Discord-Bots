@@ -1,6 +1,6 @@
 /**
- * Tests für den Security-Bot (OpenAI Moderation, Regeln, Persistenz, Commands & UI).
- * Läuft komplett ohne externe Discord- oder OpenAI-Verbindung.
+ * Tests für den Security-Bot (Mistral Moderation, Regeln, Persistenz, Commands & UI).
+ * Läuft komplett ohne externe Discord- oder Mistral-Verbindung.
  */
 
 const { test } = require('node:test');
@@ -17,11 +17,12 @@ const {
   getActionSeconds,
   getDefaultGuildConfig,
   normalizeGuildConfig,
+  normalizeModerationCategory,
   maskApiKey,
   progressBar,
 } = require('../bots/security-bot/src/rules');
 const { createSecurityStore } = require('../bots/security-bot/src/store');
-const { evaluateModerationResult, callOpenAIModeration, handleMessageModeration } = require('../bots/security-bot/src/moderation');
+const { evaluateModerationResult, callMistralModeration, handleMessageModeration } = require('../bots/security-bot/src/moderation');
 const {
   smallContainer,
   buildStatusContainer,
@@ -133,7 +134,13 @@ test('Security Bot: 10 Sprachen & Übersetzungstexte', () => {
 });
 
 test('Security Bot: Regeln, Schwellenwerte & Eskalationsstufen', () => {
-  assert.equal(CATEGORIES.length, 13);
+  assert.deepEqual(CATEGORIES, [
+    'sexual',
+    'hate_and_discrimination',
+    'violence_and_threats',
+    'dangerous_and_criminal_content',
+    'selfharm',
+  ]);
   assert.equal(PRESET_THRESHOLDS.strict, 0.30);
   assert.equal(PRESET_THRESHOLDS.balanced, 0.50);
   assert.equal(PRESET_THRESHOLDS.relaxed, 0.75);
@@ -163,8 +170,19 @@ test('Security Bot: Regeln, Schwellenwerte & Eskalationsstufen', () => {
   assert.equal(getActionSeconds('timeout_600s'), 600);
   assert.equal(getActionSeconds('timeout_86400s'), 86400);
 
-  assert.equal(maskApiKey('sk-proj-1234567890abcdef'), 'sk-proj...cdef');
+  assert.equal(maskApiKey('mistral-1234567890abcdef'), 'mistral...cdef');
   assert.equal(maskApiKey(''), '—');
+
+  const migrated = normalizeGuildConfig({
+    guildId: 'legacy',
+    openaiApiKey: 'must-not-be-reused',
+    categoryThresholds: { hate: 0.1 },
+  });
+  assert.equal(migrated.mistralApiKey, null);
+  assert.equal(Object.hasOwn(migrated, 'openaiApiKey'), false);
+  assert.deepEqual(Object.keys(migrated.categoryThresholds), CATEGORIES);
+  assert.equal(normalizeModerationCategory('harassment'), 'hate_and_discrimination');
+  assert.equal(normalizeModerationCategory('self-harm/intent'), 'selfharm');
 });
 
 test('Security Bot: Store CRUD & RAM-first Verhaltensweisen', async () => {
@@ -179,8 +197,8 @@ test('Security Bot: Store CRUD & RAM-first Verhaltensweisen', async () => {
   assert.equal(g1.lang, 'de');
   assert.equal(g1.sensitivity, 'balanced');
 
-  store.setApiKey('guild_123', 'sk-test-key-123');
-  assert.equal(store.getApiKey('guild_123'), 'sk-test-key-123');
+  store.setApiKey('guild_123', 'mistral-test-key-123');
+  assert.equal(store.getApiKey('guild_123'), 'mistral-test-key-123');
 
   store.setLanguage('guild_123', 'en');
   assert.equal(store.getLanguage('guild_123'), 'en');
@@ -190,7 +208,7 @@ test('Security Bot: Store CRUD & RAM-first Verhaltensweisen', async () => {
     id: 'v_test_1',
     guildId: 'guild_123',
     userId: 'user_456',
-    highestCategory: 'hate',
+    highestCategory: 'hate_and_discrimination',
     highestScore: 0.95,
     contentSnippet: 'Offensive message',
     actionTaken: 'warn',
@@ -204,7 +222,7 @@ test('Security Bot: Store CRUD & RAM-first Verhaltensweisen', async () => {
 
   const active = store.getViolations('guild_123', 'user_456', { activeOnly: true });
   assert.equal(active.length, 1);
-  assert.equal(active[0].highestCategory, 'hate');
+  assert.equal(active[0].highestCategory, 'hate_and_discrimination');
 
   // Einzelnen Verstoß löschen (Fehlalarm)
   const delOk = store.deleteViolation('v_test_1', { deletedBy: 'admin_999' });
@@ -222,7 +240,7 @@ test('Security Bot: Store CRUD & RAM-first Verhaltensweisen', async () => {
     id: 'v_test_2',
     guildId: 'guild_123',
     userId: 'user_456',
-    highestCategory: 'harassment',
+    highestCategory: 'hate_and_discrimination',
     highestScore: 0.85,
     actionTaken: 'timeout_600s',
     timeoutSeconds: 600,
@@ -245,24 +263,24 @@ test('Security Bot: Store CRUD & RAM-first Verhaltensweisen', async () => {
   assert.deepEqual(store.getGuildCommandIds('guild_123'), { set_api_key: '333' });
 });
 
-test('Security Bot: Moderations-Auswertung (OpenAI Response -> Regelwerk)', () => {
+test('Security Bot: Moderations-Auswertung (Mistral Response -> Regelwerk)', () => {
   const mockCleanResponse = {
     results: [
       {
         flagged: false,
         categories: {
-          hate: false,
-          harassment: false,
-          violence: false,
           sexual: false,
-          'self-harm': false,
+          hate_and_discrimination: false,
+          violence_and_threats: false,
+          dangerous_and_criminal_content: false,
+          selfharm: false,
         },
         category_scores: {
-          hate: 0.001,
-          harassment: 0.02,
-          violence: 0.005,
           sexual: 0.0001,
-          'self-harm': 0.00001,
+          hate_and_discrimination: 0.02,
+          violence_and_threats: 0.005,
+          dangerous_and_criminal_content: 0.001,
+          selfharm: 0.00001,
         },
       },
     ],
@@ -281,18 +299,18 @@ test('Security Bot: Moderations-Auswertung (OpenAI Response -> Regelwerk)', () =
       {
         flagged: true,
         categories: {
-          hate: true,
-          harassment: true,
-          violence: false,
           sexual: false,
-          'self-harm': false,
+          hate_and_discrimination: true,
+          violence_and_threats: true,
+          dangerous_and_criminal_content: false,
+          selfharm: false,
         },
         category_scores: {
-          hate: 0.88,
-          harassment: 0.72,
-          violence: 0.05,
           sexual: 0.001,
-          'self-harm': 0.0001,
+          hate_and_discrimination: 0.88,
+          violence_and_threats: 0.72,
+          dangerous_and_criminal_content: 0.05,
+          selfharm: 0.0001,
         },
       },
     ],
@@ -303,18 +321,18 @@ test('Security Bot: Moderations-Auswertung (OpenAI Response -> Regelwerk)', () =
     guildConfig: getDefaultGuildConfig('g1'),
   });
   assert.equal(violEval.violated, true);
-  assert.equal(violEval.highestCategory, 'hate');
+  assert.equal(violEval.highestCategory, 'hate_and_discrimination');
   assert.equal(violEval.highestScore, 0.88);
   assert.equal(violEval.shouldAutoDelete, true);
-  assert.deepEqual(violEval.violatedCategories, ['hate', 'harassment']);
+  assert.deepEqual(violEval.violatedCategories, ['hate_and_discrimination', 'violence_and_threats']);
 
   // Schutzlevel Strikt schlägt auch bei Score 0.35 an
   const mockSubtleHate = {
     results: [
       {
         flagged: false,
-        categories: { hate: false },
-        category_scores: { hate: 0.35 },
+        categories: { hate_and_discrimination: false },
+        category_scores: { hate_and_discrimination: 0.35 },
       },
     ],
   };
@@ -328,13 +346,59 @@ test('Security Bot: Moderations-Auswertung (OpenAI Response -> Regelwerk)', () =
   const strictConfig = {
     ...getDefaultGuildConfig('g1'),
     sensitivity: 'strict',
-    categoryThresholds: { hate: 0.30 },
+    categoryThresholds: { hate_and_discrimination: 0.30 },
   };
   const strictEval = evaluateModerationResult({
     data: mockSubtleHate,
     guildConfig: strictConfig,
   });
   assert.equal(strictEval.violated, true, 'Bei Strict (30%) Verstoß bei 35%');
+});
+
+test('Security Bot: Mistral API Request & begrenzter 429-Retry', async () => {
+  const calls = [];
+  const sleeps = [];
+  const fetchFn = async (url, options) => {
+    calls.push({ url, options });
+    if (calls.length === 1) {
+      return {
+        ok: false,
+        status: 429,
+        headers: { get: (name) => (name === 'retry-after' ? '0.01' : null) },
+        text: async () => 'rate limited',
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ results: [{ categories: {}, category_scores: {} }] }),
+    };
+  };
+
+  const result = await callMistralModeration({
+    apiKey: 'mistral-secret-key',
+    text: '  Test connection  ',
+    fetchFn,
+    sleepFn: async (ms) => sleeps.push(ms),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2, '429 wird genau einmal wiederholt, bevor der Mock erfolgreich ist');
+  assert.deepEqual(sleeps, [10]);
+  assert.equal(calls[0].url, 'https://api.mistral.ai/v1/moderations');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer mistral-secret-key');
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    model: 'mistral-moderation-latest',
+    input: 'Test connection',
+  });
+
+  assert.deepEqual(await callMistralModeration({ text: 'x' }), {
+    ok: false,
+    error: 'missing_api_key',
+  });
+  assert.deepEqual(await callMistralModeration({ apiKey: 'key', text: '  ' }), {
+    ok: false,
+    error: 'empty_input',
+  });
 });
 
 test('Security Bot: Nachrichten-Moderation (Admin-Bypass, Silent Failure & Aktion)', async () => {
@@ -380,7 +444,7 @@ test('Security Bot: Nachrichten-Moderation (Admin-Bypass, Silent Failure & Aktio
   assert.equal(store.getAllViolationsForGuild('g1').length, 0);
 
   // 4. Mit API-Key & Mock-Call
-  store.setApiKey('g1', 'sk-valid-key');
+  store.setApiKey('g1', 'mistral-valid-key');
   let deletedCalled = false;
   let sentPayload = null;
   let timeoutCalled = false;
@@ -420,7 +484,7 @@ test('Security Bot: Nachrichten-Moderation (Admin-Bypass, Silent Failure & Aktio
     },
   };
 
-  // Mock globalThis.fetch für OpenAI
+  // Mock globalThis.fetch für Mistral
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, opts) => {
     return {
@@ -429,8 +493,8 @@ test('Security Bot: Nachrichten-Moderation (Admin-Bypass, Silent Failure & Aktio
         results: [
           {
             flagged: true,
-            categories: { harassment: true },
-            category_scores: { harassment: 0.92 },
+            categories: { hate_and_discrimination: true },
+            category_scores: { hate_and_discrimination: 0.92 },
           },
         ],
       }),
@@ -445,7 +509,7 @@ test('Security Bot: Nachrichten-Moderation (Admin-Bypass, Silent Failure & Aktio
 
     const recorded = store.getViolations('g1', 'user1', { activeOnly: true });
     assert.equal(recorded.length, 1);
-    assert.equal(recorded[0].highestCategory, 'harassment');
+    assert.equal(recorded[0].highestCategory, 'hate_and_discrimination');
     assert.equal(recorded[0].warningNumber, 1);
   } finally {
     globalThis.fetch = originalFetch;
@@ -467,7 +531,7 @@ test('Security Bot: UI-Container Builder & Components V2', () => {
     activeViolations: [
       {
         id: 'v_1',
-        highestCategory: 'hate',
+        highestCategory: 'hate_and_discrimination',
         actionTaken: 'warn',
         expiresAt: Date.now() + 100000,
       },
@@ -482,12 +546,12 @@ test('Security Bot: UI-Container Builder & Components V2', () => {
     text: 'Test message',
     evalRes: {
       violated: true,
-      highestCategory: 'violence',
+      highestCategory: 'violence_and_threats',
       highestScore: 0.85,
       shouldAutoDelete: true,
       details: [
-        { category: 'violence', score: 0.85, threshold: 0.50, enabled: true, violation: true },
-        { category: 'hate', score: 0.05, threshold: 0.50, enabled: true, violation: false },
+        { category: 'violence_and_threats', score: 0.85, threshold: 0.50, enabled: true, violation: true },
+        { category: 'hate_and_discrimination', score: 0.05, threshold: 0.50, enabled: true, violation: false },
       ],
     },
     guildConfig: getDefaultGuildConfig('g1'),
@@ -503,7 +567,7 @@ test('Security Bot: UI-Container Builder & Components V2', () => {
   const alertContainer = buildViolationAlertContainer({
     lang: 'de',
     userId: '123456',
-    category: 'hate',
+    category: 'hate_and_discrimination',
     warningNumber: 2,
     maxWarnings: 3,
     action: 'timeout_600s',
@@ -534,7 +598,7 @@ test('Security Bot: Interaktions- & Modal-Handling', async () => {
     user: { id: 'admin1' },
     memberPermissions: { has: (p) => p === PermissionFlagsBits.Administrator },
     fields: {
-      getTextInputValue: (id) => (id === 'sec_input_api_key' ? 'sk-new-test-key' : ''),
+      getTextInputValue: (id) => (id === 'sec_input_api_key' ? 'mistral-new-test-key' : ''),
     },
     deferReply: async () => {},
     editReply: async (p) => { repliedPayload = p; },
@@ -545,7 +609,7 @@ test('Security Bot: Interaktions- & Modal-Handling', async () => {
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ results: [] }) });
   try {
     await handleInteraction(ctx, mockModalApiKey);
-    assert.equal(store.getApiKey('g1'), 'sk-new-test-key');
+    assert.equal(store.getApiKey('g1'), 'mistral-new-test-key');
     assert.ok(repliedPayload);
   } finally {
     globalThis.fetch = origFetch;
@@ -560,6 +624,24 @@ test('Security Bot: Interaktions- & Modal-Handling', async () => {
   };
   await handleInteraction(ctx, mockModalRemoveKey);
   assert.equal(store.getApiKey('g1'), null);
+
+  // Ein ungültiger Mistral-Key darf einen bestehenden gültigen Key nicht ersetzen.
+  store.setApiKey('g1', 'existing-valid-key');
+  const mockModalInvalidKey = {
+    ...mockModalApiKey,
+    fields: { getTextInputValue: () => 'invalid-key' },
+  };
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 401,
+    text: async () => 'unauthorized',
+  });
+  try {
+    await handleInteraction(ctx, mockModalInvalidKey);
+    assert.equal(store.getApiKey('g1'), 'existing-valid-key');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 
   // 3. Modal: sec_modal_warnings
   const mockModalWarnings = {
@@ -598,14 +680,14 @@ test('Security Bot: Interaktions- & Modal-Handling', async () => {
   };
   await handleInteraction(ctx, mockBtnStrict);
   assert.equal(store.getGuild('g1').sensitivity, 'strict');
-  assert.equal(store.getGuild('g1').categoryThresholds.hate, 0.30);
+  assert.equal(store.getGuild('g1').categoryThresholds.hate_and_discrimination, 0.30);
 
   // 6. SelectMenu: sec_del_viol_<userId>
   store.addViolation({
     id: 'v_to_delete',
     guildId: 'g1',
     userId: 'u_target',
-    highestCategory: 'violence',
+    highestCategory: 'violence_and_threats',
     highestScore: 0.9,
     actionTaken: 'warn',
     createdAt: Date.now(),
