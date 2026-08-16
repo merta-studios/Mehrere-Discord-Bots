@@ -35,10 +35,17 @@ services:
         sync: false
       - key: XP_BOT_GUILD_ID
         sync: false
-      # Turso (Datenbank des XP-Bots)
+      # Turso (Datenbank des XP-Bots & Security-Bots)
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN
+        sync: false
+      # --- Sicherheits-Bot 🛡️ ---
+      - key: SECURITY_BOT_TOKEN
+        sync: false
+      - key: SECURITY_BOT_OWNER_ID
+        sync: false
+      - key: SECURITY_BOT_GUILD_ID
         sync: false
       # --- Self-Roles-Bot 🎭 (ohne Datenbank) ---
       - key: SELF_ROLES_BOT_TOKEN
