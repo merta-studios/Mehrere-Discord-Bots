@@ -34,7 +34,9 @@ function buildAnnouncement({ lang, userId, res }) {
   });
   return {
     componentsPayload: componentsV2Payload([container]),
-    textPayload: { content: isLevelUp ? `## ${text}` : text },
+    // Level-Up UND Level-Down nutzen das "## "-Heading (Markdown Lv2) – exakt
+    // dieselbe Schriftgröße. So fällt ein Abstieg optisch nicht kleiner aus.
+    textPayload: { content: `## ${text}` },
   };
 }
 
@@ -80,15 +82,18 @@ async function sendLevelAnnouncement({ ctx, guild, cfg, userId, res, sourceMsg =
   const textTriggeredLevelUp = Boolean(res?.leveledUp) && source === 'text';
 
   // 1) Ein Chat-Level-Up gehört als Antwort direkt unter die auslösende Nachricht.
-  if (textTriggeredLevelUp && sourceMsg && typeof sourceMsg.reply === 'function') {
+  // Sofern es nicht auf den Level-Chat beschränkt ist (only_level_chat), darf die
+  // Nachricht sonst in jedem Textkanal erscheinen, in dem geschrieben wurde.
+  if (textTriggeredLevelUp && !cfg?.levelMessagesMainOnly && sourceMsg && typeof sourceMsg.reply === 'function') {
     if (await sendWithTextFallback((payload) => sourceMsg.reply(payload), payloads, errors, 'source-reply')) {
       return { sent: true, destination: 'source-reply', errors };
     }
   }
 
   // Falls Replys im Kanal verboten sind oder die Message-Referenz scheitert,
-  // wenigstens normal in denselben Textkanal schreiben.
-  if (textTriggeredLevelUp && isSendableTextChannel(sourceMsg?.channel)) {
+  // wenigstens normal in denselben Textkanal schreiben. Auch hier nur, wenn
+  // die Nachricht nicht auf den Level-Chat beschränkt ist.
+  if (textTriggeredLevelUp && !cfg?.levelMessagesMainOnly && isSendableTextChannel(sourceMsg?.channel)) {
     if (await sendWithTextFallback((payload) => sourceMsg.channel.send(payload), payloads, errors, 'source-channel')) {
       return { sent: true, destination: 'source-channel', errors };
     }

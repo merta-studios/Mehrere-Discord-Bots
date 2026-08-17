@@ -272,10 +272,31 @@ module.exports = {
     // ---------------- Message XP ----------------
     client.on('messageCreate', async (msg) => {
       try {
+        if (!msg.guild) return;
+
+        // Kombiniert: Der Level-Chat ist gleichzeitig der Leaderboard-Kanal.
+        // Jede FREMD-Nachricht (andere Nutzer, andere Bots, Webhooks) in diesem
+        // Kanal schiebt das Leaderboard ans Ende, damit es die neueste Nachricht
+        // bleibt. Die EIGENEN Bot-Nachrichten (Level/Board/Bonus) werden
+        // bewusst ignoriert, sonst entstünde eine Endlosschleife.
+        const isOwnBotMessage = msg.author?.id === ctx.client.user?.id;
+        if (!isOwnBotMessage && !msg.system) {
+          const cfg = store.getGuild(msg.guild.id);
+          if (
+            cfg &&
+            cfg.mainChannelId &&
+            cfg.leaderboardChannelId &&
+            String(cfg.mainChannelId) === String(cfg.leaderboardChannelId) &&
+            String(msg.channel.id) === String(cfg.leaderboardChannelId)
+          ) {
+            const { repinLeaderboard } = require('./src/scheduler');
+            void repinLeaderboard(ctx, cfg, msg.guild, { throttle: true }).catch(() => {});
+          }
+        }
+
         // Bots UND Webhooks bekommen nichts: kein XP, kein Level, kein Nickname, keine Boni
         if (msg.author?.bot) return;
         if (msg.webhookId) return;
-        if (!msg.guild) return;
         if (msg.system) return;
 
         const cfg = store.getGuild(msg.guild.id);
@@ -406,8 +427,17 @@ module.exports = {
         syncLevelRolesForUser({ ctx, guild, userId: user.userId, level: res.level }),
       ];
       if (cfg.leaderboardChannelId) {
-        const { maybeRefreshLeaderboard } = require('./src/scheduler');
-        jobs.push(maybeRefreshLeaderboard(ctx, cfg, guild));
+        // Kombiniert: Level-Chat == Leaderboard-Kanal. Nach jeder Level-
+        // Veränderung wird das Board NEU gesendet (nicht editiert), damit es
+        // die neueste Nachricht im Kanal bleibt. Ansonsten der bekannte
+        // 10-Minuten-Edit-Refresh.
+        if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
+          const { repinLeaderboard } = require('./src/scheduler');
+          jobs.push(repinLeaderboard(ctx, cfg, guild, { throttle: false }));
+        } else {
+          const { maybeRefreshLeaderboard } = require('./src/scheduler');
+          jobs.push(maybeRefreshLeaderboard(ctx, cfg, guild));
+        }
       }
 
       const settled = await Promise.allSettled(jobs);

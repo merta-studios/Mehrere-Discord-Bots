@@ -12,7 +12,7 @@ const { decodeHidden } = require('./zw-marker');
 const LEADERBOARD_MARKER = 'xp_leader::v1::';
 
 function createXpStore({ logger, env } = {}) {
-  const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, lang, leaderboardMessageId, lastDailyDecay, nicknamesEnabled, inactiveRoleEnabled, inactiveRoleDays, inactiveRoleId}
+    const guilds = new Map(); // guildId -> {guildId, leaderboardChannelId, mainChannelId, levelMessagesMainOnly, lang, leaderboardMessageId, lastDailyDecay, nicknamesEnabled, inactiveRoleEnabled, inactiveRoleDays, inactiveRoleId}
   const users = new Map(); // guildId -> Map(userId -> {guildId,userId,level,xp,lastXpGain})
   // Invite-XP: Snapshot aller Invites (code -> uses) pro Server + Leave-Log für
   // den 7-Tage-Rejoin-Schutz. Beides MUSS das Löschen von User-Daten überleben
@@ -104,6 +104,7 @@ function createXpStore({ logger, env } = {}) {
       'inactive_role_enabled INTEGER',
       'inactive_role_days INTEGER',
       'inactive_role_id TEXT',
+      'level_messages_main_only INTEGER',
     ]) {
       try { await db.execute(`ALTER TABLE guild_configs ADD COLUMN ${col}`); } catch {}
     }
@@ -167,6 +168,11 @@ function createXpStore({ logger, env } = {}) {
     return value === true || value === 1 || value === '1' || value === 'true';
   }
 
+  /** Standard: aus. Level-Nachrichten dürfen per Default in jedem Kanal erscheinen. */
+  function parseLevelMessagesMainOnly(value) {
+    return value === true || value === 1 || value === '1' || value === 'true';
+  }
+
   function parseInactiveRoleDays(value) {
     const n = Math.floor(Number(value));
     if (!Number.isFinite(n) || n < 1) return null;
@@ -197,6 +203,7 @@ function createXpStore({ logger, env } = {}) {
         inactiveRoleEnabled: parseInactiveRoleEnabled(row.inactive_role_enabled),
         inactiveRoleDays: parseInactiveRoleDays(row.inactive_role_days),
         inactiveRoleId: row.inactive_role_id || null,
+        levelMessagesMainOnly: parseLevelMessagesMainOnly(row.level_messages_main_only),
       });
     }
     const uRes = await db.execute('SELECT * FROM user_levels');
@@ -606,8 +613,8 @@ function createXpStore({ logger, env } = {}) {
           const g = guilds.get(gid);
           if (!g) continue;
           statements.push({
-            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids, bonus_state, last_leaderboard_refresh, last_hourly_leaderboard_refresh, nicknames_enabled, inactive_role_enabled, inactive_role_days, inactive_role_id)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sql: `INSERT INTO guild_configs (guild_id, leaderboard_channel_id, main_channel_id, lang, leaderboard_message_id, last_daily_decay, level_role_template, level_role_levels, level_role_ids, bonus_state, last_leaderboard_refresh, last_hourly_leaderboard_refresh, nicknames_enabled, inactive_role_enabled, inactive_role_days, inactive_role_id, level_messages_main_only)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id) DO UPDATE SET
                     leaderboard_channel_id=excluded.leaderboard_channel_id,
                     main_channel_id=excluded.main_channel_id,
@@ -623,7 +630,8 @@ function createXpStore({ logger, env } = {}) {
                     nicknames_enabled=excluded.nicknames_enabled,
                     inactive_role_enabled=excluded.inactive_role_enabled,
                     inactive_role_days=excluded.inactive_role_days,
-                    inactive_role_id=excluded.inactive_role_id`,
+                    inactive_role_id=excluded.inactive_role_id,
+                    level_messages_main_only=excluded.level_messages_main_only`,
             args: [
               g.guildId,
               g.leaderboardChannelId || '',
@@ -641,6 +649,7 @@ function createXpStore({ logger, env } = {}) {
               g.inactiveRoleEnabled ? 1 : 0,
               g.inactiveRoleDays || null,
               g.inactiveRoleId || null,
+              g.levelMessagesMainOnly === true ? 1 : 0,
             ]
           });
         }

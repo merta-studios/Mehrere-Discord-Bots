@@ -68,8 +68,9 @@ function defineCommands() {
       .setDescriptionLocalizations(pick('helpSetup'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addChannelOption(o=>o.setName('leaderboard').setDescription('Kanal für das wöchentliche Leaderboard').setDescriptionLocalizations(pick('setupLeaderDesc')).setRequired(true).addChannelTypes(ChannelType.GuildText))
-      .addChannelOption(o=>o.setName('mainchat').setDescription('Haupt-Chat für Level-Ups').setDescriptionLocalizations(pick('setupMainDesc')).setRequired(true).addChannelTypes(ChannelType.GuildText))
-      .addStringOption(o=>o.setName('language').setDescription('Sprache').setDescriptionLocalizations(pick('setupLangDesc')).setRequired(true).addChoices(...languageChoices)),
+      .addChannelOption(o=>o.setName('levelchat').setDescription('Kanal für Level-Veränderungen').setDescriptionLocalizations(pick('setupMainDesc')).setRequired(true).addChannelTypes(ChannelType.GuildText))
+      .addStringOption(o=>o.setName('language').setDescription('Sprache').setDescriptionLocalizations(pick('setupLangDesc')).setRequired(true).addChoices(...languageChoices))
+      .addBooleanOption(o=>o.setName('only_level_chat').setDescription('Level-Nachrichten nur hier? (Nein = auch andere Kanäle, Standard)').setDescriptionLocalizations(pick('setupLevelScopeDesc'))),
 
     new SlashCommandBuilder()
       .setName('rank')
@@ -506,7 +507,8 @@ async function setupCmd(ctx, interaction) {
   }
 
   const leader = interaction.options.getChannel('leaderboard');
-  const main = interaction.options.getChannel('mainchat');
+  const main = interaction.options.getChannel('levelchat');
+  const onlyLevelChat = interaction.options.getBoolean('only_level_chat') === true;
   if (!leader || leader.type !== ChannelType.GuildText) {
     return interaction.reply(componentsV2Payload([smallContainer(null, t('errChannelBad', lang))], { ephemeral: false }));
   }
@@ -558,6 +560,7 @@ async function setupCmd(ctx, interaction) {
     guildId: interaction.guild.id,
     leaderboardChannelId: leader.id,
     mainChannelId: main.id,
+    levelMessagesMainOnly: onlyLevelChat,
     lang,
     leaderboardMessageId: msg.id,
     lastDailyDecay: todayKeyForLang(lang),

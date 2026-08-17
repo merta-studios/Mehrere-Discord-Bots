@@ -151,7 +151,9 @@ function buildLevelUpEmbed({ lang, userId, level, xp }) {
 function buildLevelDownEmbed({ lang, userId, level, xp }) {
   const needed = xpNeeded(level);
   const desc = t('levelDown', lang, { user: `<@${userId}>`, level, xp, needed });
-  const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(desc));
+  // Exakt dieselbe Schriftgröße wie Level-Up: "## "-Heading (Markdown Lv2).
+  const content = `## ${desc}`;
+  const container = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(content));
   return container;
 }
 
