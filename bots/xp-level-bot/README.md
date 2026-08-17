@@ -38,11 +38,32 @@ Dieser Bot ist **1:1 so robust & krass designed wie der Birthday Bot**: gleiche 
 | `/sync_nicknames` | **Admin** | Geht **alle Mitglieder** des Servers durch und korrigiert Nicknames. **An:** fehlende/falsche Tags setzen. **Aus:** vorhandene Tags entfernen. Zeigt in der Command-Antwort einen **Ladebalken** (Discord-Thinking + Fortschritt). Nur nach `/setup`. |
 | `/set_inactive_role <mode> [inactive_days] [role]` | **Admin** | Inaktiv-Rolle nach N Tagen ohne XP. `mode:On` + Tage + Rolle aktiviert, `mode:Off` deaktiviert. Bei Nutzung werden **alle Mitglieder sofort abgeglichen** (mit Ladebalken). Nur nach `/setup`. |
 | `/ping_inactive_people <mode>` | **Admin** | Spricht **inaktive Mitglieder** an (nur nach `/setup` + Inaktiv-Rolle). **Main Channel:** Formular-Nachricht muss `{ROLEPING}` enthalten → wird durch die Inaktiv-Rollen-Mention ersetzt und in **den Kanal gesendet, in dem der Command benutzt wurde**. **Direct:** jedes Mitglied mit der Inaktiv-Rolle bekommt die Nachricht als **DM** (plain, kein Container) – der Command-Nutzer sieht nur für sich einen **Ladebalken** mit Erfolgen/Fehlschlägen (z. B. fremde DMs ausgeschaltet). Beispiel-Nachrichten sind im Formular vorbefüllt. |
-| `/start_giveaway <kanal> <dauer> <modus> <anzahl_gewinner>` | **Admin** | Erstellt das einzige gleichzeitig erlaubte Giveaway des Servers. Dauer relativ (`2d 4h`) oder als exaktes lokales Datum (`24.08.2026 18:30`), Modus **Meiste XP** oder **Zufall**, 1–10 Gewinner. Danach folgen Formular und privates Einstellungsmenü für Titel, Beschreibung, Bild, Banner, Gewinnertext, XP-Quellen, Zustellung und weitere Regeln. |
-| `/giveaway_admin <aktion> [nutzer] [platz] [seite]` | **Admin, ephemeral** | Interne Teilnehmerliste und Statusansicht. Beim Zufallsmodus können einzelne Gewinnerplätze vorbestimmt oder wieder freigegeben werden; unbelegte Plätze werden normal ausgelost. Der Command ist per Discord-Permissions nur für Administratoren sichtbar und alle Antworten sind geheim/ephemeral. |
-| `/help` | **Alle** | Container-Übersicht aller Commands (Setup, Rank, Level-Rollen, Update-Leaderboard, Toggle-/Sync-Nicknames, Set-Inactive-Role, Ping-Inactive-People, Help, Profile) – wie Birthday Bot. |
+| `/start_giveaway <kanal> <dauer> <modus> <anzahl_gewinner>` | **Admin** | Erstellt das einzige gleichzeitig erlaubte Giveaway des Servers. Dauer relativ (`2d 4h`) oder als exaktes lokales Datum (`24.08.2026 18:30`), Modus **Meiste XP** oder **Zufall**, 1–10 Gewinner. Danach folgen Formular und privates Einstellungsmenü für Titel, Beschreibung, Bild, Banner, Gewinnertext, XP-Quellen, Zustellung und weitere Regeln. Ein laufendes Giveaway kann jederzeit über `/giveaway_admin` vorzeitig beendet oder abgebrochen werden. |
+| `/giveaway_admin <aktion> [nutzer] [platz] [seite]` | **Admin, ephemeral** | Interne Teilnehmerliste und Statusansicht (inkl. Ende-Zeitpunkt). **Giveaway jetzt beenden** löst sofort aus: Gewinner werden gezogen, benachrichtigt, die öffentliche Nachricht wird als *Vorzeitig beendet* geschlossen. **Giveaway abbrechen** stoppt ohne Gewinner und ohne Benachrichtigung. Beides fragt über Buttons noch einmal nach, entschärft den Ende-Timer und gibt den Slot sofort für ein neues Giveaway frei. Beim Zufallsmodus können einzelne Gewinnerplätze vorbestimmt oder wieder freigegeben werden; unbelegte Plätze werden normal ausgelost. Nur für Administratoren sichtbar, alle Antworten ephemeral. |
+| `/help [thema]` | **Alle** | Hilfe in **drei umschaltbaren Seiten** (Select-Menü oder direkt per `thema`): **Alle Befehle erklärt** (Startseite – jeder Command mit klickbarer Mention, Zweck und **jeder Option im Klartext**, z. B. `only_level_chat`, `inactive_days`, `anzahl_gewinner`), **Überblick & XP-System** (Chat-, Medien-, Voice-, Bonus- und Invite-XP, Schwund, Leaderboard, Nicknames, Level-Rollen, Giveaways) und **Platzhalter erklärt** (siehe unten). Alles in allen 10 Sprachen. |
 | `/admin_set_bot_profile <image>` | **Admin** | Ändert **serverspezifisches** Bot-Avatar: `standard` (reset), `server` (Server-Icon), `owner` (Owner-Avatar) via `PATCH /guilds/{id}/members/@me` – kein 405! |
 | `/adminpanel` | **Nur Owner im DM** | Serverliste paginiert (5/Seite, 🔴 ohne Owner zuerst), Detail mit Owner, Member, XP-Status, Buttons `Einladung` (1h/1×) & `Verlassen` (Confirm). |
+
+---
+
+## 🔤 Platzhalter – was bedeutet was?
+
+Alle Platzhalter stehen in geschweiften Klammern, sind **case-insensitive** und werden beim Senden automatisch ersetzt. Unbekannte Platzhalter bleiben unverändert stehen. `/help thema:Platzhalter erklärt` zeigt dieselbe Liste im Discord.
+
+| Wo | Platzhalter | Bedeutung |
+|---|---|---|
+| `/level_roles` (Formular) | `{LEVEL}` | Die Level-Zahl der Rolle – `Level {LEVEL}` wird zu „Level 10“. |
+| `/ping_inactive_people` (Formular) | `{ROLEPING}` | Mention der Inaktiv-Rolle. Im Modus *Main Channel* Pflicht, sonst wird nicht gesendet. |
+| Giveaway: Titel & Beschreibung | `{TITLE}` / `{DESCRIPTION}` | Titel bzw. Beschreibung des Giveaways. |
+| Giveaway: Titel & Beschreibung | `{PARTICIPANTS}` (= `{PARTICIPANT_COUNT}`) | Aktuelle Teilnehmerzahl. |
+| Giveaway: Titel & Beschreibung | `{TIMER}` | Live-Countdown bis zum Ende (Discord-Zeitstempel). |
+| Giveaway: Titel & Beschreibung | `{END_TIME}` / `{END_DATE}` / `{END_DATETIME}` | Uhrzeit / Datum / Datum + Uhrzeit des Endes. |
+| Giveaway: Titel & Beschreibung | `{MODE}` / `{WINNER_COUNT}` / `{GIVEAWAY_ID}` | Auslosungsart, Anzahl der Gewinner, interne ID. |
+| Giveaway: Titel & Beschreibung | `{SERVER}` / `{CHANNEL}` / `{CREATOR}` | Servername, Giveaway-Kanal, Ersteller. |
+| Giveaway: Gewinner-Nachricht | `{WINNER}` / `{WINNER_MENTION}` | Ping des Gewinners. |
+| Giveaway: Gewinner-Nachricht | `{WINNER_NAME}` | Anzeigename des Gewinners ohne Ping. |
+| Giveaway: Gewinner-Nachricht | `{PLACE}` / `{XP}` / `{TOP_XP}` | Gewinnerplatz, XP dieses Gewinners, XP von Platz 1. |
+| Giveaway: Gewinner-Nachricht | `{WINNERS}` | Alle Gewinner als Mentions auf einmal. |
 
 ---
 
