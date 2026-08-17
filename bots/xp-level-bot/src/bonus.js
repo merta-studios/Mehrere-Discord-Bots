@@ -493,6 +493,7 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
     user.lastActivity = Date.now();
     user.inactiveDays = 0;
     ctx.store.setUser(user);
+    ctx.giveawayManager?.trackXp(drop.guildId, interaction.user.id, drop.xp, 'bonus');
     if (interaction.guild) {
       void require('./inactive-role')
         .clearInactiveRoleForUser(ctx, interaction.guild, interaction.user.id)

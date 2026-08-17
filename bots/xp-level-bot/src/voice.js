@@ -28,7 +28,7 @@ const VOICE_SCAN_INTERVAL_MS = 15_000;
 // So kann applyXpGain weiterhin jeden Level-Reset korrekt einzeln anwenden.
 const MAX_CATCHUP_MINUTES_PER_TICK = 5;
 
-function createVoiceTracker({ client, store, logger, getGuildConfig, now = () => Date.now() }) {
+function createVoiceTracker({ client, store, logger, getGuildConfig, onXpGain = null, now = () => Date.now() }) {
   // guildId:userId -> { guildId, userId, channelId, joinedAt,
   //                    lastMinuteStart, isBot }
   const sessions = new Map();
@@ -228,6 +228,7 @@ function createVoiceTracker({ client, store, logger, getGuildConfig, now = () =>
       // Voice soll den Nachrichten-Cooldown nicht setzen.
       user.lastXpGain = user.lastXpGain || 0;
       store.setUser(user);
+      if (onXpGain) onXpGain(guildId, userId, minutes * VOICE_XP_PER_MINUTE);
       // Ab hier sind die XP im autoritativen RAM-Store verbucht. Fehler bei
       // Nickname/Rolle/Ankündigung dürfen keinen erneuten XP-Versuch auslösen.
       xpCommitted = true;

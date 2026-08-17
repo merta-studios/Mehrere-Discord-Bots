@@ -103,7 +103,7 @@ function makeCtx(overrides = {}) {
   };
 }
 
-const ALL_CMD_NAMES = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role', 'ping_inactive_people', 'adminpanel'];
+const ALL_CMD_NAMES = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role', 'ping_inactive_people', 'start_giveaway', 'giveaway_admin', 'adminpanel'];
 const GUILD_ONLY_CMD_NAMES = ALL_CMD_NAMES.filter((n) => n !== 'adminpanel');
 const GLOBAL_ONLY_CMD_NAMES = ['adminpanel'];
 
@@ -112,9 +112,9 @@ function fakeCommandList(idFor = (name) => `id-${name}`) {
   return ALL_CMD_NAMES.map((name) => ({ id: idFn(name), name }));
 }
 
-test('alle 11 Command-JSONs sind Discord-API-valide (inkl. /set_inactive_role & /ping_inactive_people)', () => {
+test('alle 13 Command-JSONs sind Discord-API-valide (inkl. Giveaway-Commands)', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 11);
+  assert.equal(cmds.length, 13);
   for (const c of cmds) {
     assert.deepEqual(validateCommand(c), [], `Command "${c.name}" würde von Discord abgelehnt`);
   }
@@ -638,6 +638,8 @@ test('verifizierte IDs werden innerhalb der TTL aus dem Memory genutzt (kein RES
         { id: '9', name: 'sync_nicknames' },
         { id: '10', name: 'set_inactive_role' },
         { id: '11', name: 'ping_inactive_people' },
+        { id: '12', name: 'start_giveaway' },
+        { id: '13', name: 'giveaway_admin' },
         { id: '7', name: 'adminpanel' },
       ];
     },
