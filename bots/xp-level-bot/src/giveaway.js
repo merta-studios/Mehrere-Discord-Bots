@@ -33,6 +33,7 @@ const OPTIONS_PREFIX = 'xp_gw_options:';
 const DRAFT_ACTION_PREFIX = 'xp_gw_draft:';
 const JOIN_PREFIX = 'xp_gw_join:';
 const PROGRESS_PREFIX = 'xp_gw_progress:';
+const ADMIN_PREFIX = 'xp_gw_admin:';
 const SOURCE_IDS = ['chat', 'media', 'voice', 'bonus', 'invite'];
 const DEFAULT_SOURCES = ['chat', 'media', 'voice'];
 const DELIVERY_IDS = ['public', 'dm', 'both'];
@@ -48,6 +49,19 @@ const TEXT = {
     joined: '✅ Du nimmst jetzt teil. Viel Glück!', already: 'ℹ️ Du nimmst bereits an diesem Giveaway teil.', ended: '⛔ Dieses Giveaway ist nicht mehr aktiv.', join: 'Teilnehmen', progress: 'Mein Fortschritt', closed: 'Giveaway beendet',
     random: 'Zufällige Auslosung', xp: 'Meiste XP', participants: 'Teilnehmer', ends: 'Endet', winners: 'Gewinner', mode: 'Modus', sourcesLabel: 'Gewertete XP',
     published: '✅ Das Giveaway wurde veröffentlicht.', cancelled: '✅ Erstellung abgebrochen.', noParticipants: 'Es gab keine gültigen Teilnehmer.',
+    noGiveaway: 'ℹ️ Es gibt noch kein Giveaway auf diesem Server. Starte eines mit **/start_giveaway**.',
+    notActive: '⛔ Es läuft gerade kein aktives Giveaway, das du beenden könntest. Aktueller Status: **{status}**.',
+    endAsk: '## 🏁 Giveaway jetzt beenden?\n\n**{title}**\nTeilnehmer: **{count}** · Geplantes Ende: {ends}\n\nDie Gewinner werden **sofort** ausgelost und benachrichtigt, die Giveaway-Nachricht wird geschlossen. Danach kannst du ein neues Giveaway starten.',
+    cancelAsk: '## ⛔ Giveaway abbrechen?\n\n**{title}**\nTeilnehmer: **{count}** · Geplantes Ende: {ends}\n\nEs werden **keine** Gewinner gezogen und niemand wird benachrichtigt. Danach kannst du ein neues Giveaway starten.',
+    btnEndNow: '🏁 Jetzt beenden & auslosen', btnCancelNow: '⛔ Ohne Gewinner abbrechen', btnKeep: '↩️ Weiterlaufen lassen',
+    endDone: '✅ Das Giveaway wurde beendet.\n\n**Gewinner:** {winners}',
+    endDoneEmpty: '✅ Das Giveaway wurde beendet. Es gab keine gültigen Teilnehmer, deshalb gibt es keine Gewinner.',
+    endFailed: '⛔ Das Giveaway konnte nicht beendet werden – vermutlich ist es gerade von selbst abgelaufen. Prüfe es mit der Aktion **Status ansehen**.',
+    cancelDone: '✅ Das Giveaway wurde abgebrochen. Es wurden keine Gewinner gezogen.',
+    cancelFailed: '⛔ Das Giveaway konnte nicht abgebrochen werden – vermutlich ist es gerade von selbst abgelaufen.',
+    keepRunning: 'ℹ️ Nichts geändert – das Giveaway läuft weiter.',
+    cancelledPublic: '## ⛔ Giveaway abgebrochen\nDieses Giveaway wurde von der Serverleitung abgebrochen. Es wurden keine Gewinner gezogen.',
+    endedEarly: 'Vorzeitig beendet',
   },
   en: {
     noSetup: '⛔ Please set up the XP system with **/setup** first.', active: '⛔ A giveaway is already active on this server.', badTime: '⛔ Invalid duration. Examples: `2d 4h`, `90m`, `2026-08-24 18:30`.',
@@ -55,9 +69,26 @@ const TEXT = {
     settingsTitle: '## ⚙️ Giveaway settings', publish: 'Publish giveaway', cancel: 'Cancel', sources: 'Select XP sources', delivery: 'Send winner message via …', options: 'Additional settings',
     joined: '✅ You joined the giveaway. Good luck!', already: 'ℹ️ You already joined this giveaway.', ended: '⛔ This giveaway is no longer active.', join: 'Enter', progress: 'My progress', closed: 'Giveaway ended',
     random: 'Random draw', xp: 'Most XP', participants: 'Participants', ends: 'Ends', winners: 'Winners', mode: 'Mode', sourcesLabel: 'Counted XP', published: '✅ Giveaway published.', cancelled: '✅ Creation cancelled.', noParticipants: 'There were no eligible participants.',
+    noGiveaway: 'ℹ️ There is no giveaway on this server yet. Start one with **/start_giveaway**.',
+    notActive: '⛔ There is no active giveaway to end right now. Current status: **{status}**.',
+    endAsk: '## 🏁 End the giveaway now?\n\n**{title}**\nParticipants: **{count}** · Scheduled end: {ends}\n\nWinners are drawn and notified **immediately** and the giveaway message is closed. Afterwards you can start a new giveaway.',
+    cancelAsk: '## ⛔ Cancel the giveaway?\n\n**{title}**\nParticipants: **{count}** · Scheduled end: {ends}\n\n**No** winners are drawn and nobody is notified. Afterwards you can start a new giveaway.',
+    btnEndNow: '🏁 End & draw now', btnCancelNow: '⛔ Cancel without winners', btnKeep: '↩️ Keep it running',
+    endDone: '✅ The giveaway has ended.\n\n**Winners:** {winners}',
+    endDoneEmpty: '✅ The giveaway has ended. There were no eligible participants, so there are no winners.',
+    endFailed: '⛔ The giveaway could not be ended – it probably just finished on its own. Check it with the **View status** action.',
+    cancelDone: '✅ The giveaway was cancelled. No winners were drawn.',
+    cancelFailed: '⛔ The giveaway could not be cancelled – it probably just finished on its own.',
+    keepRunning: 'ℹ️ Nothing changed – the giveaway keeps running.',
+    cancelledPublic: '## ⛔ Giveaway cancelled\nThis giveaway was cancelled by the server staff. No winners were drawn.',
+    endedEarly: 'Ended early',
   },
 };
-function tx(lang, key) { return TEXT[lang]?.[key] || TEXT.en[key] || key; }
+function tx(lang, key, vars = null) {
+  let text = TEXT[lang]?.[key] || TEXT.en[key] || key;
+  if (vars) for (const [k, v] of Object.entries(vars)) text = text.split(`{${k}}`).join(String(v));
+  return text;
+}
 function langFor(ctx, interaction) { return ctx.store.getGuild(interaction.guildId)?.lang || langFromDiscord(interaction.locale) || 'en'; }
 function ephemeralText(content, ephemeral = true) { return componentsV2Payload([new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(content))], { ephemeral, allowedMentions: { parse: [] } }); }
 function id() { return crypto.randomBytes(6).toString('base64url'); }
@@ -133,8 +164,9 @@ function replacePlaceholders(text, g, extra = {}) {
   return String(text || '').replace(/\{([A-Z_]+)\}/gi, (all, key) => Object.prototype.hasOwnProperty.call(values, key.toUpperCase()) ? values[key.toUpperCase()] : all);
 }
 
-function giveawayContainer(g, { ended = false } = {}) {
+function giveawayContainer(g, { ended = false, cancelled = false } = {}) {
   const lang = g.lang || 'de';
+  const closed = ended || cancelled;
   const body = replacePlaceholders(g.description, g);
   const header = `# ${replacePlaceholders(g.title, g)}`;
   const info = [
@@ -149,16 +181,19 @@ function giveawayContainer(g, { ended = false } = {}) {
     c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`${header}\n\n${body}`)).setThumbnailAccessory(new ThumbnailBuilder().setURL(g.imageUrl)));
   } else c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`${header}\n\n${body}`));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(info));
-  if (ended) {
+  if (cancelled) {
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(tx(lang, 'cancelledPublic')));
+  } else if (ended) {
     const result = (g.winners || []).length
       ? (g.winners || []).map(w => `**#${w.place}** <@${w.userId}>${g.mode === 'xp' ? ` — **${w.xp} XP**` : ''}`).join('\n')
       : tx(lang, 'noParticipants');
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🏆 ${tx(lang, 'closed')}\n${result}`));
+    const early = g.endedEarly ? ` (${tx(lang, 'endedEarly')})` : '';
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🏆 ${tx(lang, 'closed')}${early}\n${result}`));
   }
   if (g.bannerUrl) c.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(g.bannerUrl)));
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`${JOIN_PREFIX}${g.id}`).setStyle(ButtonStyle.Success).setLabel(ended ? tx(lang, 'closed') : tx(lang, 'join')).setDisabled(ended),
-    new ButtonBuilder().setCustomId(`${PROGRESS_PREFIX}${g.id}`).setStyle(ButtonStyle.Secondary).setLabel(tx(lang, 'progress')).setDisabled(ended),
+    new ButtonBuilder().setCustomId(`${JOIN_PREFIX}${g.id}`).setStyle(ButtonStyle.Success).setLabel(closed ? tx(lang, 'closed') : tx(lang, 'join')).setDisabled(closed),
+    new ButtonBuilder().setCustomId(`${PROGRESS_PREFIX}${g.id}`).setStyle(ButtonStyle.Secondary).setLabel(tx(lang, 'progress')).setDisabled(closed),
   ));
   return c;
 }
@@ -186,7 +221,7 @@ function settingsPayload(draft, lang) {
     { label: 'Admins dürfen teilnehmen', value: 'allowAdmins', default: draft.allowAdmins, description: 'Sonst sind Administratoren ausgeschlossen' },
     { label: 'Gewinner müssen noch auf dem Server sein', value: 'mustRemain', default: draft.mustRemain, description: 'Ausgetretene Nutzer werden übersprungen' },
   ]);
-  const summary = `${tx(lang, 'settingsTitle')}\n\n**Kanal:** <#${draft.channelId}>\n**Ende:** <t:${Math.floor(draft.endsAt / 1000)}:F>\n**Modus:** ${modeLabel(draft, lang)}\n**Gewinner:** ${draft.winnerCount}\n\nPlatzhalter: \`{PARTICIPANTS}\`, \`{TIMER}\`, \`{END_TIME}\`, \`{END_DATE}\`, \`{END_DATETIME}\`, \`{MODE}\`, \`{WINNER_COUNT}\`, \`{GIVEAWAY_ID}\`, \`{SERVER}\`, \`{CHANNEL}\`, \`{CREATOR}\`. Gewinnertext zusätzlich: \`{WINNER}\`, \`{WINNER_MENTION}\`, \`{WINNER_NAME}\`, \`{PLACE}\`, \`{XP}\`, \`{TOP_XP}\`, \`{WINNERS}\`.`;
+  const summary = `${tx(lang, 'settingsTitle')}\n\n**Kanal:** <#${draft.channelId}>\n**Ende:** <t:${Math.floor(draft.endsAt / 1000)}:F>\n**Modus:** ${modeLabel(draft, lang)}\n**Gewinner:** ${draft.winnerCount}\n\nPlatzhalter: \`{PARTICIPANTS}\`, \`{TIMER}\`, \`{END_TIME}\`, \`{END_DATE}\`, \`{END_DATETIME}\`, \`{MODE}\`, \`{WINNER_COUNT}\`, \`{GIVEAWAY_ID}\`, \`{SERVER}\`, \`{CHANNEL}\`, \`{CREATOR}\`. Gewinnertext zusätzlich: \`{WINNER}\`, \`{WINNER_MENTION}\`, \`{WINNER_NAME}\`, \`{PLACE}\`, \`{XP}\`, \`{TOP_XP}\`, \`{WINNERS}\`.\nWas jeder Platzhalter bedeutet, erklärt **/help** unter *Platzhalter erklärt*.`;
   const c = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(summary))
     .addActionRowComponents(new ActionRowBuilder().addComponents(sourceSelect))
     .addActionRowComponents(new ActionRowBuilder().addComponents(deliverySelect))
@@ -265,9 +300,10 @@ async function draftAction(ctx, interaction) {
   return publish(ctx, interaction, draft);
 }
 
-async function editPublic(ctx, g, ended = false) {
+async function editPublic(ctx, g, state = {}) {
+  const opts = typeof state === 'boolean' ? { ended: state } : state;
   const channel = await ctx.client.channels.fetch(g.channelId).catch(() => null); const msg = await channel?.messages?.fetch(g.messageId).catch(() => null);
-  if (!msg) return false; await msg.edit(componentsV2Payload([giveawayContainer(g, { ended })], { allowedMentions: { parse: [] } })).catch(() => null); return true;
+  if (!msg) return false; await msg.edit(componentsV2Payload([giveawayContainer(g, opts)], { allowedMentions: { parse: [] } })).catch(() => null); return true;
 }
 async function join(ctx, interaction, giveawayId) {
   const cfg = ctx.store.getGuild(interaction.guildId); const g = cfg?.giveawayState; const lang = g?.lang || langFor(ctx, interaction);
@@ -298,6 +334,8 @@ function randomItem(list) { return list.length ? list[crypto.randomInt(list.leng
 async function finishGiveaway(ctx, guildId, { force = false } = {}) {
   const cfg = ctx.store.getGuild(guildId); const g = cfg?.giveawayState;
   if (!g || g.status !== 'active' || (!force && Date.now() < g.endsAt)) return false;
+  // Vorzeitiges Beenden merken, damit die öffentliche Nachricht es kennzeichnet.
+  if (force && Date.now() < g.endsAt) g.endedEarly = true;
   g.status = 'ending'; g.finishNonce = g.finishNonce || id(); ctx.store.setGuild(cfg); await ctx.store.flush();
   const guild = ctx.client.guilds.cache.get(guildId) || await ctx.client.guilds.fetch(guildId).catch(() => null);
   const eligible = guild ? await resolveEligible(ctx, guild, g) : Object.values(g.entries || {}).filter(e => !e.disqualified);
@@ -314,7 +352,7 @@ async function finishGiveaway(ctx, guildId, { force = false } = {}) {
     }
     if (!chosen) break; used.add(chosen.userId); winners.push({ userId: chosen.userId, place, xp: chosen.xp || 0, predetermined: chosen.userId === presetId });
   }
-  g.winners = winners; g.finishedAt = Date.now(); g.status = 'finished'; cfg.giveawayState = g; ctx.store.setGuild(cfg); await ctx.store.flush(); await editPublic(ctx, g, true);
+  g.winners = winners; g.finishedAt = Date.now(); g.status = 'finished'; cfg.giveawayState = g; ctx.store.setGuild(cfg); await ctx.store.flush(); await editPublic(ctx, g, { ended: true });
   const channel = await ctx.client.channels.fetch(g.channelId).catch(() => null);
   for (const winner of winners) {
     const member = guild?.members?.cache?.get(winner.userId) || await guild?.members?.fetch?.(winner.userId).catch(() => null);
@@ -326,20 +364,56 @@ async function finishGiveaway(ctx, guildId, { force = false } = {}) {
   return true;
 }
 
+/**
+ * Bricht ein laufendes Giveaway ohne Auslosung ab: keine Gewinner, keine DMs.
+ * Die öffentliche Nachricht wird als „abgebrochen“ markiert und die Buttons
+ * werden deaktiviert. Danach darf sofort ein neues Giveaway starten.
+ */
+async function cancelGiveaway(ctx, guildId) {
+  const cfg = ctx.store.getGuild(guildId); const g = cfg?.giveawayState;
+  if (!g || (g.status !== 'active' && g.status !== 'ending')) return false;
+  g.status = 'cancelled'; g.winners = []; g.cancelledAt = Date.now();
+  cfg.giveawayState = g; ctx.store.setGuild(cfg); await ctx.store.flush();
+  await editPublic(ctx, g, { cancelled: true });
+  return true;
+}
+
 function trackXp(ctx, guildId, userId, amount, source) {
   const cfg = ctx.store.getGuild(guildId); const g = cfg?.giveawayState; const e = g?.entries?.[userId]; const n = Math.floor(Number(amount));
   if (!g || g.status !== 'active' || g.mode !== 'xp' || Date.now() >= g.endsAt || !e || e.disqualified || !g.sources.includes(source) || n <= 0) return false;
   e.xp = (e.xp || 0) + n; cfg.giveawayState = g; ctx.store.setGuild(cfg); return true;
 }
 
+/** Ephemere Sicherheitsabfrage vor dem Beenden/Abbrechen eines Giveaways. */
+function confirmPayload(g, lang, mode) {
+  const vars = { title: replacePlaceholders(g.title, g), count: String(Object.keys(g.entries || {}).length), ends: `<t:${Math.floor(g.endsAt / 1000)}:R>` };
+  const confirm = mode === 'end'
+    ? new ButtonBuilder().setCustomId(`${ADMIN_PREFIX}end:${g.id}`).setStyle(ButtonStyle.Success).setLabel(tx(lang, 'btnEndNow'))
+    : new ButtonBuilder().setCustomId(`${ADMIN_PREFIX}cancel:${g.id}`).setStyle(ButtonStyle.Danger).setLabel(tx(lang, 'btnCancelNow'));
+  const c = new ContainerBuilder()
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(tx(lang, mode === 'end' ? 'endAsk' : 'cancelAsk', vars)))
+    .addActionRowComponents(new ActionRowBuilder().addComponents(
+      confirm,
+      new ButtonBuilder().setCustomId(`${ADMIN_PREFIX}keep:${g.id}`).setStyle(ButtonStyle.Secondary).setLabel(tx(lang, 'btnKeep')),
+    ));
+  return componentsV2Payload([c], { ephemeral: true, allowedMentions: { parse: [] } });
+}
+
 async function adminCommand(ctx, interaction) {
   const gate = adminGate(ctx, interaction); if (gate.error) return interaction.reply(gate.error);
-  const g = gate.cfg.giveawayState; if (!g) return interaction.reply(ephemeralText('ℹ️ Es gibt noch kein Giveaway auf diesem Server.'));
+  const lang = gate.lang;
+  const g = gate.cfg.giveawayState; if (!g) return interaction.reply(ephemeralText(tx(lang, 'noGiveaway')));
   const action = interaction.options.getString('aktion'); const page = interaction.options.getInteger('seite') || 1;
   if (action === 'participants' || action === 'status') {
     const list = Object.values(g.entries || {}).sort((a, b) => g.mode === 'xp' ? b.xp - a.xp : a.joinedAt - b.joinedAt); const start = (page - 1) * 20;
     const rows = list.slice(start, start + 20).map((e, i) => `${start + i + 1}. <@${e.userId}> — ${e.xp || 0} XP${e.disqualified ? ' — disqualifiziert' : ''}${Object.entries(g.predetermined || {}).find(([, uid]) => uid === e.userId)?.[0] ? ` — fest Platz ${Object.entries(g.predetermined).find(([, uid]) => uid === e.userId)[0]}` : ''}`);
-    return interaction.reply(ephemeralText(`## 🔒 Giveaway-Adminansicht\n**Status:** ${g.status}\n**ID:** \`${g.id}\`\n**Teilnehmer:** ${list.length}\n**Seite:** ${page}/${Math.max(1, Math.ceil(list.length / 20))}\n\n${rows.join('\n') || 'Noch keine Teilnehmer.'}`));
+    const ends = g.status === 'active' ? `\n**Ende:** <t:${Math.floor(g.endsAt / 1000)}:F> · <t:${Math.floor(g.endsAt / 1000)}:R>` : '';
+    const hint = g.status === 'active' ? '\n\n🏁 Vorzeitig beenden: Aktion **Giveaway jetzt beenden** · ⛔ Ohne Gewinner stoppen: Aktion **Giveaway abbrechen**.' : '';
+    return interaction.reply(ephemeralText(`## 🔒 Giveaway-Adminansicht\n**Status:** ${g.status}\n**ID:** \`${g.id}\`\n**Teilnehmer:** ${list.length}${ends}\n**Seite:** ${page}/${Math.max(1, Math.ceil(list.length / 20))}\n\n${rows.join('\n') || 'Noch keine Teilnehmer.'}${hint}`));
+  }
+  if (action === 'end' || action === 'cancel') {
+    if (g.status !== 'active') return interaction.reply(ephemeralText(tx(lang, 'notActive', { status: g.status })));
+    return interaction.reply(confirmPayload(g, lang, action));
   }
   if (g.mode !== 'random' || g.status !== 'active') return interaction.reply(ephemeralText('⛔ Gewinner können nur bei einem laufenden Zufalls-Giveaway vorbestimmt werden.'));
   const place = interaction.options.getInteger('platz'); const user = interaction.options.getUser('nutzer');
@@ -375,6 +449,12 @@ function createGiveawayManager(ctx) {
       if (result && timers.has(gid)) { clearTimeout(timers.get(gid)); timers.delete(gid); }
       return result;
     },
+    /** Bricht ein laufendes Giveaway ohne Auslosung ab und entschärft den Timer. */
+    async cancel(guildId) {
+      const gid = String(guildId); const result = await cancelGiveaway(ctx, gid);
+      if (result && timers.has(gid)) { clearTimeout(timers.get(gid)); timers.delete(gid); }
+      return result;
+    },
     async tick(now = new Date()) {
       for (const cfg of ctx.store.getAllGuilds()) {
         const g = cfg.giveawayState;
@@ -397,7 +477,39 @@ function createGiveawayManager(ctx) {
   return manager;
 }
 
+/**
+ * Buttons der ephemeren Admin-Bestätigung: Giveaway sofort beenden (mit
+ * Auslosung), abbrechen (ohne Gewinner) oder weiterlaufen lassen.
+ */
+async function adminButton(ctx, interaction) {
+  const gate = adminGate(ctx, interaction);
+  if (gate.error) return interaction.reply(gate.error);
+  const lang = gate.lang;
+  const rest = interaction.customId.slice(ADMIN_PREFIX.length);
+  const split = rest.indexOf(':');
+  const action = rest.slice(0, split);
+  const giveawayId = rest.slice(split + 1);
+  const g = gate.cfg.giveawayState;
+  if (!g || g.id !== giveawayId) return interaction.update(ephemeralText(tx(lang, 'noGiveaway'), false));
+  if (action === 'keep') return interaction.update(ephemeralText(tx(lang, 'keepRunning'), false));
+  if (g.status !== 'active') return interaction.update(ephemeralText(tx(lang, 'notActive', { status: g.status }), false));
+
+  // Auslosung + Gewinner-Nachrichten können dauern → erst die Buttons entschärfen.
+  await interaction.update(componentsV2Payload([new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(tx(lang, action === 'end' ? 'btnEndNow' : 'btnCancelNow') + ' …'))], { allowedMentions: { parse: [] } }));
+
+  if (action === 'cancel') {
+    const done = ctx.giveawayManager ? await ctx.giveawayManager.cancel(g.guildId) : await cancelGiveaway(ctx, g.guildId);
+    return interaction.editReply(ephemeralText(tx(lang, done ? 'cancelDone' : 'cancelFailed'), false));
+  }
+  const done = ctx.giveawayManager ? await ctx.giveawayManager.finish(g.guildId, { force: true }) : await finishGiveaway(ctx, g.guildId, { force: true });
+  if (!done) return interaction.editReply(ephemeralText(tx(lang, 'endFailed'), false));
+  const after = ctx.store.getGuild(g.guildId)?.giveawayState;
+  const winners = winnerMentions(after || g);
+  return interaction.editReply(ephemeralText(winners ? tx(lang, 'endDone', { winners }) : tx(lang, 'endDoneEmpty'), false));
+}
+
 async function handleButton(ctx, interaction) {
+  if (interaction.customId.startsWith(ADMIN_PREFIX)) return adminButton(ctx, interaction);
   if (interaction.customId.startsWith(DRAFT_ACTION_PREFIX)) return draftAction(ctx, interaction);
   if (interaction.customId.startsWith(JOIN_PREFIX)) return join(ctx, interaction, interaction.customId.slice(JOIN_PREFIX.length));
   if (interaction.customId.startsWith(PROGRESS_PREFIX)) return progress(ctx, interaction, interaction.customId.slice(PROGRESS_PREFIX.length));
@@ -406,7 +518,7 @@ async function handleButton(ctx, interaction) {
 function isSettingsSelect(idValue) { return idValue.startsWith(SETTINGS_PREFIX) || idValue.startsWith(DELIVERY_PREFIX) || idValue.startsWith(OPTIONS_PREFIX); }
 
 module.exports = {
-  FORM_PREFIX, BUTTON_PREFIX, DRAFT_ACTION_PREFIX, JOIN_PREFIX, PROGRESS_PREFIX,
+  FORM_PREFIX, BUTTON_PREFIX, DRAFT_ACTION_PREFIX, JOIN_PREFIX, PROGRESS_PREFIX, ADMIN_PREFIX,
   createGiveawayManager, startCommand, adminCommand, formSubmit, settingSelect, handleButton, isSettingsSelect,
-  parseEndTime, replacePlaceholders, giveawayContainer,
+  parseEndTime, replacePlaceholders, giveawayContainer, finishGiveaway, cancelGiveaway,
 };

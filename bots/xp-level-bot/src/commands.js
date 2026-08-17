@@ -2,7 +2,9 @@
  * Slash-Commands XP Bot – Definition, Registrierung & Handler
  * Commands: /setup, /rank, /help, /admin_set_bot_profile, /level_roles,
  *           /update_leaderboard, /toggle_nicknames, /sync_nicknames,
- *           /set_inactive_role, /ping_inactive_people, /adminpanel
+ *           /set_inactive_role, /ping_inactive_people, /start_giveaway,
+ *           /giveaway_admin (inkl. vorzeitig beenden/abbrechen), /adminpanel
+ * /help selbst liegt in help.js (drei Seiten: Befehle, Überblick, Platzhalter).
  */
 
 const {
@@ -26,6 +28,7 @@ const { openPanel } = require('./admin-panel');
 const { handleLevelRolesCommand } = require('./level-roles');
 const { handlePingInactiveCommand } = require('./ping-inactive');
 const { startCommand: startGiveawayCommand, adminCommand: giveawayAdminCommand } = require('./giveaway');
+const { buildHelpPayload, normalizePage: normalizeHelpPage, HELP_PAGES } = require('./help');
 
 /**
  * Alle Slash-Commands inkl. Owner-DM-Panel.
@@ -80,8 +83,17 @@ function defineCommands() {
 
     new SlashCommandBuilder()
       .setName('help')
-      .setDescription('Zeigt alle Befehle')
-      .setDescriptionLocalizations(pick('helpHelp')),
+      .setDescription('Zeigt alle Befehle, Funktionen und Platzhalter')
+      .setDescriptionLocalizations(pick('helpHelp'))
+      .addStringOption((o) => o
+        .setName('thema')
+        .setDescription('Welchen Hilfe-Bereich möchtest du sehen?')
+        .setDescriptionLocalizations(pick('helpTopicDesc'))
+        .setRequired(false)
+        .addChoices(...HELP_PAGES.map((page) => {
+          const key = { overview: 'helpPageOverview', commands: 'helpPageCommands', placeholders: 'helpPagePlaceholders' }[page];
+          return { name: t(key, 'de'), value: page, name_localizations: pick(key) };
+        }))),
 
     new SlashCommandBuilder()
       .setName('admin_set_bot_profile')
@@ -179,13 +191,16 @@ function defineCommands() {
     // sehen/nutzen; alle Antworten sind zusätzlich ephemeral.
     new SlashCommandBuilder()
       .setName('giveaway_admin')
-      .setDescription('Interne Giveaway-Verwaltung (nur Administratoren sichtbar)')
+      .setDescription('Giveaway verwalten: Status, Teilnehmer, vorzeitig beenden oder abbrechen (nur Admins)')
+      .setDescriptionLocalizations(pick('giveawayAdminHelp'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addStringOption(o => o.setName('aktion').setDescription('Interne Aktion').setRequired(true).addChoices(
-        { name: 'Teilnehmer ansehen', value: 'participants' },
-        { name: 'Status ansehen', value: 'status' },
-        { name: 'Zufallsgewinner vorbestimmen', value: 'preset' },
-        { name: 'Vorbestimmung entfernen', value: 'clear' },
+      .addStringOption(o => o.setName('aktion').setDescription('Was möchtest du tun?').setDescriptionLocalizations(pick('giveawayAdminActionDesc')).setRequired(true).addChoices(
+        { name: 'Teilnehmer ansehen', value: 'participants', name_localizations: pick('giveawayActionParticipants') },
+        { name: 'Status ansehen', value: 'status', name_localizations: pick('giveawayActionStatus') },
+        { name: 'Giveaway jetzt beenden (Gewinner ziehen)', value: 'end', name_localizations: pick('giveawayActionEnd') },
+        { name: 'Giveaway abbrechen (ohne Gewinner)', value: 'cancel', name_localizations: pick('giveawayActionCancel') },
+        { name: 'Zufallsgewinner vorbestimmen', value: 'preset', name_localizations: pick('giveawayActionPreset') },
+        { name: 'Vorbestimmung entfernen', value: 'clear', name_localizations: pick('giveawayActionClear') },
       ))
       .addUserOption(o => o.setName('nutzer').setDescription('Teilnehmer, der vorbestimmt werden soll').setRequired(false))
       .addIntegerOption(o => o.setName('platz').setDescription('Gewinnerplatz 1 bis 10').setRequired(false).setMinValue(1).setMaxValue(10))
@@ -647,37 +662,8 @@ async function helpCmd(ctx, interaction) {
   await ensureCommandIds(ctx, interaction.guildId);
 
   const lang = ctx.store.getGuild(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
-  const container = new ContainerBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent([
-      `# ${t('helpTitle', lang)}`,
-      t('helpDesc', lang),
-      '',
-      `🎁 ${t('helpBonus', lang)}`,
-      '',
-      `**${commandMention(ctx, 'setup', interaction.guildId)}**\n${t('helpSetup', lang)}`,
-      '',
-      `**${commandMention(ctx, 'rank', interaction.guildId)}**\n${t('helpRank', lang)}`,
-      '',
-      `**${commandMention(ctx, 'admin_set_bot_profile', interaction.guildId)}**\n${t('helpSetProfile', lang)}`,
-      '',
-      `**${commandMention(ctx, 'level_roles', interaction.guildId)}**\n${t('levelRolesHelp', lang)}`,
-      '',
-      `**${commandMention(ctx, 'update_leaderboard', interaction.guildId)}**\n${t('updateLeaderboardHelp', lang)}`,
-      '',
-      `**${commandMention(ctx, 'toggle_nicknames', interaction.guildId)}**\n${t('toggleNicknamesHelp', lang)}`,
-      '',
-      `**${commandMention(ctx, 'sync_nicknames', interaction.guildId)}**\n${t('syncNicknamesHelp', lang)}`,
-      '',
-      `**${commandMention(ctx, 'set_inactive_role', interaction.guildId)}**\n${t('setInactiveRoleHelp', lang)}`,
-      '',
-      `**${commandMention(ctx, 'ping_inactive_people', interaction.guildId)}**\n${t('pingInactiveHelp', lang)}`,
-      '',
-      `**${commandMention(ctx, 'start_giveaway', interaction.guildId)}**\n${t('giveawayHelp', lang)}`,
-      '',
-      `**${commandMention(ctx, 'help', interaction.guildId)}**\n${t('helpHelp', lang)}`,
-    ].join('\n'))
-  );
-  return interaction.reply(componentsV2Payload([container]));
+  const page = normalizeHelpPage(interaction.options?.getString?.('thema'));
+  return interaction.reply(buildHelpPayload(ctx, { lang, guildId: interaction.guildId, page }));
 }
 
 async function profileCmd(ctx, interaction) {

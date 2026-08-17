@@ -7,6 +7,7 @@ const { MODAL_ID, handleLevelRolesModalSubmit } = require('./level-roles');
 const { PING_MODAL_PREFIX, handlePingModalSubmit } = require('./ping-inactive');
 const { BONUS_CLAIM_PREFIX } = require('./bonus');
 const giveaway = require('./giveaway');
+const { isHelpSelect, handleHelpSelect } = require('./help');
 
 async function handleInteraction(ctx, interaction){
   try {
@@ -15,7 +16,7 @@ async function handleInteraction(ctx, interaction){
       return await handleChatInput(ctx, interaction);
     }
     if (interaction.isButton()){
-      if (interaction.customId.startsWith(giveaway.DRAFT_ACTION_PREFIX) || interaction.customId.startsWith(giveaway.JOIN_PREFIX) || interaction.customId.startsWith(giveaway.PROGRESS_PREFIX)) return await giveaway.handleButton(ctx, interaction);
+      if (interaction.customId.startsWith(giveaway.DRAFT_ACTION_PREFIX) || interaction.customId.startsWith(giveaway.JOIN_PREFIX) || interaction.customId.startsWith(giveaway.PROGRESS_PREFIX) || interaction.customId.startsWith(giveaway.ADMIN_PREFIX)) return await giveaway.handleButton(ctx, interaction);
       if (interaction.customId.startsWith(PANEL_PREFIX)) return await handlePanelButton(ctx, interaction);
       // „Einsammeln“-Button der Bonus-Belohnung (wer zuerst klickt, gewinnt)
       if (interaction.customId.startsWith(BONUS_CLAIM_PREFIX) && ctx.bonusDropper){
@@ -23,6 +24,7 @@ async function handleInteraction(ctx, interaction){
       }
     }
     if (interaction.isStringSelectMenu()){
+      if (isHelpSelect(interaction.customId)) return await handleHelpSelect(ctx, interaction);
       if (giveaway.isSettingsSelect(interaction.customId)) return await giveaway.settingSelect(ctx, interaction);
       if (interaction.customId.startsWith(PANEL_PREFIX)) return await handlePanelSelect(ctx, interaction);
     }
