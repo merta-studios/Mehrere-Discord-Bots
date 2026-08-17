@@ -191,10 +191,14 @@ function giveawayContainer(g, { ended = false, cancelled = false } = {}) {
     c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🏆 ${tx(lang, 'closed')}${early}\n${result}`));
   }
   if (g.bannerUrl) c.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(g.bannerUrl)));
-  c.addActionRowComponents(new ActionRowBuilder().addComponents(
+  // Zufallsmodus: kein XP-Wettrennen -> nur Teilnahme-Button, kein „Mein Fortschritt“
+  const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${JOIN_PREFIX}${g.id}`).setStyle(ButtonStyle.Success).setLabel(closed ? tx(lang, 'closed') : tx(lang, 'join')).setDisabled(closed),
-    new ButtonBuilder().setCustomId(`${PROGRESS_PREFIX}${g.id}`).setStyle(ButtonStyle.Secondary).setLabel(tx(lang, 'progress')).setDisabled(closed),
-  ));
+  );
+  if (g.mode === 'xp') {
+    row.addComponents(new ButtonBuilder().setCustomId(`${PROGRESS_PREFIX}${g.id}`).setStyle(ButtonStyle.Secondary).setLabel(tx(lang, 'progress')).setDisabled(closed));
+  }
+  c.addActionRowComponents(row);
   return c;
 }
 
@@ -210,21 +214,27 @@ function buildForm(draft, lang) {
 }
 
 function settingsPayload(draft, lang) {
-  const sourceSelect = new StringSelectMenuBuilder().setCustomId(`${SETTINGS_PREFIX}${draft.id}`).setPlaceholder(tx(lang, 'sources')).setMinValues(1).setMaxValues(SOURCE_IDS.length)
-    .addOptions(SOURCE_IDS.map(s => ({ label: sourceLabel(s), value: s, default: draft.sources.includes(s), description: s === 'bonus' || s === 'invite' ? 'Optionaler Sonder-XP-Typ' : 'Normale XP-Quelle' })));
+  const isRandom = draft.mode === 'random';
   const deliverySelect = new StringSelectMenuBuilder().setCustomId(`${DELIVERY_PREFIX}${draft.id}`).setPlaceholder(tx(lang, 'delivery')).setMinValues(1).setMaxValues(1).addOptions([
     { label: 'Öffentlich im Giveaway-Kanal', value: 'public', default: draft.delivery === 'public' }, { label: 'Nur per DM', value: 'dm', default: draft.delivery === 'dm' }, { label: 'Öffentlich und per DM', value: 'both', default: draft.delivery === 'both' },
   ]);
-  const optionSelect = new StringSelectMenuBuilder().setCustomId(`${OPTIONS_PREFIX}${draft.id}`).setPlaceholder(tx(lang, 'options')).setMinValues(0).setMaxValues(4).addOptions([
+  // Zufall -> kein XP-Wettrennen -> XP-Quellen & Platz-Anzeige ausblenden
+  const optionChoices = [
     { label: 'Teilnehmerzahl anzeigen', value: 'showParticipants', default: draft.showParticipants, description: 'Zeigt die aktuelle Anzahl öffentlich' },
-    { label: 'Zwischenplatz im Fortschritt zeigen', value: 'showRank', default: draft.showRank, description: 'XP-Teilnehmer sehen ihren aktuellen Platz' },
+    ...(!isRandom ? [{ label: 'Zwischenplatz im Fortschritt zeigen', value: 'showRank', default: draft.showRank, description: 'XP-Teilnehmer sehen ihren aktuellen Platz' }] : []),
     { label: 'Admins dürfen teilnehmen', value: 'allowAdmins', default: draft.allowAdmins, description: 'Sonst sind Administratoren ausgeschlossen' },
     { label: 'Gewinner müssen noch auf dem Server sein', value: 'mustRemain', default: draft.mustRemain, description: 'Ausgetretene Nutzer werden übersprungen' },
-  ]);
-  const summary = `${tx(lang, 'settingsTitle')}\n\n**Kanal:** <#${draft.channelId}>\n**Ende:** <t:${Math.floor(draft.endsAt / 1000)}:F>\n**Modus:** ${modeLabel(draft, lang)}\n**Gewinner:** ${draft.winnerCount}\n\nPlatzhalter: \`{PARTICIPANTS}\`, \`{TIMER}\`, \`{END_TIME}\`, \`{END_DATE}\`, \`{END_DATETIME}\`, \`{MODE}\`, \`{WINNER_COUNT}\`, \`{GIVEAWAY_ID}\`, \`{SERVER}\`, \`{CHANNEL}\`, \`{CREATOR}\`. Gewinnertext zusätzlich: \`{WINNER}\`, \`{WINNER_MENTION}\`, \`{WINNER_NAME}\`, \`{PLACE}\`, \`{XP}\`, \`{TOP_XP}\`, \`{WINNERS}\`.\nWas jeder Platzhalter bedeutet, erklärt **/help** unter *Platzhalter erklärt*.`;
-  const c = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(summary))
-    .addActionRowComponents(new ActionRowBuilder().addComponents(sourceSelect))
-    .addActionRowComponents(new ActionRowBuilder().addComponents(deliverySelect))
+  ];
+  const maxOptions = isRandom ? 3 : 4;
+  const optionSelect = new StringSelectMenuBuilder().setCustomId(`${OPTIONS_PREFIX}${draft.id}`).setPlaceholder(tx(lang, 'options')).setMinValues(0).setMaxValues(maxOptions).addOptions(optionChoices);
+  const summary = `${tx(lang, 'settingsTitle')}\n\n**Kanal:** <#${draft.channelId}>\n**Ende:** <t:${Math.floor(draft.endsAt / 1000)}:F>\n**Modus:** ${modeLabel(draft, lang)}\n**Gewinner:** ${draft.winnerCount}\n\nPlatzhalter: \`{PARTICIPANTS}\`, \`{TIMER}\`, \`{END_TIME}\`, \`{END_DATE}\`, \`{END_DATETIME}\`, \`{MODE}\`, \`{WINNER_COUNT}\`, \`{GIVEAWAY_ID}\`, \`{SERVER}\`, \`{CHANNEL}\`, \`{CREATOR}\`. Gewinnertext zusätzlich: \`{WINNER}\`, \`{WINNER_MENTION}\`, \`{WINNER_NAME}\`, \`{PLACE}\`${!isRandom ? ', `{XP}`, `{TOP_XP}`' : ''}, \`{WINNERS}\`.\nWas jeder Platzhalter bedeutet, erklärt **/help** unter *Platzhalter erklärt*.`;
+  const c = new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(summary));
+  if (!isRandom) {
+    const sourceSelect = new StringSelectMenuBuilder().setCustomId(`${SETTINGS_PREFIX}${draft.id}`).setPlaceholder(tx(lang, 'sources')).setMinValues(1).setMaxValues(SOURCE_IDS.length)
+      .addOptions(SOURCE_IDS.map(s => ({ label: sourceLabel(s), value: s, default: draft.sources.includes(s), description: s === 'bonus' || s === 'invite' ? 'Optionaler Sonder-XP-Typ' : 'Normale XP-Quelle' })));
+    c.addActionRowComponents(new ActionRowBuilder().addComponents(sourceSelect));
+  }
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(deliverySelect))
     .addActionRowComponents(new ActionRowBuilder().addComponents(optionSelect))
     .addActionRowComponents(new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${DRAFT_ACTION_PREFIX}publish:${draft.id}`).setStyle(ButtonStyle.Success).setLabel(tx(lang, 'publish')),
@@ -251,8 +261,9 @@ async function startCommand(ctx, interaction) {
   const channel = interaction.options.getChannel('kanal');
   const end = parseEndTime(interaction.options.getString('dauer'), gate.lang);
   if (!end) return interaction.reply(ephemeralText(tx(gate.lang, 'badTime')));
+  const mode = interaction.options.getString('modus');
   const draft = { id: id(), guildId: interaction.guildId, guildName: interaction.guild?.name || '', creatorId: interaction.user.id, channelId: channel.id, endsAt: end,
-    mode: interaction.options.getString('modus'), winnerCount: interaction.options.getInteger('anzahl_gewinner'), lang: gate.lang, sources: [...DEFAULT_SOURCES], delivery: 'both', showParticipants: true, showRank: true, allowAdmins: true, mustRemain: true };
+    mode, winnerCount: interaction.options.getInteger('anzahl_gewinner'), lang: gate.lang, sources: [...DEFAULT_SOURCES], delivery: 'both', showParticipants: true, showRank: mode === 'xp', allowAdmins: true, mustRemain: true };
   drafts.set(draftKey(interaction.guildId, interaction.user.id), draft);
   return interaction.showModal(buildForm(draft, gate.lang));
 }
@@ -274,9 +285,16 @@ async function settingSelect(ctx, interaction) {
   const [prefix, field] = interaction.customId.startsWith(SETTINGS_PREFIX) ? [SETTINGS_PREFIX, 'sources'] : interaction.customId.startsWith(DELIVERY_PREFIX) ? [DELIVERY_PREFIX, 'delivery'] : [OPTIONS_PREFIX, 'options'];
   const d = draftForInteraction(interaction, interaction.customId.slice(prefix.length));
   if (!d) return interaction.reply(ephemeralText('⛔ Diese Erstellung ist abgelaufen.'));
-  if (field === 'sources') d.sources = interaction.values.filter(v => SOURCE_IDS.includes(v));
+  if (field === 'sources') {
+    if (d.mode === 'random') return interaction.reply(ephemeralText('⛔ Im Zufallsmodus gibt es keine XP-Quellen.'));
+    d.sources = interaction.values.filter(v => SOURCE_IDS.includes(v));
+  }
   else if (field === 'delivery') d.delivery = DELIVERY_IDS.includes(interaction.values[0]) ? interaction.values[0] : 'both';
-  else for (const k of ['showParticipants', 'showRank', 'allowAdmins', 'mustRemain']) d[k] = interaction.values.includes(k);
+  else {
+    const keys = d.mode === 'random' ? ['showParticipants', 'allowAdmins', 'mustRemain'] : ['showParticipants', 'showRank', 'allowAdmins', 'mustRemain'];
+    for (const k of keys) d[k] = interaction.values.includes(k);
+    if (d.mode === 'random') d.showRank = false;
+  }
   const payload = settingsPayload(d, d.lang);
   payload.flags &= ~require('discord.js').MessageFlags.Ephemeral;
   return interaction.update(payload);
@@ -319,6 +337,10 @@ async function progress(ctx, interaction, giveawayId) {
   const g = ctx.store.getGuild(interaction.guildId)?.giveawayState;
   if (!g || g.id !== giveawayId || g.status !== 'active') return interaction.reply(ephemeralText(tx(langFor(ctx, interaction), 'ended')));
   const e = g.entries?.[interaction.user.id]; if (!e) return interaction.reply(ephemeralText('ℹ️ Klicke zuerst auf **Teilnehmen**.'));
+  // Zufallsmodus hat kein XP-Wettrennen – nur Teilnahme bestätigen
+  if (g.mode === 'random') {
+    return interaction.reply(ephemeralText(`## 🎲 Zufalls-Giveaway\n\n✅ Du nimmst teil! Die Gewinner werden **zufällig** ausgelost.\n**Teilnehmer:** ${Object.keys(g.entries).length}\n**Ende:** <t:${Math.floor(g.endsAt / 1000)}:R>`));
+  }
   let rank = '–'; if (g.mode === 'xp' && g.showRank) rank = 1 + Object.values(g.entries).filter(x => !x.disqualified && x.xp > e.xp).length;
   return interaction.reply(ephemeralText(`## 📊 Dein Fortschritt\n\n**Giveaway-XP:** ${e.xp || 0}\n**Aktueller Platz:** ${rank}\n**Teilnehmer:** ${Object.keys(g.entries).length}\n**Ende:** <t:${Math.floor(g.endsAt / 1000)}:R>`));
 }
@@ -406,7 +428,13 @@ async function adminCommand(ctx, interaction) {
   const action = interaction.options.getString('aktion'); const page = interaction.options.getInteger('seite') || 1;
   if (action === 'participants' || action === 'status') {
     const list = Object.values(g.entries || {}).sort((a, b) => g.mode === 'xp' ? b.xp - a.xp : a.joinedAt - b.joinedAt); const start = (page - 1) * 20;
-    const rows = list.slice(start, start + 20).map((e, i) => `${start + i + 1}. <@${e.userId}> — ${e.xp || 0} XP${e.disqualified ? ' — disqualifiziert' : ''}${Object.entries(g.predetermined || {}).find(([, uid]) => uid === e.userId)?.[0] ? ` — fest Platz ${Object.entries(g.predetermined).find(([, uid]) => uid === e.userId)[0]}` : ''}`);
+    const rows = list.slice(start, start + 20).map((e, i) => {
+      // Zufall: kein XP-Wettrennen -> keine XP-Anzeige
+      if (g.mode === 'random') {
+        return `${start + i + 1}. <@${e.userId}>${e.disqualified ? ' — disqualifiziert' : ''}${Object.entries(g.predetermined || {}).find(([, uid]) => uid === e.userId)?.[0] ? ` — fest Platz ${Object.entries(g.predetermined).find(([, uid]) => uid === e.userId)[0]}` : ''}`;
+      }
+      return `${start + i + 1}. <@${e.userId}> — ${e.xp || 0} XP${e.disqualified ? ' — disqualifiziert' : ''}${Object.entries(g.predetermined || {}).find(([, uid]) => uid === e.userId)?.[0] ? ` — fest Platz ${Object.entries(g.predetermined).find(([, uid]) => uid === e.userId)[0]}` : ''}`;
+    });
     const ends = g.status === 'active' ? `\n**Ende:** <t:${Math.floor(g.endsAt / 1000)}:F> · <t:${Math.floor(g.endsAt / 1000)}:R>` : '';
     const hint = g.status === 'active' ? '\n\n🏁 Vorzeitig beenden: Aktion **Giveaway jetzt beenden** · ⛔ Ohne Gewinner stoppen: Aktion **Giveaway abbrechen**.' : '';
     return interaction.reply(ephemeralText(`## 🔒 Giveaway-Adminansicht\n**Status:** ${g.status}\n**ID:** \`${g.id}\`\n**Teilnehmer:** ${list.length}${ends}\n**Seite:** ${page}/${Math.max(1, Math.ceil(list.length / 20))}\n\n${rows.join('\n') || 'Noch keine Teilnehmer.'}${hint}`));
