@@ -460,6 +460,71 @@ async function refreshLeaderboard(ctx, entry, guild, now = new Date(), opts = {}
   }
 }
 
+// ---------------------------------------------------------------------------
+// Repin: Leaderboard als NEUE Nachricht senden (nicht editieren) und die alte
+// entfernen. Wird im kombinierten Modus (Level-Chat == Leaderboard-Kanal)
+// genutzt: Jede Level-Veränderung und jede fremde Nachricht im Kanal schiebt
+// das Board ans Ende, damit es die neueste Nachricht bleibt.
+// ---------------------------------------------------------------------------
+const lastRepin = new Map();
+const REPIN_THROTTLE_MS = 5_000;
+
+async function repinLeaderboard(ctx, entry, guild, { throttle = true } = {}) {
+  if (throttle) {
+    const last = lastRepin.get(entry.guildId) || 0;
+    const ts = Date.now();
+    if (ts - last < REPIN_THROTTLE_MS) return false;
+  }
+  try {
+    const channel = await fetchLeaderboardChannel(ctx, entry, guild);
+    if (!channel) {
+      ctx.logger.warn(
+        `[xp-level-bot] Leaderboard-Kanal ${entry.leaderboardChannelId} nicht erreichbar (${guild.name})`
+      );
+      return false;
+    }
+
+    const entries = ctx.store.getLeaderboard(entry.guildId, 15);
+    const container = buildLeaderboardEmbed({ lang: entry.lang, entries, now: new Date(), guildName: guild.name });
+    const payload = componentsV2Payload([container]);
+
+    const oldId = entry.leaderboardMessageId;
+    const replacement = await channel.send(payload).catch((err) => {
+      ctx.logger.warn(`[xp-level-bot] Leaderboard-Neuankündigung fehlgeschlagen (${guild.name}): ${err.message}`);
+      return null;
+    });
+    if (!replacement) return false;
+
+    entry.leaderboardMessageId = replacement.id;
+    entry.leaderboardChannelId = channel.id;
+
+    // Alte Leaderboard-Nachricht entfernen, damit nur die NEUESTE (die soeben
+    // gesendete) im Kanal steht. Die Level-Veränderungs-Nachricht darüber
+    // bleibt unangetastet.
+    if (oldId && oldId !== replacement.id) {
+      try {
+        const old = await channel.messages.fetch(oldId).catch(() => null);
+        if (old) await old.delete().catch(() => {});
+      } catch {}
+    }
+
+    const now = Date.now();
+    noteLeaderboardRefresh(entry.guildId, now);
+    entry.lastLeaderboardRefresh = now;
+    entry.lastLeaderboardUpdate = now;
+    noteHourlyRefresh(entry.guildId, now);
+    entry.lastHourlyLeaderboardRefresh = now;
+    lastRepin.set(entry.guildId, now);
+    ctx.store.setGuild(entry);
+    void ctx.store.flush().catch(() => {});
+    ctx.logger.info(`[xp-level-bot] Leaderboard neu angesteckt (${guild.name})`);
+    return true;
+  } catch (err) {
+    ctx.logger.warn(`[xp-level-bot] Leaderboard repin failed ${guild.name}:`, err?.message || err);
+    return false;
+  }
+}
+
 module.exports = {
   startScheduler,
   tick,
@@ -468,6 +533,7 @@ module.exports = {
   runLeaderboardTick,
   refreshLeaderboard,
   maybeRefreshLeaderboard,
+  repinLeaderboard,
   isLeaderboardRefreshDue,
   isHourlyRefreshDue,
   noteLeaderboardRefresh,
