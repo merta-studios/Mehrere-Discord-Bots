@@ -180,6 +180,11 @@ async function runMaintenanceTick(ctx, counter, now = new Date()) {
   if (counter % 5 === 0) void ctx.store.flush().catch(() => {});
 }
 
+async function runGiveawayTick(ctx, now = new Date()) {
+  if (!ctx.giveawayManager) return;
+  await ctx.giveawayManager.tick(now);
+}
+
 async function runBonusTick(ctx, now = new Date()) {
   if (!ctx.bonusDropper) return;
   await forEachConfiguredGuild(ctx, 'Bonus-Scheduler', async (entry, guild) => {
@@ -215,6 +220,7 @@ async function tick(ctx, counter = 1, opts = {}) {
   await Promise.all([
     runMaintenanceTick(ctx, counter, now),
     runBonusTick(ctx, now),
+    runGiveawayTick(ctx, now),
     runLeaderboardTick(ctx, now, { force: opts.forceHourly === true || counter === 0 }),
   ]);
 }
@@ -245,6 +251,7 @@ function startScheduler({ ctx }) {
     // Getrennte Locks: Ein hängender Task blockiert die beiden anderen nicht.
     launch('maintenance', () => runMaintenanceTick(ctx, counter, now));
     launch('bonus', () => runBonusTick(ctx, now));
+    launch('giveaway', () => runGiveawayTick(ctx, now));
     launch('leaderboard', () => runLeaderboardTick(ctx, now, { force: startup }));
   };
 
@@ -530,6 +537,7 @@ module.exports = {
   tick,
   runMaintenanceTick,
   runBonusTick,
+  runGiveawayTick,
   runLeaderboardTick,
   refreshLeaderboard,
   maybeRefreshLeaderboard,

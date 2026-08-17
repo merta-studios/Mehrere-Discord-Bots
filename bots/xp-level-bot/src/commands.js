@@ -25,6 +25,7 @@ const { componentsV2Payload } = require('./message-payload');
 const { openPanel } = require('./admin-panel');
 const { handleLevelRolesCommand } = require('./level-roles');
 const { handlePingInactiveCommand } = require('./ping-inactive');
+const { startCommand: startGiveawayCommand, adminCommand: giveawayAdminCommand } = require('./giveaway');
 
 /**
  * Alle Slash-Commands inkl. Owner-DM-Panel.
@@ -37,7 +38,7 @@ const { handlePingInactiveCommand } = require('./ping-inactive');
 const ALL_COMMAND_NAMES = [
   'setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles',
   'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role',
-  'ping_inactive_people', 'adminpanel',
+  'ping_inactive_people', 'start_giveaway', 'giveaway_admin', 'adminpanel',
 ];
 /** Nur global registrierte Commands (DM-only). */
 const GLOBAL_COMMAND_NAMES = ['adminpanel'];
@@ -159,6 +160,36 @@ function defineCommands() {
           { name: 'Main Channel', value: 'main_channel', name_localizations: pick('pingInactiveModeMainChannel') },
           { name: 'Direct', value: 'direct', name_localizations: pick('pingInactiveModeDirect') },
         )),
+
+    new SlashCommandBuilder()
+      .setName('start_giveaway')
+      .setDescription('Startet ein Giveaway mit Teilnahme-Button (maximal eines gleichzeitig)')
+      .setDescriptionLocalizations(pick('giveawayHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addChannelOption(o => o.setName('kanal').setDescription('Kanal für das Giveaway').setRequired(true).addChannelTypes(ChannelType.GuildText))
+      .addStringOption(o => o.setName('dauer').setDescription('z. B. 2d 4h oder 24.08.2026 18:30').setRequired(true).setMinLength(2).setMaxLength(40))
+      .addStringOption(o => o.setName('modus').setDescription('Wie werden die Gewinner bestimmt?').setRequired(true).addChoices(
+        { name: 'Meiste XP gesammelt', value: 'xp' },
+        { name: 'Zufällige Auslosung', value: 'random' },
+      ))
+      .addIntegerOption(o => o.setName('anzahl_gewinner').setDescription('Anzahl der Gewinner (1 bis 10)').setRequired(true).setMinValue(1).setMaxValue(10)),
+
+    // Discord kann Slash-Commands nicht vor berechtigten Admins verstecken.
+    // DefaultMemberPermissions sorgt aber dafür, dass nur Administratoren ihn
+    // sehen/nutzen; alle Antworten sind zusätzlich ephemeral.
+    new SlashCommandBuilder()
+      .setName('giveaway_admin')
+      .setDescription('Interne Giveaway-Verwaltung (nur Administratoren sichtbar)')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addStringOption(o => o.setName('aktion').setDescription('Interne Aktion').setRequired(true).addChoices(
+        { name: 'Teilnehmer ansehen', value: 'participants' },
+        { name: 'Status ansehen', value: 'status' },
+        { name: 'Zufallsgewinner vorbestimmen', value: 'preset' },
+        { name: 'Vorbestimmung entfernen', value: 'clear' },
+      ))
+      .addUserOption(o => o.setName('nutzer').setDescription('Teilnehmer, der vorbestimmt werden soll').setRequired(false))
+      .addIntegerOption(o => o.setName('platz').setDescription('Gewinnerplatz 1 bis 10').setRequired(false).setMinValue(1).setMaxValue(10))
+      .addIntegerOption(o => o.setName('seite').setDescription('Seite der Teilnehmerliste').setRequired(false).setMinValue(1).setMaxValue(999)),
 
     new SlashCommandBuilder()
       .setName('adminpanel')
@@ -485,6 +516,10 @@ async function handleChatInput(ctx, interaction) {
       return setInactiveRoleCmd(ctx, interaction);
     case 'ping_inactive_people':
       return handlePingInactiveCommand(ctx, interaction);
+    case 'start_giveaway':
+      return startGiveawayCommand(ctx, interaction);
+    case 'giveaway_admin':
+      return giveawayAdminCommand(ctx, interaction);
     case 'adminpanel':
       return openPanel(ctx, interaction);
     default:
@@ -636,6 +671,8 @@ async function helpCmd(ctx, interaction) {
       `**${commandMention(ctx, 'set_inactive_role', interaction.guildId)}**\n${t('setInactiveRoleHelp', lang)}`,
       '',
       `**${commandMention(ctx, 'ping_inactive_people', interaction.guildId)}**\n${t('pingInactiveHelp', lang)}`,
+      '',
+      `**${commandMention(ctx, 'start_giveaway', interaction.guildId)}**\n${t('giveawayHelp', lang)}`,
       '',
       `**${commandMention(ctx, 'help', interaction.guildId)}**\n${t('helpHelp', lang)}`,
     ].join('\n'))

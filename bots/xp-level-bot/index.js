@@ -116,6 +116,9 @@ module.exports = {
       panelSessions: new Map(),
     };
 
+    const { createGiveawayManager } = require('./src/giveaway');
+    ctx.giveawayManager = createGiveawayManager(ctx);
+
     // Den Voice-Listener absichtlich bereits VOR client.login() anhängen. So
     // gehen auch frühe VoiceState-Events während READY/RESUME nicht verloren.
     // Der Tracker pollt zusätzlich regelmäßig beide Discord-Caches.
@@ -125,6 +128,7 @@ module.exports = {
       store,
       logger,
       getGuildConfig: (guildId) => store.getGuild(guildId),
+      onXpGain: (guildId, userId, amount) => ctx.giveawayManager.trackXp(guildId, userId, amount, 'voice'),
     });
     voiceTracker.start();
 
@@ -348,6 +352,7 @@ module.exports = {
         user.lastActivity = now; // Aktivitäts-Stempel für den Inaktivitäts-Decay
         user.inactiveDays = 0;
         store.setUser(user);
+        ctx.giveawayManager.trackXp(msg.guild.id, msg.author.id, xp, hasMedia ? 'media' : 'chat');
         void require('./src/inactive-role')
           .clearInactiveRoleForUser(ctx, msg.guild, msg.author.id)
           .catch(() => {});

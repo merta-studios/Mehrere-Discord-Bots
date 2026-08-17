@@ -1568,6 +1568,18 @@ const T = {
     zh: '⛔ 此服务器没有自己的头像。',
     it: '⛔ Questo server non ha un’immagine del profilo.',
   },
+  giveawayHelp: {
+    de: 'Startet ein Giveaway: zufällig oder nach den meisten gesammelten XP.',
+    en: 'Starts a giveaway: random or based on the most XP earned.',
+    fr: 'Lance un giveaway aléatoire ou selon le plus d’XP gagné.',
+    es: 'Inicia un sorteo aleatorio o por la mayor cantidad de XP.',
+    pt: 'Inicia um sorteio aleatório ou por maior quantidade de XP.',
+    ru: 'Запускает розыгрыш: случайный или по максимуму полученного XP.',
+    ja: 'ランダムまたは獲得XP最多方式のGiveawayを開始します。',
+    ko: '무작위 또는 최다 XP 방식의 경품 이벤트를 시작합니다.',
+    zh: '开始随机抽奖或按活动期间获得 XP 最多者评选的抽奖。',
+    it: 'Avvia un giveaway casuale o basato sugli XP guadagnati.',
+  },
 };
 
 function t(key, lang, vars = {}) {

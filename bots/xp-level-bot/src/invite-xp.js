@@ -489,6 +489,7 @@ function createInviteXpTracker({
     user.lastActivity = now;
     user.inactiveDays = 0;
     store.setUser(user);
+    ctx.giveawayManager?.trackXp(guild.id, used.inviterId, xp, 'invite');
     void require('./inactive-role')
       .clearInactiveRoleForUser(ctx, guild, used.inviterId)
       .catch(() => {});
