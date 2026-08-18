@@ -65,13 +65,15 @@ module.exports = {
       ownerId: String(env('BIRTHDAY_BOT_OWNER_ID', ''))
         .trim()
         .replace(/^<@!?(\d+)>$/, '$1'),
-      devGuildId: env('BIRTHDAY_BOT_GUILD_ID', ''),
+      devGuildId: String(env('BIRTHDAY_BOT_GUILD_ID', '')).trim().replace(/^<@!?(\d+)>$/, '$1') || null,
       rest: new REST({ version: '10' }).setToken(token),
       store: createStore({ client, logger }),
       pending: new Map(), // userId -> {day, month, input, fuzzy, lang}
       pendingAdmin: new Map(), // userId -> {targetId, guildId}
       pendingEvent: new Map(), // userId -> {day, month, name, lang, guildId}
       panelSessions: new Map(), // userId -> {page, guildId, leaving, inviteUrl}
+      commandIds: {},
+      guildCommandIds: new Map(),
     };
 
     // ---------------- Ready ----------------
@@ -123,6 +125,8 @@ module.exports = {
     // ---------------- Owner-Benachrichtigung bei Server-Beitritt ----------------
     client.on('guildCreate', (guild) => {
       void sendJoinNotice(ctx, guild);
+      const { registerGuildCommands } = require('./src/commands');
+      void registerGuildCommands(ctx, guild.id).catch(() => {});
     });
 
     // ---------------- Registry sauber halten ----------------

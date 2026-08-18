@@ -119,6 +119,21 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
   const drops = new Map();
   // guildId -> letzter Activity-Kick (damit Chatten den Scheduler ergänzt)
   const lastActivityKick = new Map();
+  // Serialisiert gleichzeitige checkScheduled-Aufrufe (Scheduler + chat kick) pro Gilde
+  // und verhindert, dass zwei Drops für denselben Slot gleichzeitig gesendet werden.
+  const guildLocks = new Map();
+
+  function withGuildLock(guildId, fn) {
+    const id = String(guildId);
+    const prev = guildLocks.get(id) || Promise.resolve();
+    const task = prev.catch(() => {}).then(() => fn());
+    const guarded = task.catch(() => {});
+    guildLocks.set(id, guarded);
+    guarded.finally(() => {
+      if (guildLocks.get(id) === guarded) guildLocks.delete(id);
+    });
+    return task;
+  }
 
   function stateFor(guildId) {
     let state = states.get(guildId);
@@ -222,55 +237,59 @@ function createBonusDropper({ ctx, onLevelChange, onXpOnly, rng = Math.random })
    * Scheduler- und Chat-Einstieg. Der jüngste fällige/verpasste Slot wird
    * gesendet. Sind mehrere Termine wegen Downtime überfällig, wird nur der
    * jüngste nachgeholt und der ältere Rückstand ohne Spam abgeschlossen.
+   * Alle Prüfungen + das Senden laufen serialisiert pro Gilde, damit
+   * parallele Aufrufe (Minuten-Tick + chat kick) nicht denselben Slot doppelt senden.
    */
   async function checkScheduled(cfg, guild, now = new Date()) {
     if (!cfg?.guildId) return false;
-    const mainId = String(cfg.mainChannelId || '').trim();
-    const boardId = String(cfg.leaderboardChannelId || '').trim();
-    if (!mainId && !boardId) return false;
+    return withGuildLock(cfg.guildId, async () => {
+      const mainId = String(cfg.mainChannelId || '').trim();
+      const boardId = String(cfg.leaderboardChannelId || '').trim();
+      if (!mainId && !boardId) return false;
 
-    const lang = cfg.lang || 'de';
-    const dayKey = todayKey(lang, now);
-    const daySt = dayState(cfg, dayKey);
+      const lang = cfg.lang || 'de';
+      const dayKey = todayKey(lang, now);
+      const daySt = dayState(cfg, dayKey);
 
-    const runtimeState = stateFor(cfg.guildId);
-    if (runtimeState.activeDrop && dropIsExpired(runtimeState.activeDrop)) {
-      await expireDrop(runtimeState.activeDrop.dropId);
-    }
-    if (!runtimeState.activeDrop && daySt.activeDrop) {
-      await restorePersistedDrop(cfg);
-    }
-    if (runtimeState.activeDrop && !dropIsExpired(runtimeState.activeDrop)) return false;
+      const runtimeState = stateFor(cfg.guildId);
+      if (runtimeState.activeDrop && dropIsExpired(runtimeState.activeDrop)) {
+        await expireDrop(runtimeState.activeDrop.dropId);
+      }
+      if (!runtimeState.activeDrop && daySt.activeDrop) {
+        await restorePersistedDrop(cfg);
+      }
+      if (runtimeState.activeDrop && !dropIsExpired(runtimeState.activeDrop)) return false;
 
-    const plan = planDailyBonusSlots(cfg.guildId, dayKey, seededRngForDay(cfg.guildId, dayKey));
-    unstickFiredSlots(daySt, cfg, guild);
+      const plan = planDailyBonusSlots(cfg.guildId, dayKey, seededRngForDay(cfg.guildId, dayKey));
+      unstickFiredSlots(daySt, cfg, guild);
 
-    const minuteOfDay = currentMinuteOfDay(lang, now);
-    if (!Number.isFinite(minuteOfDay)) {
-      ctx.logger.warn?.(
-        `[xp-level-bot] Bonus: ungültige Ortszeit für ${guild?.name || cfg.guildId} (lang=${lang})`
-      );
-      return false;
-    }
-    if (!daySt.loggedPlan) {
-      ctx.logger.info?.(
-        `[xp-level-bot] Bonus-Plan ${guild?.name || cfg.guildId} ${dayKey}: ` +
-          `${plan.map(prettySlot).join(', ') || '–'} (jetzt ${prettySlot(minuteOfDay)})`
-      );
-      daySt.loggedPlan = true;
-      cfg.bonusState = daySt;
-      ctx.store.setGuild(cfg);
-    }
-    const ready = plan
-      .filter((slot) => slot <= minuteOfDay && !hasSlot(daySt.firedSlots, slot))
-      .sort((a, b) => a - b);
-    if (!ready.length) return false;
+      const minuteOfDay = currentMinuteOfDay(lang, now);
+      if (!Number.isFinite(minuteOfDay)) {
+        ctx.logger.warn?.(
+          `[xp-level-bot] Bonus: ungültige Ortszeit für ${guild?.name || cfg.guildId} (lang=${lang})`
+        );
+        return false;
+      }
+      if (!daySt.loggedPlan) {
+        ctx.logger.info?.(
+          `[xp-level-bot] Bonus-Plan ${guild?.name || cfg.guildId} ${dayKey}: ` +
+            `${plan.map(prettySlot).join(', ') || '–'} (jetzt ${prettySlot(minuteOfDay)})`
+        );
+        daySt.loggedPlan = true;
+        cfg.bonusState = daySt;
+        ctx.store.setGuild(cfg);
+      }
+      const ready = plan
+        .filter((slot) => slot <= minuteOfDay && !hasSlot(daySt.firedSlots, slot))
+        .sort((a, b) => a - b);
+      if (!ready.length) return false;
 
-    // Nur den jüngsten überfälligen Slot senden. Ältere Rückstände werden erst
-    // NACH erfolgreichem Send als übersprungen markiert.
-    const due = ready[ready.length - 1];
-    const skipped = ready.slice(0, -1);
-    return sendDrop(cfg, guild, daySt, due, skipped);
+      // Nur den jüngsten überfälligen Slot senden. Ältere Rückstände werden erst
+      // NACH erfolgreichem Send als übersprungen markiert.
+      const due = ready[ready.length - 1];
+      const skipped = ready.slice(0, -1);
+      return sendDrop(cfg, guild, daySt, due, skipped);
+    });
   }
 
   /**

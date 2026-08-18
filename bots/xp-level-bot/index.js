@@ -227,6 +227,19 @@ module.exports = {
           if (rankInfo && rankInfo.rank <= 3) {
             await maybeRefreshRankNicknames(ctx, guild, userId, cfg.lang || 'de');
           }
+          // Wenn Level-Chat == Leaderboard-Kanal, muss das Board trotz XP-only neu
+          // ans Ende (repin), sonst könnte der Bonus das Ranking ändern ohne
+          // dass das Board neu erscheint. Bei getrennten Kanälen: throttled edit.
+          // Für Bonus/Invite sind Events selten – daher ohne Throttle sofort neu.
+          if (cfg.leaderboardChannelId) {
+            if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
+              const { repinLeaderboard } = require('./src/scheduler');
+              await repinLeaderboard(ctx, cfg, guild, { throttle: false }).catch(() => {});
+            } else {
+              const { maybeRefreshLeaderboard } = require('./src/scheduler');
+              await maybeRefreshLeaderboard(ctx, cfg, guild).catch(() => {});
+            }
+          }
         } catch {}
       },
     });
@@ -256,6 +269,15 @@ module.exports = {
           const rankInfo = store.getRank(guild.id, userId);
           if (rankInfo && rankInfo.rank <= 3) {
             await maybeRefreshRankNicknames(ctx, guild, userId, cfg.lang || 'de');
+          }
+          if (cfg.leaderboardChannelId) {
+            if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
+              const { repinLeaderboard } = require('./src/scheduler');
+              await repinLeaderboard(ctx, cfg, guild, { throttle: false }).catch(() => {});
+            } else {
+              const { maybeRefreshLeaderboard } = require('./src/scheduler');
+              await maybeRefreshLeaderboard(ctx, cfg, guild).catch(() => {});
+            }
           }
         } catch {}
       },
@@ -373,17 +395,50 @@ module.exports = {
           } catch (e) {
             logger.warn('[xp-level-bot] first-xp nick fail', e.message);
           }
+          // Erster Eintrag ändert das Leaderboard sofort (repin bei kombiniertem Kanal).
+          try {
+            if (cfg.leaderboardChannelId) {
+              if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
+                const sameChannel = String(msg.channel.id) === String(cfg.leaderboardChannelId);
+                // Nur wenn die XP nicht bereits durch die Fremdmeldungs-Regel oben
+                // (repin bei Nachricht im kombinierten Kanal) abgedeckt ist, neu senden.
+                if (!sameChannel) {
+                  const { repinLeaderboard } = require('./src/scheduler');
+                  await repinLeaderboard(ctx, cfg, msg.guild, { throttle: true }).catch(() => {});
+                }
+              } else {
+                const { maybeRefreshLeaderboard } = require('./src/scheduler');
+                await maybeRefreshLeaderboard(ctx, cfg, msg.guild).catch(() => {});
+              }
+            }
+          } catch {}
         } else {
           // XP-only-Gewinn: Bei gleichem Level können sich die Ränge trotzdem
           // verschieben (mehr XP überholt weniger XP). Wenn der Nutzer damit
           // in die Top 3 rutscht, ändert sich die Medaille im Nickname.
+          // Zusätzlich auch das Leaderboard aktuell halten – bei kombiniertem
+          // Kanal muss es neu gesendet werden, sonst reicht ein throttled edit.
+          // Nur wenn die Nachricht NICHT selbst schon im kombinierten Kanal lag
+          // (dann hat der obere repin-Block bereits – throttled – nachgeschoben),
+          // triggern wir hier einen expliziten refresh für Rankings aus anderen Kanälen.
           try {
             const rankInfo = store.getRank(msg.guild.id, msg.author.id);
             if (rankInfo && rankInfo.rank <= 3) {
               await maybeRefreshRankNicknames(ctx, msg.guild, msg.author.id, cfg.lang);
             }
+            const isCombinedChannel = String(cfg.mainChannelId) === String(cfg.leaderboardChannelId);
+            const msgWasInCombined = isCombinedChannel && String(msg.channel.id) === String(cfg.leaderboardChannelId);
+            if (!msgWasInCombined && cfg.leaderboardChannelId) {
+              if (isCombinedChannel) {
+                const { repinLeaderboard } = require('./src/scheduler');
+                await repinLeaderboard(ctx, cfg, msg.guild, { throttle: true }).catch(() => {});
+              } else {
+                const { maybeRefreshLeaderboard } = require('./src/scheduler');
+                await maybeRefreshLeaderboard(ctx, cfg, msg.guild).catch(() => {});
+              }
+            }
           } catch (e) {
-            logger.warn('[xp-level-bot] medal refresh fail', e.message);
+            logger.warn('[xp-level-bot] medal/board refresh fail', e.message);
           }
         }
       } catch (e) {

@@ -38,6 +38,7 @@ const {
 } = require('./embed-builder');
 const { handlePanelButton, handlePanelSelect, PANEL_PREFIX } = require('./admin-panel');
 const { componentsV2Payload } = require('./message-payload');
+const { PING_UNREG_PREFIX, handlePingUnregisteredModalSubmit } = require('./ping-unregistered');
 
 /**
  * Liest die Glückwunsch-/Interessenten-Einträge (id + Uhrzeit) aus den
@@ -110,6 +111,9 @@ async function handleInteraction(ctx, interaction) {
       return await handleButton(ctx, interaction);
     }
     if (interaction.isModalSubmit()) {
+      if (interaction.customId === PING_UNREG_PREFIX || interaction.customId.startsWith(PING_UNREG_PREFIX)) {
+        return await handlePingUnregisteredModalSubmit(ctx, interaction);
+      }
       return await handleModal(ctx, interaction);
     }
     if (interaction.isStringSelectMenu()) {

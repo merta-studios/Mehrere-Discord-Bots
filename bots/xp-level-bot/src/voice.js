@@ -237,6 +237,19 @@ function createVoiceTracker({ client, store, logger, getGuildConfig, onXpGain = 
       const lang = cfg.lang || 'de';
       const miniCtx = { client, store, logger };
 
+      // Helper: bei kombiniertem Kanal muss das Board neu gesendet (repin) werden,
+      // bei getrennten Kanälen reicht ein throttled edit. Für XP-only nutzen wir
+      // denselben Pfad, damit Invite/Bonus/Voice das Ranking auch dort aktuell halten.
+      async function refreshBoardForVoice() {
+        if (!cfg.leaderboardChannelId) return;
+        if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
+          const { repinLeaderboard } = require('./scheduler');
+          await repinLeaderboard(miniCtx, cfg, guild, { throttle: true }).catch(() => {});
+        } else {
+          await maybeRefreshLeaderboard(miniCtx, cfg, guild).catch(() => {});
+        }
+      }
+
       if (levelResult) {
         // Zeige den finalen XP-Rest nach eventuell nachgeholten Minuten an.
         const announcementResult = { ...levelResult, level: user.level, xp: user.xp };
@@ -252,10 +265,17 @@ function createVoiceTracker({ client, store, logger, getGuildConfig, onXpGain = 
           res: announcementResult,
           source: 'voice',
         });
+        // Level-Wechsel ist wichtig genug für sofortigen Repin (ohne Throttle), sonst throttled.
+        const boardJob = String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)
+          ? (async () => {
+              const { repinLeaderboard } = require('./scheduler');
+              return repinLeaderboard(miniCtx, cfg, guild, { throttle: false }).catch(() => {});
+            })()
+          : maybeRefreshLeaderboard(miniCtx, cfg, guild).catch(() => {});
         await Promise.allSettled([
           refreshRankNicknames(miniCtx, guild, userId, lang),
           syncLevelRolesForUser({ ctx: miniCtx, guild, userId, level: user.level }),
-          maybeRefreshLeaderboard(miniCtx, cfg, guild),
+          boardJob,
           clearInactiveRoleForUser(miniCtx, guild, userId),
           levelFlush,
         ]);
@@ -263,6 +283,7 @@ function createVoiceTracker({ client, store, logger, getGuildConfig, onXpGain = 
         await Promise.allSettled([
           refreshRankNicknames(miniCtx, guild, userId, lang),
           clearInactiveRoleForUser(miniCtx, guild, userId),
+          refreshBoardForVoice(),
         ]);
       } else {
         try {
@@ -271,7 +292,10 @@ function createVoiceTracker({ client, store, logger, getGuildConfig, onXpGain = 
             await maybeRefreshRankNicknames(miniCtx, guild, userId, lang).catch(() => {});
           }
         } catch {}
-        await clearInactiveRoleForUser(miniCtx, guild, userId).catch(() => {});
+        await Promise.allSettled([
+          clearInactiveRoleForUser(miniCtx, guild, userId).catch(() => {}),
+          refreshBoardForVoice(),
+        ]);
       }
 
       return true;
