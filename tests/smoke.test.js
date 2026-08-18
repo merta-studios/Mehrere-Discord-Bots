@@ -61,7 +61,7 @@ test('Bot-Module haben die erwartete Form', () => {
 test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 9 Commands)', () => {
   const { defineCommands } = require('../bots/birthday-bot/src/commands');
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 9);
+  assert.equal(cmds.length, 10);
   const names = cmds.map((c) => c.name).sort();
   assert.deepEqual(names, [
     'admin_set_birthday',
@@ -69,6 +69,7 @@ test('Slash-Commands sind gültiges Discord-JSON (10 Sprachen, 9 Commands)', () 
     'adminpanel',
     'event',
     'help',
+    'ping_unregistered',
     'set_birthday_role',
     'set_channel',
     'set_language',

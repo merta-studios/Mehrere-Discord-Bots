@@ -32,6 +32,7 @@ const {
 } = require('./embed-builder');
 const { openPanel } = require('./admin-panel');
 const { componentsV2Payload } = require('./message-payload');
+const { handlePingUnregisteredCommand } = require('./ping-unregistered');
 
 /** Baut die Lokalisierungs-Map (Discord-Locale-Codes) für ein T-Key. */
 function pick(key) {
@@ -174,6 +175,13 @@ function defineCommands() {
       ),
 
     new SlashCommandBuilder()
+      .setName('ping_unregistered')
+      .setDescription('Erinnert alle ohne Geburtstagseintrag per DM (nur Admins)')
+      .setDescriptionLocalizations(pick('pingUnregisteredHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .setContexts(InteractionContextType.Guild),
+
+    new SlashCommandBuilder()
       .setName('help')
       .setDescription('Zeigt alle Befehle an')
       .setDescriptionLocalizations(pick('helpHelp')),
@@ -188,28 +196,65 @@ function defineCommands() {
   ];
 }
 
-/** Registriert die Commands global (oder in einer Dev-Gilde). */
+const GLOBAL_COMMAND_NAMES = ['adminpanel'];
+function guildCommandJson() {
+  return defineCommands()
+    .filter((c) => !GLOBAL_COMMAND_NAMES.includes(c.name))
+    .map((c) => c.toJSON());
+}
+function globalCommandJson() {
+  return defineCommands()
+    .filter((c) => GLOBAL_COMMAND_NAMES.includes(c.name))
+    .map((c) => c.toJSON());
+}
+function rememberGuildIds(ctx, guildId, ids) {
+  if (!guildId || !ids) return;
+  ctx.guildCommandIds = ctx.guildCommandIds instanceof Map ? ctx.guildCommandIds : new Map();
+  ctx.guildCommandIds.set(String(guildId), ids);
+}
+/**
+ * Registriert Guild-Commands direkt auf einem Server (sofort sichtbar).
+ */
+async function registerGuildCommands(ctx, guildId, { rest } = {}) {
+  const clientId = ctx.client?.user?.id;
+  if (!clientId || !guildId) return null;
+  const api = rest || new REST({ version: '10' }).setToken(ctx.token);
+  const guildCmds = guildCommandJson();
+  try {
+    const res = await api.put(Routes.applicationGuildCommands(clientId, guildId), { body: guildCmds });
+    rememberGuildIds(ctx, guildId, Object.fromEntries((res || []).map((c) => [c.name, c.id])));
+    ctx.logger?.info?.(`[birthday-bot] Commands für Server ${guildId} registriert.`);
+    return res;
+  } catch (err) {
+    ctx.logger?.warn?.(`[birthday-bot] Guild-Commands für ${guildId} fehlgeschlagen: ${err.message}`);
+    return null;
+  }
+}
+
+/** Registriert die Commands global (nur adminpanel) + als Guild-Commands auf jedem Server (sofort). */
 async function registerCommands(ctx) {
-  const commands = defineCommands().map((c) => c.toJSON());
   const rest = new REST({ version: '10' }).setToken(ctx.token);
   const clientId = ctx.client.user.id;
 
   try {
     if (ctx.devGuildId) {
-      const registered = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), { body: commands });
+      const registered = await rest.put(Routes.applicationGuildCommands(clientId, ctx.devGuildId), { body: defineCommands().map((c) => c.toJSON()) });
       ctx.commandIds = Object.fromEntries((registered || []).map((c) => [c.name, c.id]));
       ctx.logger.info(`[birthday-bot] Commands in Dev-Gilde ${ctx.devGuildId} registriert.`);
-    } else {
-      const registered = await rest.put(Routes.applicationCommands(clientId), { body: commands });
-      ctx.commandIds = Object.fromEntries((registered || []).map((c) => [c.name, c.id]));
-      // Alte Guild-Commands (z. B. aus der Dev-Phase) aufräumen.
-      for (const guild of ctx.client.guilds.cache.values()) {
-        await rest
-          .put(Routes.applicationGuildCommands(clientId, guild.id), { body: [] })
-          .catch(() => {});
-      }
-      ctx.logger.info('[birthday-bot] Commands global registriert (bis zu 1h bis überall sichtbar).');
+      return;
     }
+
+    const registered = await rest.put(Routes.applicationCommands(clientId), { body: globalCommandJson() });
+    ctx.commandIds = Object.fromEntries((registered || []).map((c) => [c.name, c.id]));
+
+    const guildCommands = guildCommandJson();
+    for (const guild of ctx.client.guilds.cache.values()) {
+      const res = await rest
+        .put(Routes.applicationGuildCommands(clientId, guild.id), { body: guildCommands })
+        .catch((err) => ctx.logger.warn(`[birthday-bot] Guild-Commands für ${guild.id} fehlgeschlagen:`, err.message));
+      if (res) rememberGuildIds(ctx, guild.id, Object.fromEntries((res || []).map((c) => [c.name, c.id])));
+    }
+    ctx.logger.info('[birthday-bot] Commands global (nur /adminpanel) & als Guild-Satz auf allen Servern registriert.');
   } catch (err) {
     ctx.logger.error('[birthday-bot] Command-Registrierung fehlgeschlagen:', err.message);
   }
@@ -235,13 +280,15 @@ async function handleChatInput(ctx, interaction) {
       return adminSetCmd(ctx, interaction);
     case 'event':
       return eventCmd(ctx, interaction);
+    case 'ping_unregistered':
+      return handlePingUnregisteredCommand(ctx, interaction);
     case 'help':
       return helpCmd(ctx, interaction);
     case 'adminpanel':
       return openPanel(ctx, interaction);
     default:
       return interaction.reply(
-        componentsV2Payload([smallContainer(null, 'Unbekannter Befehl.')], { ephemeral: false })
+        componentsV2Payload([smallContainer(null, 'Unbekannter Befehl.')], { ephemeral: true })
       );
   }
 }
@@ -535,11 +582,19 @@ async function adminSetCmd(ctx, interaction) {
   return interaction.showModal(buildAdminModal(modalLang, target.username));
 }
 
-function commandMention(ctx, name) { return ctx.commandIds?.[name] ? `</${name}:${ctx.commandIds[name]}>` : `/${name}`; }
+function commandMention(ctx, name, guildId = null) {
+  let id = null;
+  if (guildId && ctx.guildCommandIds instanceof Map) {
+    id = ctx.guildCommandIds.get(String(guildId))?.[name] || null;
+  }
+  if (!id) id = ctx.commandIds?.[name] || null;
+  return id ? `</${name}:${id}>` : `/${name}`;
+}
 
 /** /help – Befehlsübersicht (ohne /adminpanel, da dieses nur für den Owner im DM bestimmt ist) */
 async function helpCmd(ctx, interaction) {
   const lang = ctx.store.get(interaction.guildId)?.lang || langFromDiscord(interaction.locale);
+  const gid = interaction.guildId || null;
 
   const container = new ContainerBuilder()
     .addTextDisplayComponents(
@@ -548,26 +603,28 @@ async function helpCmd(ctx, interaction) {
           `# ${t('helpTitle', lang)}`,
           t('helpDesc', lang),
           '',
-          `**${commandMention(ctx, 'setup')}**\n${t('helpSetup', lang)}`,
+          `**${commandMention(ctx, 'setup', gid)}**\n${t('helpSetup', lang)}`,
           '',
-          `**${commandMention(ctx, 'set_language')}**\n${t('helpSetLanguage', lang)}`,
+          `**${commandMention(ctx, 'set_language', gid)}**\n${t('helpSetLanguage', lang)}`,
           '',
-          `**${commandMention(ctx, 'set_channel')}**\n${t('helpSetChannel', lang)}`,
+          `**${commandMention(ctx, 'set_channel', gid)}**\n${t('helpSetChannel', lang)}`,
           '',
-          `**${commandMention(ctx, 'set_birthday_role')}**\n${t('helpSetBirthdayRole', lang)}`,
+          `**${commandMention(ctx, 'set_birthday_role', gid)}**\n${t('helpSetBirthdayRole', lang)}`,
           '',
-          `**${commandMention(ctx, 'event')}**\n${t('helpEvent', lang)}`,
+          `**${commandMention(ctx, 'event', gid)}**\n${t('helpEvent', lang)}`,
           '',
-          `**${commandMention(ctx, 'admin_set_bot_profile')}**\n${t('helpSetProfile', lang)}`,
+          `**${commandMention(ctx, 'ping_unregistered', gid)}**\n${t('pingUnregisteredHelp', lang)}`,
           '',
-          `**${commandMention(ctx, 'admin_set_birthday')}**\n${t('helpAdminSet', lang)}`,
+          `**${commandMention(ctx, 'admin_set_bot_profile', gid)}**\n${t('helpSetProfile', lang)}`,
           '',
-          `**${commandMention(ctx, 'help')}**\n${t('helpHelp', lang)}`,
+          `**${commandMention(ctx, 'admin_set_birthday', gid)}**\n${t('helpAdminSet', lang)}`,
+          '',
+          `**${commandMention(ctx, 'help', gid)}**\n${t('helpHelp', lang)}`,
         ].join('\n')
       )
     );
 
-  return interaction.reply(componentsV2Payload([container]));
+  return interaction.reply(componentsV2Payload([container], { ephemeral: true }));
 }
 
-module.exports = { defineCommands, registerCommands, handleChatInput, pick };
+module.exports = { defineCommands, registerCommands, registerGuildCommands, handleChatInput, pick };

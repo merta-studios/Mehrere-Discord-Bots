@@ -127,7 +127,7 @@ function botCanManageRoles(guild) {
 // Editor rendern
 // ---------------------------------------------------------------------------
 
-function editorPayload(session, { ephemeral = false } = {}) {
+function editorPayload(session, { ephemeral = true } = {}) {
   const container =
     session.view === 'remove' ? buildRemoveSelectContainer(session) : buildEditorContainer(session);
   return componentsV2Payload([container], { ephemeral });
@@ -273,7 +273,7 @@ async function publishSession(ctx, interaction, session) {
   }
 
   await interaction.update(
-    componentsV2Payload([smallContainer(t('editorTitle', lang), t('publishing', lang))], { ephemeral: false })
+    componentsV2Payload([smallContainer(t('editorTitle', lang), t('publishing', lang))], { ephemeral: true })
   ).catch(() => {});
 
   let createdIds = [];
@@ -333,7 +333,7 @@ async function publishSession(ctx, interaction, session) {
       : t('publishedBody', lang, { count: withCounts.length, channel: `<#${channel.id}>`, url });
     const title = session.editing ? t('savedTitle', lang) : t('publishedTitle', lang);
 
-    return interaction.editReply(componentsV2Payload([smallContainer(title, body)]));
+    return interaction.editReply(componentsV2Payload([smallContainer(title, body)], { ephemeral: true }));
   } catch (err) {
     // Frisch erstellte Rollen wieder entfernen – kein Müll auf dem Server.
     if (createdIds.length) await rollbackRoles(guild, createdIds, ctx.logger).catch(() => {});
@@ -347,7 +347,7 @@ async function publishSession(ctx, interaction, session) {
     // erneuter Versuch sauber neu erstellt.
     session.roles = session.roles.map((r) => (createdIds.includes(r.roleId) ? { ...r, roleId: null } : r));
     ctx.sessions.put(session);
-    return interaction.editReply(editorPayload(session, { ephemeral: false })).catch(() => null);
+    return interaction.editReply(editorPayload(session, { ephemeral: true })).catch(() => null);
   }
 }
 
@@ -361,12 +361,12 @@ async function handleEditorButton(ctx, interaction, { action, sessionId }) {
 
   if (!session) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errSessionExpired', fallbackLang))], { ephemeral: false })
+      componentsV2Payload([smallContainer(null, t('errSessionExpired', fallbackLang))], { ephemeral: true })
     );
   }
   if (session.userId !== interaction.user.id || !isAdmin(interaction)) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', session.lang))], { ephemeral: false })
+      componentsV2Payload([smallContainer(null, t('errNoPermission', session.lang))], { ephemeral: true })
     );
   }
 
@@ -414,7 +414,7 @@ async function handleEditorButton(ctx, interaction, { action, sessionId }) {
     case 'cancel': {
       ctx.sessions.drop(session.id);
       return interaction.update(
-        componentsV2Payload([smallContainer(null, t('cancelled', session.lang))], { ephemeral: false })
+        componentsV2Payload([smallContainer(null, t('cancelled', session.lang))], { ephemeral: true })
       );
     }
 
@@ -429,13 +429,13 @@ async function handleRemoveSelect(ctx, interaction, { sessionId }) {
   if (!session) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('errSessionExpired', langFromDiscord(interaction.locale)))], {
-        ephemeral: false,
+        ephemeral: true,
       })
     );
   }
   if (session.userId !== interaction.user.id) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', session.lang))], { ephemeral: false })
+      componentsV2Payload([smallContainer(null, t('errNoPermission', session.lang))], { ephemeral: true })
     );
   }
 
@@ -454,7 +454,7 @@ async function handleRoleModal(ctx, interaction, { sessionId }) {
   if (!session) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('errSessionExpired', langFromDiscord(interaction.locale)))], {
-        ephemeral: false,
+        ephemeral: true,
       })
     );
   }
@@ -494,7 +494,7 @@ async function handleTextModal(ctx, interaction, { sessionId }) {
   if (!session) {
     return interaction.reply(
       componentsV2Payload([smallContainer(null, t('errSessionExpired', langFromDiscord(interaction.locale)))], {
-        ephemeral: false,
+        ephemeral: true,
       })
     );
   }
