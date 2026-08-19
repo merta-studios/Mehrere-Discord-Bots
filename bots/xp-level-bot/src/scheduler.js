@@ -473,15 +473,41 @@ async function refreshLeaderboard(ctx, entry, guild, now = new Date(), opts = {}
 // genutzt: Jede Level-Veränderung und jede fremde Nachricht im Kanal schiebt
 // das Board ans Ende, damit es die neueste Nachricht bleibt.
 // ---------------------------------------------------------------------------
-const lastRepin = new Map();
+// Pro Server genau EIN laufender Repin. Der Throttle-Zeitstempel muss
+// zusätzlich SOFORT (synchron, vor dem ersten await) gesetzt werden: Der Send
+// unten ist eine lange Discord-API-Kette; ohne sofortigen Stempel durchläuft
+// sonst JEDE hereinkommende Chat-Nachricht den Check, bevor der erste Repin
+// fertig ist. Folge war: pro Textnachricht ein neues Board im Kanal – und weil
+// alle nebenläufigen Repins nur die EINE alte Nachrichten-ID kannten, blieben
+// die übrigen Duplikate im Kanal stehen ("spielt verrückt"). Das Lock deckt
+// auch throttle:false-Aufrufe (Level-Ups, Bonus/Invite) ab, damit diese nicht
+// mit einem laufenden Fremd-Nachrichten-Repin kollidieren und Duplikate
+// erzeugen.
+const repinInFlight = new Map(); // guildId -> true, solange ein Repin läuft
+const lastRepin = new Map(); // guildId -> Start-Zeitstempel des letzten Repins
 const REPIN_THROTTLE_MS = 5_000;
 
 async function repinLeaderboard(ctx, entry, guild, { throttle = true } = {}) {
+  const guildKey = String(entry.guildId || guild?.id || '');
+
+  // Nebenläufigkeits-Schutz: läuft bereits ein Repin für diesen Server, ist
+  // dieser Aufruf überflüssig – der laufende Send rendert ohnehin den
+  // aktuellen Stand und landet danach als neueste Nachricht im Kanal.
+  if (repinInFlight.get(guildKey)) return false;
+
   if (throttle) {
-    const last = lastRepin.get(entry.guildId) || 0;
+    const last = lastRepin.get(guildKey) || 0;
     const ts = Date.now();
     if (ts - last < REPIN_THROTTLE_MS) return false;
   }
+
+  // Stempel + Lock VOR dem ersten await setzen. Nur so greift der Throttle
+  // auch unter Last (mehrere Nachrichten innerhalb eines Event-Loop-Fensters).
+  // Das Lock wird im finally freigegeben, damit ein Fehler den Server nicht
+  // dauerhaft sperrt; der Zeitstempel bleibt bewusst auch bei Fehlern stehen
+  // (schützt vor Send-Schleifen bei anhaltenden Discord-Problemen).
+  repinInFlight.set(guildKey, true);
+  lastRepin.set(guildKey, Date.now());
   try {
     const channel = await fetchLeaderboardChannel(ctx, entry, guild);
     if (!channel) {
@@ -521,7 +547,6 @@ async function repinLeaderboard(ctx, entry, guild, { throttle = true } = {}) {
     entry.lastLeaderboardUpdate = now;
     noteHourlyRefresh(entry.guildId, now);
     entry.lastHourlyLeaderboardRefresh = now;
-    lastRepin.set(entry.guildId, now);
     ctx.store.setGuild(entry);
     void ctx.store.flush().catch(() => {});
     ctx.logger.info(`[xp-level-bot] Leaderboard neu angesteckt (${guild.name})`);
@@ -529,6 +554,8 @@ async function repinLeaderboard(ctx, entry, guild, { throttle = true } = {}) {
   } catch (err) {
     ctx.logger.warn(`[xp-level-bot] Leaderboard repin failed ${guild.name}:`, err?.message || err);
     return false;
+  } finally {
+    repinInFlight.delete(guildKey);
   }
 }
 
