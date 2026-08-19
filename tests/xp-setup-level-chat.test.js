@@ -82,7 +82,7 @@ test('only_level_chat:false (Default) erlaubt weiterhin Reply im Quellkanal', as
   assert.equal(replies.length, 1);
 });
 
-function repinHarness(guildId, entry) {
+function repinHarness(guildId, entry, { slowSend = false } = {}) {
   let sentCount = 0;
   const oldMessage = { id: 'leader-old', delete: async () => { oldMessage.deleted = true; return oldMessage; } };
   const newMessage = { id: 'leader-new' };
@@ -90,7 +90,12 @@ function repinHarness(guildId, entry) {
     id: entry.leaderboardChannelId,
     isTextBased: () => true,
     messages: { fetch: async (id) => (id === 'leader-old' ? oldMessage : null) },
-    send: async () => { sentCount += 1; return newMessage; },
+    send: async () => {
+      // Simuliert eine echte, langsame Discord-API-Antwort: erst dann lässt
+      // sich der Nebenläufigkeits-Bug (mehrere Boards pro Chat-Burst) testen.
+      if (slowSend) await new Promise((resolve) => setTimeout(resolve, 25));
+      sentCount += 1; return newMessage;
+    },
   };
   const guild = {
     id: guildId, name: 'Repin Test',
@@ -144,4 +149,48 @@ test('repinLeaderboard: Throttle verhindert zu häufiges Neu-Senden', async () =
   assert.equal(first, true);
   assert.equal(second, false, 'zweiter Aufruf innerhalb des Throttles wird übersprungen');
   assert.equal(h.getSent(), 1);
+});
+
+test('repinLeaderboard: Message-Burst sendet nur EIN Board (Race-Fix)', async () => {
+  const entry = {
+    guildId: 'repin-race',
+    leaderboardChannelId: 'lb',
+    leaderboardMessageId: 'leader-old',
+    mainChannelId: 'lb',
+    lang: 'de',
+  };
+  // Langsamer Send simuliert die Discord-API-Latenz: Früher durchliefen alle
+  // gleichzeitig eintreffenden Chat-Nachrichten den Throttle-Check, bevor der
+  // erste Repin seinen Zeitstempel schrieb → pro Nachricht ein neues Board.
+  const h = repinHarness('repin-race', entry, { slowSend: true });
+
+  // Fünf "Nachrichten" kommen praktisch gleichzeitig an (fire-and-forget).
+  const results = await Promise.all(
+    Array.from({ length: 5 }, () => repinLeaderboard(h.ctx, entry, h.guild, { throttle: true }))
+  );
+
+  assert.equal(results.filter(Boolean).length, 1, 'genau ein Repin wird ausgeführt');
+  assert.equal(h.getSent(), 1, 'genau EINE neue Board-Nachricht, keine Duplikate');
+});
+
+test('repinLeaderboard: throttle:false blockt nicht an einem laufenden Repin vorbei', async () => {
+  const entry = {
+    guildId: 'repin-lock',
+    leaderboardChannelId: 'lb',
+    leaderboardMessageId: 'leader-old',
+    mainChannelId: 'lb',
+    lang: 'de',
+  };
+  const h = repinHarness('repin-lock', entry, { slowSend: true });
+
+  // Fremd-Nachricht im kombinierten Kanal startet einen Repin; während der
+  // Send läuft, feuert ein Level-Up mit throttle:false (z. B. handleLevelChange).
+  const [foreign, levelUp] = await Promise.all([
+    repinLeaderboard(h.ctx, entry, h.guild, { throttle: true }),
+    repinLeaderboard(h.ctx, entry, h.guild, { throttle: false }),
+  ]);
+
+  assert.equal(foreign, true);
+  assert.equal(levelUp, false, 'Level-Up-Repin während eines laufenden Repins wird übersprungen');
+  assert.equal(h.getSent(), 1, 'kein doppeltes Board durch parallele Sends');
 });
