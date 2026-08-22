@@ -103,7 +103,7 @@ function makeCtx(overrides = {}) {
   };
 }
 
-const ALL_CMD_NAMES = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role', 'ping_inactive_people', 'start_giveaway', 'giveaway_admin', 'adminpanel'];
+const ALL_CMD_NAMES = ['setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles', 'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role', 'ping_inactive_people', 'give_xp', 'start_giveaway', 'giveaway_admin', 'adminpanel'];
 const GUILD_ONLY_CMD_NAMES = ALL_CMD_NAMES.filter((n) => n !== 'adminpanel');
 const GLOBAL_ONLY_CMD_NAMES = ['adminpanel'];
 
@@ -112,9 +112,9 @@ function fakeCommandList(idFor = (name) => `id-${name}`) {
   return ALL_CMD_NAMES.map((name) => ({ id: idFn(name), name }));
 }
 
-test('alle 13 Command-JSONs sind Discord-API-valide (inkl. Giveaway-Commands)', () => {
+test('alle 14 Command-JSONs sind Discord-API-valide (inkl. Giveaway-Commands & /give_xp)', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 13);
+  assert.equal(cmds.length, 14);
   for (const c of cmds) {
     assert.deepEqual(validateCommand(c), [], `Command "${c.name}" würde von Discord abgelehnt`);
   }
@@ -247,6 +247,7 @@ test('ensureCommandIds lädt IDs von Discord REST GET nach wenn RAM und Store le
         { id: '1009', name: 'sync_nicknames' },
         { id: '1010', name: 'set_inactive_role' },
         { id: '1011', name: 'ping_inactive_people' },
+        { id: '1012', name: 'give_xp' },
         { id: '1007', name: 'adminpanel' },
       ];
     },
@@ -341,6 +342,7 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
       { id: '2009', name: 'sync_nicknames' },
       { id: '2010', name: 'set_inactive_role' },
       { id: '2011', name: 'ping_inactive_people' },
+      { id: '2012', name: 'give_xp' },
       { id: '2007', name: 'adminpanel' },
     ],
   };
@@ -373,6 +375,7 @@ test('/help rendert alle 5 Chat-Commands als klickbare Mentions </name:id>', asy
   assert.ok(text.includes('</level_roles:2005>'), 'level_roles muss klickbar sein');
   assert.ok(text.includes('</toggle_nicknames:2008>'), 'toggle_nicknames muss klickbar sein');
   assert.ok(text.includes('</ping_inactive_people:2011>'), 'ping_inactive_people muss klickbar sein');
+  assert.ok(text.includes('</give_xp:2012>'), 'give_xp muss klickbar sein');
   assert.ok(text.includes('</sync_nicknames:2009>'), 'sync_nicknames muss klickbar sein');
   assert.ok(text.includes('</set_inactive_role:2010>'), 'set_inactive_role muss klickbar sein');
   assert.ok(text.includes('</help:2003>'), 'help muss klickbar sein');
@@ -470,6 +473,7 @@ test('ensureCommandIds lädt auf normalen Servern GLOBALE Commands, auch wenn De
         { id: '4009', name: 'sync_nicknames' },
         { id: '4010', name: 'set_inactive_role' },
         { id: '4011', name: 'ping_inactive_people' },
+        { id: '4012', name: 'give_xp' },
         { id: '4007', name: 'adminpanel' },
       ];
     },
@@ -501,6 +505,7 @@ test('ensureCommandIds lädt auf der Dev-Gilde die Guild-Commands und verschmutz
         { id: '5009', name: 'sync_nicknames' },
         { id: '5010', name: 'set_inactive_role' },
         { id: '5011', name: 'ping_inactive_people' },
+        { id: '5012', name: 'give_xp' },
         { id: '5007', name: 'adminpanel' },
       ];
     },
@@ -638,6 +643,7 @@ test('verifizierte IDs werden innerhalb der TTL aus dem Memory genutzt (kein RES
         { id: '9', name: 'sync_nicknames' },
         { id: '10', name: 'set_inactive_role' },
         { id: '11', name: 'ping_inactive_people' },
+        { id: '14', name: 'give_xp' },
         { id: '12', name: 'start_giveaway' },
         { id: '13', name: 'giveaway_admin' },
         { id: '7', name: 'adminpanel' },
@@ -695,6 +701,7 @@ test('/help rendert /update_leaderboard mit frischer ID statt der verwaisten Sto
       { id: '3009', name: 'sync_nicknames' },
       { id: '3010', name: 'set_inactive_role' },
       { id: '3011', name: 'ping_inactive_people' },
+      { id: '3012', name: 'give_xp' },
       { id: '3007', name: 'adminpanel' },
     ],
   };

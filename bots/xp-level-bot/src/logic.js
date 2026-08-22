@@ -73,6 +73,30 @@ function decayRateForInactiveDays(inactiveDays) {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Maximal so viele Tages-Abrechnungen werden NACHGEHOLT, wenn der Bot über
+ * Mitternacht offline war. Mehr wäre nicht fair (der Bot war weg, die Nutzer
+ * konnten nichts dagegen tun) und hätte bei langen Ausfällen den Effekt, dass
+ * Level kaskadieren und Nutzer in Sekunden mehrere Level verlieren.
+ * Die ersten beiden Tage entsprechen der Erwartung „Tag 1 = 5 %, Tag 2 = 8 %“.
+ */
+const MAX_DECAY_CATCHUP_DAYS = 2;
+
+/**
+ * Wie viele 0-Uhr-Abrechnungen zwischen dem gespeicherten letzten Decay-Tag
+ * (YYYY-MM-DD) und dem heutigen Tag liegen. 0 = keine (frisch bzw. unbekannt).
+ * Bei unbekanntem/fehlendem Marker wird 0 geliefert – der Aufrufer entscheidet,
+ * ob er trotzdem genau EINE Abrechnung anwendet (Altbestand).
+ */
+function missedDailyDecayDays(lastDecayKey, dayKey) {
+  if (!lastDecayKey || !dayKey) return 0;
+  const from = Date.parse(`${String(lastDecayKey).slice(0, 10)}T00:00:00Z`);
+  const to = Date.parse(`${String(dayKey).slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return 0;
+  const diff = Math.floor((to - from) / DAY_MS);
+  return Number.isFinite(diff) && diff > 0 ? diff : 0;
+}
+
 /** War der Nutzer in den letzten 24h aktiv (irgendwelche XP verdient)? */
 function wasActiveRecently(user, now = Date.now()) {
   const last = user?.lastActivity || user?.lastXpGain || 0;
@@ -310,6 +334,56 @@ function applyDailyDecay(user, rate = DAILY_DECAY_RATE) {
 
   const leveledDown = level < startLevel;
   return { level, xp, leveledDown, decay, dropped: leveledDown };
+}
+
+/**
+ * Wendet eine beliebige XP-Änderung an (auch negativ) – für den
+ * /give_xp-Befehl des Server-Owners.
+ *
+ * - Positiv: XP dazu; überschüssige XP wandern durch mehrere Level (kein
+ *   Verlust wie beim 30-XP-Chat-Reset). Maximal Level 100 mit XP-Cap.
+ * - Negativ: XP abziehen; der Restbetrag wird wie beim Tages-Schwund korrekt
+ *   ins vorige Level übernommen. Es geht NIE unter Level 1 mit 0 XP –
+ *   ein negativer XP-Stand („XP-Bombe“) ist damit ausgeschlossen.
+ */
+function applyXpDelta(user, amount) {
+  const startLevel = Math.max(1, Math.floor(Number(user?.level) || 1));
+  let level = startLevel;
+  let xp = Math.max(0, Math.floor(Number(user?.xp) || 0));
+  const delta = Math.trunc(Number(amount));
+  if (!Number.isFinite(delta) || delta === 0) {
+    return { level, xp, leveledUp: false, leveledDown: false, leveled: false, delta: 0 };
+  }
+
+  if (delta > 0) {
+    xp += delta;
+    while (level < MAX_LEVEL && xp >= xpNeeded(level)) {
+      xp -= xpNeeded(level);
+      level += 1;
+    }
+    if (level >= MAX_LEVEL && xp > xpNeeded(MAX_LEVEL)) xp = xpNeeded(MAX_LEVEL);
+  } else {
+    let remaining = -delta;
+    while (remaining > 0) {
+      if (xp >= remaining) {
+        xp -= remaining;
+        remaining = 0;
+        break;
+      }
+      remaining -= xp;
+      if (level <= 1) {
+        xp = 0;
+        remaining = 0;
+        break;
+      }
+      level -= 1;
+      xp = xpNeeded(level);
+    }
+  }
+
+  const leveledUp = level > startLevel;
+  const leveledDown = level < startLevel;
+  return { level, xp, leveledUp, leveledDown, leveled: leveledUp || leveledDown, delta };
 }
 
 // ---------------------------------------------------------------------------
@@ -594,6 +668,9 @@ module.exports = {
   isOnCooldown,
   applyXpGain,
   applyDailyDecay,
+  applyXpDelta,
+  MAX_DECAY_CATCHUP_DAYS,
+  missedDailyDecayDays,
   formatNickname,
   stripLvlTag,
   hasLvlTag,

@@ -131,10 +131,69 @@ async function sendLevelAnnouncement({ ctx, guild, cfg, userId, res, sourceMsg =
   return { sent: false, destination: null, errors };
 }
 
+/**
+ * Benachrichtigung für den /give_xp-Befehl des Server-Owners.
+ * Sie erscheint immer im Level-Chat (/setup `levelchat`) – wie die anderen
+ * Level-Nachrichten als „## “-Heading, aber mit Owner- UND Nutzer-mention.
+ * Nennt die vergebene/abgezogene XP-Zahl und wie sich das Level verändert hat.
+ */
+async function sendOwnerXpAnnouncement({
+  ctx,
+  guild,
+  cfg,
+  ownerId,
+  userId,
+  amount,
+  beforeLevel,
+  afterLevel,
+  leveledUp = false,
+  leveledDown = false,
+  lang = 'de',
+}) {
+  const n = Math.trunc(Number(amount) || 0);
+  const abs = Math.abs(n);
+  const key = n < 0
+    ? (leveledDown ? 'giveXpTaken' : 'giveXpTakenSame')
+    : (leveledUp ? 'giveXpGiven' : 'giveXpGivenSame');
+  const text = `## ${t(key, lang, {
+    admin: `<@${ownerId}>`,
+    user: `<@${userId}>`,
+    amount: abs,
+    before: beforeLevel,
+    after: afterLevel,
+  })}`;
+  const payloads = {
+    componentsPayload: { content: text },
+    textPayload: { content: text },
+  };
+  const errors = [];
+
+  const main = await resolveMainChannel(guild, cfg?.mainChannelId);
+  if (main) {
+    if (await sendWithTextFallback((p) => main.send(p), payloads, errors, 'owner-main')) {
+      return { sent: true, destination: 'owner-main', errors };
+    }
+  } else {
+    errors.push(`owner-main: ${cfg?.mainChannelId || 'nicht konfiguriert'} nicht erreichbar`);
+  }
+
+  if (isSendableTextChannel(guild?.systemChannel)) {
+    if (await sendWithTextFallback((p) => guild.systemChannel.send(p), payloads, errors, 'owner-system')) {
+      return { sent: true, destination: 'owner-system', errors };
+    }
+  }
+
+  ctx?.logger?.error?.(
+    `[xp-level-bot] /give_xp-Ankündigung endgültig fehlgeschlagen (${guild?.name || cfg?.guildId || '?'}, User ${userId}): ${errors.join(' | ')}`
+  );
+  return { sent: false, destination: null, errors };
+}
+
 module.exports = {
   isSendableTextChannel,
   buildAnnouncement,
   sendWithTextFallback,
   resolveMainChannel,
   sendLevelAnnouncement,
+  sendOwnerXpAnnouncement,
 };

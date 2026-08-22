@@ -15,10 +15,14 @@ const { LANGS, t } = require('../bots/xp-level-bot/src/languages');
 const HELP_KEYS = [
   'helpNavPlaceholder', 'helpPageOverview', 'helpPageCommands', 'helpPagePlaceholders', 'helpTopicDesc',
   'helpHint', 'helpOverviewBody', 'helpGroupEveryone', 'helpGroupSetup', 'helpGroupGiveaway', 'helpGroupOwner',
+  'helpGroupServerOwner',
   'helpOptSetup', 'helpOptLevelRoles', 'helpOptToggleNicknames', 'helpOptInactiveRole', 'helpOptPingInactive',
-  'helpOptStartGiveaway', 'helpOptGiveawayAdmin', 'helpOptProfile',
+  'helpOptStartGiveaway', 'helpOptGiveawayAdmin', 'helpOptProfile', 'helpOptGiveXp',
   'helpPhIntro', 'helpPhLevelRoles', 'helpPhPingInactive', 'helpPhGiveawayText', 'helpPhGiveawayWinner', 'helpPhExample',
   'giveawayAdminHelp', 'giveawayAdminActionDesc',
+  'giveXpHelp', 'giveXpOptUser', 'giveXpOptAmount', 'giveXpErrOwner', 'giveXpErrZero',
+  'giveXpDoneGiven', 'giveXpDoneTaken',
+  'giveXpGiven', 'giveXpGivenSame', 'giveXpTaken', 'giveXpTakenSame',
 ];
 
 function ctxFor(lang = 'de') {
