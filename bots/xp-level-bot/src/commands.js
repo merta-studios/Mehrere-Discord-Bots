@@ -25,10 +25,12 @@ const { LANGS, t, langFromDiscord, DISCORD_LOCALE } = require('./languages');
 const { buildRankEmbed, smallContainer, buildLeaderboardEmbed } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { openPanel } = require('./admin-panel');
-const { handleLevelRolesCommand } = require('./level-roles');
+const { handleLevelRolesCommand, syncLevelRolesForUser } = require('./level-roles');
 const { handlePingInactiveCommand } = require('./ping-inactive');
 const { startCommand: startGiveawayCommand, adminCommand: giveawayAdminCommand } = require('./giveaway');
 const { buildHelpPayload, normalizePage: normalizeHelpPage, HELP_PAGES } = require('./help');
+const { sendOwnerXpAnnouncement } = require('./level-announcements');
+const { refreshRankNicknames } = require('./nicknames');
 
 /**
  * Alle Slash-Commands inkl. Owner-DM-Panel.
@@ -41,7 +43,7 @@ const { buildHelpPayload, normalizePage: normalizeHelpPage, HELP_PAGES } = requi
 const ALL_COMMAND_NAMES = [
   'setup', 'rank', 'help', 'admin_set_bot_profile', 'level_roles',
   'update_leaderboard', 'toggle_nicknames', 'sync_nicknames', 'set_inactive_role',
-  'ping_inactive_people', 'start_giveaway', 'giveaway_admin', 'adminpanel',
+  'ping_inactive_people', 'give_xp', 'start_giveaway', 'giveaway_admin', 'adminpanel',
 ];
 /** Nur global registrierte Commands (DM-only). */
 const GLOBAL_COMMAND_NAMES = ['adminpanel'];
@@ -172,6 +174,24 @@ function defineCommands() {
           { name: 'Main Channel', value: 'main_channel', name_localizations: pick('pingInactiveModeMainChannel') },
           { name: 'Direct', value: 'direct', name_localizations: pick('pingInactiveModeDirect') },
         )),
+
+    new SlashCommandBuilder()
+      .setName('give_xp')
+      .setDescription('Gib einem Mitglied XP (auch negativ zum Abziehen) – nur Server-Owner')
+      .setDescriptionLocalizations(pick('giveXpHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addUserOption((o) => o
+        .setName('nutzer')
+        .setDescription('Wer bekommt die XP? (auch du selbst)')
+        .setDescriptionLocalizations(pick('giveXpOptUser'))
+        .setRequired(true))
+      .addIntegerOption((o) => o
+        .setName('menge')
+        .setDescription('Anzahl XP – negativ zieht ab')
+        .setDescriptionLocalizations(pick('giveXpOptAmount'))
+        .setRequired(true)
+        .setMinValue(-1_000_000)
+        .setMaxValue(1_000_000)),
 
     new SlashCommandBuilder()
       .setName('start_giveaway')
@@ -531,6 +551,8 @@ async function handleChatInput(ctx, interaction) {
       return setInactiveRoleCmd(ctx, interaction);
     case 'ping_inactive_people':
       return handlePingInactiveCommand(ctx, interaction);
+    case 'give_xp':
+      return giveXpCmd(ctx, interaction);
     case 'start_giveaway':
       return startGiveawayCommand(ctx, interaction);
     case 'giveaway_admin':
@@ -999,6 +1021,119 @@ async function setInactiveRoleCmd(ctx, interaction) {
   return interaction.editReply(
     componentsV2Payload([smallContainer(null, formatInactiveSyncDone(gate.lang, result, gate.cfg))])
   );
+}
+
+/**
+ * /give_xp <nutzer> <menge> – nur Server-Owner.
+ *
+ * Vergibt (positives `menge`) oder zieht (negatives `menge`) XP für ein
+ * beliebiges Mitglied – auch für den Owner selbst. Die sichtbare Nachricht
+ * geht in den Level-Chat (/setup `levelchat`) und nennt Owner-Mention,
+ * Nutzer-Mention, die XP-Zahl und die Level-Veränderung.
+ */
+async function giveXpCmd(ctx, interaction) {
+  const guildId = interaction.guildId;
+  if (!guildId || !interaction.inGuild?.()) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false }));
+  }
+
+  const cfg = ctx.store.getGuild(guildId);
+  const lang = cfg?.lang || langFromDiscord(interaction.locale);
+
+  let guild = interaction.guild || ctx.client?.guilds?.cache?.get(guildId);
+  let ownerId = guild?.ownerId;
+  if (ownerId == null && guild) {
+    try {
+      const owner = await guild.fetchOwner();
+      ownerId = owner?.id;
+    } catch {}
+  }
+  if (String(interaction.user.id) !== String(ownerId || '')) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('giveXpErrOwner', lang))], { ephemeral: false })
+    );
+  }
+
+  if (!cfg || !cfg.leaderboardChannelId) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errNoSetup', lang))], { ephemeral: false }));
+  }
+
+  const target = interaction.options.getUser('nutzer');
+  const amount = interaction.options.getInteger('menge');
+  if (!target) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, t('errGeneric', lang))], { ephemeral: false }));
+  }
+  if (amount === 0) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('giveXpErrZero', lang))], { ephemeral: false })
+    );
+  }
+
+  // Sofort deferren: Flush + Level-Chat-Nachricht + Nickname/Rollen/Leaderboard
+  // können länger als 3 Sekunden dauern – ohne Defer würde die Interaktion
+  // verfallen und die Bestätigung nie ankommen.
+  await interaction.deferReply().catch(() => {});
+
+  // XP anwenden (positiv = mehrere Level möglich, negativ = niemals unter
+  // Level 1 / 0 XP; ein negativer XP-Stand würde sonst beim nächsten
+  // Tages-Schwund kaskadieren).
+  const { applyXpDelta } = require('./logic');
+  const user = ctx.store.ensureUser(guildId, target.id);
+  const before = { level: user.level, xp: user.xp };
+  const res = applyXpDelta(user, amount);
+  user.level = res.level;
+  user.xp = res.xp;
+  if (amount > 0) {
+    // Vergebene XP zählen als Aktivität (wie Bonus-Einsammeln), Abzug nicht.
+    user.lastActivity = Date.now();
+    user.inactiveDays = 0;
+  }
+  ctx.store.setUser(user);
+  await ctx.store.flush();
+
+  // Ankündigung zuerst – wie bei Level-Up/-Down, danach Nickname/Rollen/Board.
+  if (guild) {
+    await sendOwnerXpAnnouncement({
+      ctx,
+      guild,
+      cfg,
+      ownerId: interaction.user.id,
+      userId: target.id,
+      amount,
+      beforeLevel: before.level,
+      afterLevel: user.level,
+      leveledUp: res.leveledUp,
+      leveledDown: res.leveledDown,
+      lang,
+    });
+  }
+
+  const jobs = [];
+  if (guild) {
+    jobs.push(refreshRankNicknames(ctx, guild, target.id, lang).catch(() => {}));
+    jobs.push(syncLevelRolesForUser({ ctx, guild, userId: target.id, level: user.level }).catch(() => {}));
+    if (cfg.leaderboardChannelId) {
+      if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
+        const { repinLeaderboard } = require('./scheduler');
+        jobs.push(repinLeaderboard(ctx, cfg, guild, { throttle: false }).catch(() => {}));
+      } else {
+        const { maybeRefreshLeaderboard } = require('./scheduler');
+        jobs.push(maybeRefreshLeaderboard(ctx, cfg, guild).catch(() => {}));
+      }
+    }
+  }
+  await Promise.allSettled(jobs);
+
+  const doneKey = amount < 0 ? 'giveXpDoneTaken' : 'giveXpDoneGiven';
+  const done = componentsV2Payload([
+    smallContainer(null, t(doneKey, lang, {
+      user: `<@${target.id}>`,
+      amount: Math.abs(amount),
+      level: user.level,
+      xp: user.xp,
+    })),
+  ], { ephemeral: false });
+  return interaction.deferred ? interaction.editReply(done) : interaction.reply(done);
 }
 
 function todayKeyForLang(lang) {

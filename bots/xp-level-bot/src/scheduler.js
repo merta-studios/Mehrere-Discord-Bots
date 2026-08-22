@@ -13,7 +13,11 @@
  * Board trotz angeblichem Stunden-Timer über viele Stunden stehen blieb.
  */
 
-const { todayKey } = require('./logic');
+const {
+  todayKey,
+  missedDailyDecayDays,
+  MAX_DECAY_CATCHUP_DAYS,
+} = require('./logic');
 const { buildLeaderboardEmbed } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
 const { syncLevelRolesForUser } = require('./level-roles');
@@ -172,9 +176,33 @@ async function runMaintenanceTick(ctx, counter, now = new Date()) {
   await forEachConfiguredGuild(ctx, 'Maintenance', async (entry, guild) => {
     const dayKey = todayKey(entry.lang, now);
     if (entry.lastDailyDecay === dayKey) return;
-    await applyDailyDecayForGuild(ctx, entry, guild);
+
+    // WICHTIG (Fix „Level von 40 auf 1 nach 2 Tagen Offline“):
+    // Der Tages-Stempel wird VOR der Abrechnung gesetzt und sofort persistiert.
+    // Früher wurde erst der XP-Schwund angewendet (und die Nutzer geflusht)
+    // und danach der Stempel gespeichert. Ein Absturz, SIGTERM oder ein
+    // 45s-Timeout mitten im Decay hinterließ dann „Nutzer bereits bestraft,
+    // aber Tag noch nicht abgehakt“ – beim nächsten Start/Retry lief die
+    // Abrechnung erneut, mit jedem Lauf stieg der Inaktiv-Streak und der
+    // Abzug wurde brutal (5 % → 8 % → … → 100 %). Das hat Level kaskadiert.
+    const missedDays = missedDailyDecayDays(entry.lastDailyDecay, dayKey);
     entry.lastDailyDecay = dayKey;
     ctx.store.setGuild(entry);
+    await ctx.store.flush().catch((err) =>
+      ctx.logger.warn(
+        `[xp-level-bot] Decay-Marker-Flush fehlgeschlagen (${guild.name}):`,
+        err?.message || err
+      )
+    );
+
+    // Nach Offline-Zeit höchstens die ersten beiden fehlenden Nächte nachholen
+    // (Tag 1 = 5 %, Tag 2 = 8 %). Ohne bekannten Marker (Altbestand) wird
+    // genau EINE Abrechnung angewendet wie bisher.
+    const catchUpDays = missedDays > 0
+      ? Math.min(missedDays, MAX_DECAY_CATCHUP_DAYS)
+      : 1;
+
+    await applyDailyDecayForGuild(ctx, entry, guild, { catchUpDays });
   });
 
   if (counter % 5 === 0) void ctx.store.flush().catch(() => {});
@@ -292,22 +320,45 @@ async function maybeRefreshLeaderboard(ctx, entry, guild) {
   return refreshLeaderboard(ctx, entry, guild, new Date(), { isHourly: false });
 }
 
-async function applyDailyDecayForGuild(ctx, entry, guild) {
+async function applyDailyDecayForGuild(ctx, entry, guild, opts = {}) {
   const lang = entry.lang || 'de';
   const users = ctx.store.getUsersForGuild(entry.guildId);
   if (!users.length) return;
 
-  const { applyDailyDecay, nextDecayInfo } = require('./logic');
+  const { applyDailyDecay, nextDecayInfo, MAX_DECAY_CATCHUP_DAYS } = require('./logic');
+  // 1 = normale 0-Uhr-Abrechnung; nach Offline-Zeit max. die ersten
+  // MAX_DECAY_CATCHUP_DAYS Nächte (5 % → 8 %), niemals mehr.
+  const catchUpDays = Math.max(
+    1,
+    Math.min(Math.floor(Number(opts.catchUpDays) || 1), MAX_DECAY_CATCHUP_DAYS)
+  );
   let decayed = 0;
   const leveledDownUsers = [];
   for (const user of users) {
-    const info = nextDecayInfo(user, Date.now());
-    user.inactiveDays = info.inactiveDays;
+    // Korrupte Datensätze (NaN/undefined aus einer alten DB) dürfen niemals
+    // eine Decay-Kaskade auslösen – sie werden unverändert übersprungen.
+    const levelNum = Number(user.level);
+    const xpNum = Number(user.xp);
+    if (!Number.isFinite(levelNum) || !Number.isFinite(xpNum)) {
+      ctx.logger.warn(
+        `[xp-level-bot] Decay übersprungen: Nutzer ${user.userId} hat ungültige Level/XP-Werte (${user.level}/${user.xp})`
+      );
+      continue;
+    }
+
     const before = { level: user.level, xp: user.xp };
-    const res = applyDailyDecay(user, info.rate);
-    if (res.level !== before.level || res.xp !== before.xp) {
+    // applyDailyDecay mutiert den Nutzer NICHT selbst – jeder Nachhol-Tag muss
+    // daher sofort zurückgeschrieben werden, sonst rechnet Tag 2 wieder vom
+    // alten XP-Stand aus („nur 8 % statt 5 % + 8 %“).
+    let res = null;
+    for (let day = 0; day < catchUpDays; day++) {
+      const info = nextDecayInfo(user, Date.now());
+      user.inactiveDays = info.inactiveDays;
+      res = applyDailyDecay(user, info.rate);
       user.level = res.level;
       user.xp = res.xp;
+    }
+    if (res && (res.level !== before.level || res.xp !== before.xp)) {
       decayed += 1;
       if (res.leveledDown) leveledDownUsers.push({ userId: user.userId, level: res.level, xp: res.xp });
     }
@@ -315,7 +366,8 @@ async function applyDailyDecayForGuild(ctx, entry, guild) {
   }
 
   ctx.logger.info(
-    `[xp-level-bot] Daily decay ${guild.name}: ${decayed} Nutzer angepasst, ${leveledDownUsers.length} Level-Downs`
+    `[xp-level-bot] Daily decay ${guild.name}: ${decayed} Nutzer angepasst, ` +
+      `${leveledDownUsers.length} Level-Downs (Nachhol-Tage: ${catchUpDays})`
   );
   // Persistenz sofort parallel starten, aber auch Level-Down-Ankündigungen
   // niemals auf Turso warten lassen.
@@ -581,6 +633,7 @@ module.exports = {
   LEADERBOARD_MIN_REFRESH_MS,
   LEADERBOARD_HOURLY_MS,
   LEADERBOARD_HOURLY_RETRY_MS,
+  MAX_DECAY_CATCHUP_DAYS,
   _lastLeaderboardRefresh: lastLeaderboardRefresh,
   _lastHourlyRefresh: lastHourlyRefresh,
   _lastLeaderboardAttempt: lastLeaderboardAttempt,
